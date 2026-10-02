@@ -33,19 +33,32 @@ type MergeRequest struct {
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
 
+	// Joined in for display, so a list of requests does not need a query per row
+	// to know who opened one or where it lives.
+	AuthorName       string   `json:"author_name"`
+	AuthorUsername   string   `json:"author_username"`
+	MergedByName     string   `json:"merged_by_name,omitempty"`
+	MergedByUsername string   `json:"merged_by_username,omitempty"`
+	Project          *Project `json:"project,omitempty"`
+
 	// Computed fields, not persisted.
 	HasConflicts bool      `json:"has_conflicts"`
 	MergeStatus  string    `json:"merge_status"`
 	DiffStats    *DiffStat `json:"diff_stats,omitempty"`
 }
 
+// IsOpen reports whether the merge request is still waiting for a decision.
+func (m *MergeRequest) IsOpen() bool { return m.State == MRStateOpened }
+
 type MergeRequestNote struct {
-	ID        int64     `json:"id"`
-	MRID      int64     `json:"merge_request_id"`
-	AuthorID  uuid.UUID `json:"author_id"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID             int64     `json:"id"`
+	MergeRequestID int64     `json:"merge_request_id"`
+	AuthorID       uuid.UUID `json:"author_id"`
+	AuthorName     string    `json:"author_name"`
+	AuthorUsername string    `json:"author_username"`
+	Body           string    `json:"body"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type DiffStat struct {
