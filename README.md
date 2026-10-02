@@ -45,6 +45,39 @@ repositories. There is no working tree anywhere in the system, which makes
 concurrent operations safe and lets git do the hard parts (pack negotiation,
 object validation, three-way merges).
 
+## The web interface
+
+The frontend is a Nuxt SPA in `web/`, served by nginx as static files and served
+alongside the API from one origin, so the session cookie needs no CORS rules.
+
+```sh
+docker compose up -d --build
+# http://localhost:3000
+```
+
+Sign in with an account created through the CLI (see below) or register through
+the login page; on a fresh instance the first account created becomes the
+administrator.
+
+During development the frontend runs with hot reload and proxies /api to the Go
+service:
+
+```sh
+cd web
+npm install
+npm run dev          # http://localhost:3000, API proxied to localhost:8080
+npx nuxt typecheck   # type-check the whole app
+node scripts/smoke.mjs  # end-to-end check against a running stack
+```
+
+The smoke script drives a real Chrome through sign-in, the project list, file
+browsing, syntax highlighting, the commit list and a commit diff. It needs a
+running stack and a project with at least one commit:
+
+```sh
+CHROME_PATH=/usr/bin/google-chrome node scripts/smoke.mjs http://localhost:3000 alice secret123
+```
+
 ## Running it
 
 ```sh

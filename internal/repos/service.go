@@ -44,10 +44,15 @@ type CreateParams struct {
 
 var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,254}$`)
 
+// maxPathLength bounds the whole path, not just a component: the value becomes
+// part of a URL, a clone string and a directory path, and unbounded nesting
+// would break all three.
+const maxPathLength = 255
+
 // ValidPath reports whether p is a usable project path. Group slugs and project
 // paths share the same rule, which keeps SSH and HTTP lookups unambiguous.
 func ValidPath(p string) bool {
-	if p == "" || len(p) > 255 {
+	if p == "" || len(p) > maxPathLength {
 		return false
 	}
 	if strings.HasSuffix(p, ".git") {

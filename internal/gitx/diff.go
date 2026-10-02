@@ -159,12 +159,12 @@ func (g *Git) parsePatch(raw string, patchLimit int) []FileChange {
 		case strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "):
 			// Path lines before the first hunk refine the paths we already have.
 			if cur != nil && strings.HasPrefix(line, "--- ") {
-				if p := cleanDiffPath(line[4:]); p != "" && p != "/dev/null" {
+				if p := stripDiffPrefix(cleanDiffPath(line[4:])); p != "" && p != "/dev/null" {
 					cur.OldPath = p
 				}
 			}
 			if cur != nil && strings.HasPrefix(line, "+++ ") {
-				if p := cleanDiffPath(line[4:]); p != "" && p != "/dev/null" {
+				if p := stripDiffPrefix(cleanDiffPath(line[4:])); p != "" && p != "/dev/null" {
 					cur.Path = p
 				}
 			}
@@ -202,7 +202,17 @@ func parseDiffHeaderPaths(line string) (newPath, oldPath string) {
 	return "", ""
 }
 
-func stripDiffPrefix(p string) string { return strings.TrimPrefix(p, "a/") }
+// stripDiffPrefix removes the "a/" and "b/" prefixes git puts on the two sides
+// of a diff header.
+func stripDiffPrefix(p string) string {
+	if rest, ok := strings.CutPrefix(p, "a/"); ok {
+		return rest
+	}
+	if rest, ok := strings.CutPrefix(p, "b/"); ok {
+		return rest
+	}
+	return p
+}
 
 func cleanDiffPath(p string) string {
 	p = strings.TrimSpace(p)

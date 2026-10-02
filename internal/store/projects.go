@@ -204,6 +204,8 @@ func (r *ProjectRepo) ListVisible(ctx context.Context, userID uuid.UUID, visibil
 		WHERE p.archived_at IS NULL
 		  AND (p.visibility <> 'private'
 		       OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = $1)
+		       OR EXISTS (SELECT 1 FROM project_roles pr
+		                  WHERE pr.project_id = p.id AND pr.source_user_id = $1)
 		       OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = p.group_id AND gm.user_id = $1))
 		ORDER BY p.path`
 

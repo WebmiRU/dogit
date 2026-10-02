@@ -40,6 +40,12 @@ type Config struct {
 	DockerBinary       string
 	DockerNetwork      string
 
+	// AllowedOrigins lists browser origins that may use a cookie session for
+	// state-changing requests. An empty list means cross-origin browser requests
+	// are rejected, which is the correct default for a self-hosted instance
+	// served from a single hostname.
+	AllowedOrigins []string
+
 	// Misc
 	GitBinary string
 	// HookBinary is the dogit-hook executable that OpenSSH force-executes.
@@ -76,9 +82,11 @@ func Load() (*Config, error) {
 		DockerNetwork:      env("DOGIT_DOCKER_NETWORK", "bridge"),
 		GitBinary:          env("DOGIT_GIT_BINARY", "git"),
 		HookBinary:         env("DOGIT_HOOK_BINARY", "dogit-hook"),
+		SSHHost:            env("DOGIT_SSH_HOST", "localhost"),
 		GitAuthorName:      env("DOGIT_GIT_AUTHOR_NAME", "dogit"),
 		GitAuthorMail:      env("DOGIT_GIT_AUTHOR_MAIL", "dogit@localhost"),
 		AuthTokenTTL:       envDuration("DOGIT_AUTH_TOKEN_TTL", 720*time.Hour),
+		AllowedOrigins:     envList("DOGIT_ALLOWED_ORIGINS", defaultOrigins(env("DOGIT_ENV", "development"))),
 		LogLevel:           env("DOGIT_LOG_LEVEL", "info"),
 		Environment:        env("DOGIT_ENV", "development"),
 	}
@@ -114,8 +122,14 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("DOGIT_LOG_LEVEL: unknown level %q (want debug, info, warn or error)", c.LogLevel)
 	}
-	if c.DatabaseURL == "" {
+	if strings.TrimSpace(c.DatabaseURL) == "" {
 		return fmt.Errorf("DOGIT_DATABASE_URL must not be empty")
+	}
+	if strings.TrimSpace(c.SSHHost) == "" {
+		return fmt.Errorf("DOGIT_SSH_HOST must not be empty")
+	}
+	if strings.TrimSpace(c.HookBinary) == "" {
+		return fmt.Errorf("DOGIT_HOOK_BINARY must not be empty")
 	}
 	if c.RunnerConcurrency < 1 {
 		return fmt.Errorf("DOGIT_RUNNER_CONCURRENCY must be >= 1")
@@ -174,6 +188,34 @@ func validEnvKey(key string) bool {
 		}
 	}
 	return true
+}
+
+// defaultOrigins lists the origins the development stack serves the UI from.
+// In production the value must be set explicitly to the real hostname.
+func defaultOrigins(environment string) []string {
+	if environment != "development" {
+		return nil
+	}
+	return []string{
+		"http://localhost:3000", // Nuxt dev server
+		"http://localhost:8080", // API served without the UI
+	}
+}
+
+// envList parses a comma-separated environment variable.
+func envList(key string, def []string) []string {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func env(key, def string) string {

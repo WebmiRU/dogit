@@ -54,6 +54,7 @@ services:
       DOGIT_HTTP_ADDR: ":8080"
       DOGIT_HOOK_BINARY: /usr/local/bin/dogit-hook
       DOGIT_SSH_HOST: ${DOGIT_SSH_HOST:-localhost}
+      DOGIT_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
       DOGIT_GIT_BINARY: /usr/bin/git
     volumes:
       - dogit-data:/data
@@ -67,6 +68,20 @@ services:
       timeout: 5s
       retries: 6
       start_period: 15s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:80"
+    environment:
+      # The SPA calls the API through the same origin, so no CORS is involved.
+      NUXT_PUBLIC_API_BASE: /api/v1
 
   runner:
     build:

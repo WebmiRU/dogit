@@ -21,6 +21,10 @@ import (
 	"time"
 )
 
+// EmptyTree is the well-known hash of git's empty tree object. Diffing against
+// it shows every file of a root commit as added.
+const EmptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 // Git is a handle to the git executable.
 type Git struct {
 	binary  string

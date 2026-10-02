@@ -73,9 +73,15 @@ func (g *Git) Exists(ctx context.Context, repoPath, rev string) bool {
 }
 
 // IsEmpty reports whether the repository has no commits at all.
+//
+// A fresh repository answers rev-list successfully with no output, so the check
+// is on the output rather than the exit status.
 func (g *Git) IsEmpty(ctx context.Context, repoPath string) bool {
-	_, err := g.run(ctx, repoPath, nil, "rev-list", "-n", "1", "--all")
-	return err != nil
+	out, err := g.run(ctx, repoPath, nil, "rev-list", "-n", "1", "--all")
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(string(out)) == ""
 }
 
 // ListTree returns the contents of path at rev. With recursive set, the result
@@ -85,9 +91,14 @@ func (g *Git) ListTree(ctx context.Context, repoPath, rev, path string, recursiv
 	if recursive {
 		args = append(args, "-r")
 	}
-	args = append(args, rev)
+
+	// A directory is addressed as "<rev>:<path>", which lists that tree's
+	// contents. Passing "-- <path>" instead would list the entry itself, so
+	// browsing into a folder would show the folder and nothing inside it.
 	if path != "" {
-		args = append(args, "--", path)
+		args = append(args, rev+":"+path)
+	} else {
+		args = append(args, rev)
 	}
 
 	out, err := g.run(ctx, repoPath, nil, args...)
@@ -204,7 +215,10 @@ func (g *Git) CommitCount(ctx context.Context, repoPath, rev string) (int, error
 // Branches lists local branches, newest first. Remote-tracking branches are
 // ignored: this server is the only origin.
 func (g *Git) Branches(ctx context.Context, repoPath string) ([]Ref, error) {
-	const format = "%(refname:short)%x1f%(objectname)%x1f%(committerdate:unix)"
+	// for-each-ref takes a pretty format, which has no %xNN escape: literal
+	// characters are passed through, so a pipe separator is used instead. Ref
+	// names and object IDs never contain one.
+	const format = "%(refname:short)|%(objectname)|%(committerdate:unix)"
 	out, err := g.run(ctx, repoPath, nil, "for-each-ref", "--sort=-committerdate",
 		"--format="+format, "refs/heads/")
 	if err != nil {
@@ -215,7 +229,7 @@ func (g *Git) Branches(ctx context.Context, repoPath string) ([]Ref, error) {
 		if line == "" {
 			continue
 		}
-		f := strings.Split(line, "\x1f")
+		f := strings.Split(line, "|")
 		if len(f) != 3 {
 			continue
 		}
@@ -226,7 +240,7 @@ func (g *Git) Branches(ctx context.Context, repoPath string) ([]Ref, error) {
 
 // Tags lists tags with their dereferenced commit target.
 func (g *Git) Tags(ctx context.Context, repoPath string) ([]Ref, error) {
-	const format = "%(refname:short)%x1f%(objectname)%x1f%(*objectname)%x1f%(objecttype)"
+	const format = "%(refname:short)|%(objectname)|%(*objectname)|%(objecttype)"
 	out, err := g.run(ctx, repoPath, nil, "for-each-ref", "--sort=-creatordate",
 		"--format="+format, "refs/tags/")
 	if err != nil {
@@ -237,7 +251,7 @@ func (g *Git) Tags(ctx context.Context, repoPath string) ([]Ref, error) {
 		if line == "" {
 			continue
 		}
-		f := strings.Split(line, "\x1f")
+		f := strings.Split(line, "|")
 		if len(f) < 3 {
 			continue
 		}

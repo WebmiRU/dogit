@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -44,19 +45,37 @@ func VerifyPassword(password string, hash []byte) bool {
 		return false
 	}
 
-	var version, memory uint32
-	var time uint32
-	var threads uint8
+	// Each parameter has its own key inside one comma-separated field, so they
+	// are read individually: a single Sscanf would stop at the first separator.
+	var version int
 	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
 		return false
 	}
-	if _, err := fmt.Sscanf(parts[3], "m=%d", &memory); err != nil {
-		return false
+
+	var memory uint32
+	var timeCost uint32
+	var threads uint8
+	for _, param := range strings.Split(parts[3], ",") {
+		key, value, ok := strings.Cut(param, "=")
+		if !ok {
+			return false
+		}
+		n, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return false
+		}
+		switch key {
+		case "m":
+			memory = uint32(n)
+		case "t":
+			timeCost = uint32(n)
+		case "p":
+			threads = uint8(n)
+		default:
+			return false
+		}
 	}
-	if _, err := fmt.Sscanf(parts[3], "t=%d", &time); err != nil {
-		return false
-	}
-	if _, err := fmt.Sscanf(parts[3], "p=%d", &threads); err != nil {
+	if memory == 0 || timeCost == 0 || threads == 0 {
 		return false
 	}
 
@@ -69,7 +88,7 @@ func VerifyPassword(password string, hash []byte) bool {
 		return false
 	}
 
-	got := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(want)))
+	got := argon2.IDKey([]byte(password), salt, timeCost, memory, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 

@@ -74,7 +74,7 @@ func (r *PermissionRepo) AccessLevel(ctx context.Context, userID, projectID uuid
 const levelQuery = `
 	SELECT GREATEST(
 		COALESCE((
-			SELECT max(greatest(least(r.max_access_level, pr.min_access_level), pr.min_access_level))
+			SELECT max(r.max_access_level)
 			FROM project_roles r
 			WHERE r.project_id = $2
 			  AND (
@@ -85,6 +85,7 @@ const levelQuery = `
 		COALESCE((
 			SELECT max(greatest(least(r.max_access_level, pr.min_access_level), pr.min_access_level))
 			FROM group_roles r
+			JOIN project_roles pr ON pr.project_id = $2
 			WHERE r.group_id = (SELECT group_id FROM projects WHERE id = $2)
 			  AND (
 			      r.source_user_id = $1
@@ -106,7 +107,7 @@ func (r *PermissionRepo) LevelsForProjects(ctx context.Context, userID uuid.UUID
 	rows, err := r.s.pool.Query(ctx, `
 		SELECT p.id, GREATEST(
 			COALESCE((
-				SELECT max(greatest(least(r.max_access_level, pr.min_access_level), pr.min_access_level))
+				SELECT max(r.max_access_level)
 				FROM project_roles r
 				WHERE r.project_id = p.id
 				  AND (

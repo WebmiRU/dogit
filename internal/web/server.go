@@ -24,12 +24,22 @@ type Server struct {
 	cfg   *config.Config
 	log   *slog.Logger
 	store *store.Store
+	api   APIRegistrar
 	http  *http.Server
 	ln    net.Listener
 }
 
-func NewServer(cfg *config.Config, log *slog.Logger, st *store.Store) *Server {
-	return &Server{cfg: cfg, log: log, store: st}
+// APIRegistrar is implemented by the API server: it adds its routes to a router.
+// An interface is used so that web does not import api, which would make the
+// dependency run in both directions.
+type APIRegistrar interface {
+	Register(chi.Router)
+}
+
+// NewServer wires the HTTP server. api may be nil, in which case the API routes
+// are not mounted.
+func NewServer(cfg *config.Config, log *slog.Logger, st *store.Store, api APIRegistrar) *Server {
+	return &Server{cfg: cfg, log: log, store: st, api: api}
 }
 
 // Routes builds the request multiplexer.
@@ -45,9 +55,15 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/-/health", s.handleHealth)
 	r.Get("/-/ready", s.handleReady)
 
-	r.Route("/api/v1", func(api chi.Router) {
-		api.Get("/version", s.handleVersion)
-		api.Get("/health", s.handleHealth)
+	// The API routes are registered directly on a sub-router rather than mounted
+	// from inside a Route block: nested wildcard mounts in chi drop routes that
+	// carry path parameters.
+	r.Route("/api/v1", func(v1 chi.Router) {
+		v1.Get("/version", s.handleVersion)
+		v1.Get("/health", s.handleHealth)
+		if s.api != nil {
+			s.api.Register(v1)
+		}
 	})
 
 	// The SPA is served by nginx in production; in development Nuxt runs

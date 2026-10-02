@@ -330,6 +330,14 @@ func (r *TokenRepo) ByHash(ctx context.Context, hash []byte) (*models.PersonalAc
 	return &t, nil
 }
 
+// TouchUsed records that a token was just used, which the UI surfaces as
+// "last used".
+func (r *TokenRepo) TouchUsed(ctx context.Context, id uuid.UUID) error {
+	_, err := r.s.pool.Exec(ctx,
+		`UPDATE personal_access_tokens SET last_used_at = now() WHERE id = $1`, id)
+	return err
+}
+
 func (r *TokenRepo) Revoke(ctx context.Context, id, userID uuid.UUID) error {
 	tag, err := r.s.pool.Exec(ctx,
 		`UPDATE personal_access_tokens SET revoked_at = now() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,

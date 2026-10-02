@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ewolf/dogit/internal/api"
 	"github.com/ewolf/dogit/internal/app"
+	"github.com/ewolf/dogit/internal/repos"
 	"github.com/ewolf/dogit/internal/web"
 )
 
@@ -23,7 +25,10 @@ func Serve(ctx context.Context, args []string) error {
 
 	web.SetVersion(Version)
 
-	srv := web.NewServer(a.Cfg, a.Log, a.Store)
+	repoSvc := repos.New(a.Store, a.Git, a.Cfg.RepoDir)
+	apiSrv := api.New(a.Cfg, a.Log, a.Store, a.Git, repoSvc)
+
+	srv := web.NewServer(a.Cfg, a.Log, a.Store, apiSrv)
 	if err := srv.Listen(); err != nil {
 		return err
 	}
