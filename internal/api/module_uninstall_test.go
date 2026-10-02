@@ -266,6 +266,30 @@ func TestUninstallOptionsAreCheckedAgainstTheModule(t *testing.T) {
 	}
 }
 
+// A module that removed itself stops being listed. If the process is somehow
+// still running, its next heartbeat is refused and it re-registers — a module
+// that removed itself should not keep serving by being merely alive.
+func TestARemovedModuleIsForgotten(t *testing.T) {
+	f := newModuleFixture(t)
+
+	module := newFakeModule(t, map[string]any{
+		"summary": map[string]any{"removed_entries": 2},
+	})
+	registerUninstallingModule(t, f, module.URL, registryOptions())
+
+	started := f.startUninstall(t, "purge_data")
+	f.waitForJob(t, started["id"].(string), models.UninstallDone)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := f.store.Integrations().ByID(t.Context(), f.module.ID); err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("the module is still registered after it removed itself")
+}
+
 // A module that says no leaves a record that says so.
 func TestUninstallFailureIsRecorded(t *testing.T) {
 	f := newModuleFixture(t)
@@ -291,35 +315,79 @@ func TestUninstallFailureIsRecorded(t *testing.T) {
 	if !sawError {
 		t.Errorf("the log has no error line: %+v", lines)
 	}
+
+	// A module that refused stays registered: it is still there, still holding
+	// whatever it holds, and forgetting it would hide a problem rather than fix it.
+	if _, err := f.store.Integrations().ByID(t.Context(), f.module.ID); err != nil {
+		t.Errorf("a module that refused to be removed was forgotten anyway: %v", err)
+	}
 }
 
-// A module that never answers at all is a different failure from one that
-// answers "no", and the difference is worth keeping.
-func TestUninstallOfASilentModuleFails(t *testing.T) {
+// A module that accepts the work and then says nothing is neither a failure nor
+// a success, and the core must not pretend to know which.
+//
+// The janitor is what decides, after its deadline; until then the job keeps
+// running, because a module deleting a great many small things is working, not
+// stuck, and calling that a failure would be a lie.
+func TestAModuleThatGoesQuietIsNotYetAFailure(t *testing.T) {
 	f := newModuleFixture(t)
 
+	release := make(chan struct{})
+
 	module := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {} // never speaks
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"message":"starting"}`+"\n")
+		w.(http.Flusher).Flush()
+
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
 	}))
-	t.Cleanup(module.Close)
+
+	// The handler is still holding the connection open, so it is let go of before
+	// the server is asked to shut down. The other order waits forever: closing a
+	// server waits for its requests, and the request waits for this channel.
+	t.Cleanup(func() {
+		close(release)
+		module.Close()
+	})
 	registerUninstallingModule(t, f, module.URL, registryOptions())
 
 	started := f.startUninstall(t, "purge_data")
 
-	// The core's own client will hang here too, so the silence is judged the way
-	// it is in production: by the janitor, after the deadline.
-	deadline := time.Now().Add(3 * time.Second)
-	stalled, err := f.store.ModuleUninstall().Stale(t.Context(), time.Second)
+	// The one line it managed to write is kept: it is usually the line that
+	// explains where a module stopped.
+	deadline := time.Now().Add(5 * time.Second)
+	var lines []models.UninstallLogLine
+	for time.Now().Before(deadline) {
+		lines, _ = f.store.ModuleUninstall().LogAfter(t.Context(), mustUUID(t, started["id"].(string)), 0, 0)
+		if len(lines) > 0 && strings.Contains(lines[len(lines)-1].Message, "starting") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var found bool
+	for _, line := range lines {
+		if strings.Contains(line.Message, "starting") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the line the module managed to write was not kept: %+v", lines)
+	}
+
+	// Still running: nothing has declared it finished, and nothing has declared
+	// it broken either.
+	job, err := f.store.ModuleUninstall().ByID(t.Context(), mustUUID(t, started["id"].(string)))
 	if err != nil {
-		t.Fatalf("mark stalled: %v", err)
+		t.Fatalf("read the job: %v", err)
 	}
-	if stalled != 0 {
-		t.Fatalf("%d jobs were stalled before the deadline", stalled)
+	if job.Finished() {
+		t.Errorf("the job is %q; a silent module is not a finished one", job.Status)
 	}
-	if time.Now().After(deadline) {
-		t.Fatal("the test took longer than it meant to")
-	}
-	_ = started
 }
 
 // One removal at a time: a second click while the first is running is a mistake,
@@ -366,16 +434,16 @@ func TestOnlyOneRemovalPerModuleAtATime(t *testing.T) {
 func TestRestartMarksOpenRemovalsUnknown(t *testing.T) {
 	f := newModuleFixture(t)
 
-	if _, err := f.store.ModuleUninstall().Start(t.Context(), f.module.ID, []string{"purge_data"}); err != nil {
+	if _, err := f.store.ModuleUninstall().Start(t.Context(), f.module.ID, "registry:docker", "demo", []string{"purge_data"}); err != nil {
 		t.Fatalf("start a removal: %v", err)
 	}
 
-	interrupted, err := f.store.ModuleUninstall().InterruptOpen(t.Context())
-	if err != nil {
+	// Every unfinished job is interrupted, not just this module's: a restart stops
+	// all of them, and pretending otherwise would leave one running that nobody is
+	// watching. The count is deliberately not asserted — jobs outlive the modules
+	// they describe, so a shared database holds others.
+	if _, err := f.store.ModuleUninstall().InterruptOpen(t.Context()); err != nil {
 		t.Fatalf("interrupt: %v", err)
-	}
-	if interrupted != 1 {
-		t.Errorf("interrupted %d jobs, want 1", interrupted)
 	}
 
 	job, err := f.store.ModuleUninstall().Latest(t.Context(), f.module.ID)
@@ -395,7 +463,7 @@ func TestRestartMarksOpenRemovalsUnknown(t *testing.T) {
 	// The database no longer holds a job against this module, so a new removal
 	// may begin — which is exactly the point of marking it unknown rather than
 	// leaving it open forever.
-	if _, err := f.store.ModuleUninstall().Start(t.Context(), f.module.ID, nil); err != nil {
+	if _, err := f.store.ModuleUninstall().Start(t.Context(), f.module.ID, "registry:docker", "demo", nil); err != nil {
 		t.Errorf("a new removal after an interruption: %v", err)
 	}
 }
@@ -405,7 +473,7 @@ func TestRestartMarksOpenRemovalsUnknown(t *testing.T) {
 func TestStalledRemovalKeepsItsLog(t *testing.T) {
 	f := newModuleFixture(t)
 
-	job, err := f.store.ModuleUninstall().Start(t.Context(), f.module.ID, nil)
+	job, err := f.store.ModuleUninstall().Start(t.Context(), f.module.ID, "registry:docker", "demo", nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -461,7 +529,7 @@ func TestStalledRemovalKeepsItsLog(t *testing.T) {
 func TestLogIsReadFromWhereItWasLeft(t *testing.T) {
 	f := newModuleFixture(t)
 
-	job, err := f.store.ModuleUninstall().Start(t.Context(), f.module.ID, nil)
+	job, err := f.store.ModuleUninstall().Start(t.Context(), f.module.ID, "registry:docker", "demo", nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

@@ -26,6 +26,8 @@ const (
 type UninstallJob struct {
 	ID            uuid.UUID      `json:"id"`
 	IntegrationID uuid.UUID      `json:"integration_id"`
+	ModuleKind    string         `json:"module_kind"`
+	ModuleName    string         `json:"module_name"`
 	Options       []string       `json:"options"`
 	Status        string         `json:"status"`
 	ProgressDone  *int64         `json:"progress_done,omitempty"`

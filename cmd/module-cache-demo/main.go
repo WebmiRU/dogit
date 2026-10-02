@@ -27,6 +27,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -108,6 +110,13 @@ func main() {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
+	// The module's own directory, created before it reports on it. A module that
+	// cannot measure its storage should say so rather than report a number it made
+	// up, and the simplest way for it to be measurable is to have somewhere to work.
+	if err := os.MkdirAll(envOr("MODULE_CACHE_DIR", "/data/cache"), 0o750); err != nil {
+		log.Fatalf("module: cannot create the cache directory: %v", err)
+	}
+
 	log.Printf("module: listening on %s (advertised as %s)", cfg.listen, cfg.endpoint)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("module: %v", err)
@@ -140,6 +149,19 @@ func manifest() map[string]any {
 				"type":        "string",
 				"secret":      true,
 				"description": "Never returned by the API once written.",
+			},
+		},
+		// A module says what removing it means; the core renders these and passes
+		// the chosen keys back. The core has no idea what a cache entry is.
+		"uninstall": map[string]any{
+			"options": []map[string]any{
+				{
+					"key":         "purge_cache",
+					"label":       "Delete the cache",
+					"description": "Every entry this module has stored, fetched or built.",
+					"default":     true,
+					"dangerous":   true,
+				},
 			},
 		},
 	}
@@ -191,6 +213,71 @@ func routes(client *coreClient) http.Handler {
 		writeJSON(w, map[string]any{"effective": settings})
 	})
 
+	// Removing this module, as the core asks for it.
+	//
+	// The answer is a stream of lines rather than a single response, because
+	// deleting what a module holds does not fit in one request, and an
+	// administrator who asked for it will not be watching when it finishes. Every
+	// line is kept by the core, so they may close the tab and come back.
+	mux.HandleFunc("/uninstall", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Options []string `json:"options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+
+		// The core checks the keys against the manifest before asking, and an
+		// unknown one means the two disagree about what removal means. Refusing is
+		// the safe answer: guessing which side is right is how data somebody meant
+		// to keep gets deleted.
+		if !slices.Contains(body.Options, "purge_cache") && len(body.Options) > 0 {
+			http.Error(w, "unknown option", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		flusher, _ := w.(http.Flusher)
+
+		say := func(line map[string]any) {
+			encoded, err := json.Marshal(line)
+			if err != nil {
+				return
+			}
+			_, _ = fmt.Fprintf(w, "%s\n", encoded)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+
+		// Slow on purpose: this is a reference implementation, and a real module's
+		// log arrives over minutes or hours. A demonstration that finished
+		// instantly would never show whether the core keeps up with a real one.
+		for i := 1; i <= 3; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(700 * time.Millisecond):
+			}
+			say(map[string]any{
+				"message":  fmt.Sprintf("removing cache entry %d", i),
+				"progress": map[string]any{"done": i, "total": 3},
+			})
+		}
+
+		say(map[string]any{
+			"message": "the upstream is not ours to delete",
+			"level":   "warn",
+		})
+		say(map[string]any{
+			"summary": map[string]any{
+				"removed_entries": 3,
+				"freed_bytes":     1048576,
+			},
+		})
+	})
+
 	return mux
 }
 
@@ -210,7 +297,7 @@ func heartbeat(ctx context.Context, client *coreClient, interval time.Duration, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			err := client.beat(ctx)
+			err := client.beatWithStats(ctx, stats())
 			if err == nil {
 				continue
 			}
@@ -320,6 +407,65 @@ func (c *coreClient) register(ctx context.Context, registrationToken, name, endp
 
 func (c *coreClient) beat(ctx context.Context) error {
 	return c.post(ctx, "/api/v1/module/heartbeat", map[string]any{}, c.token, nil)
+}
+
+// beatWithStats reports what this module can see about itself.
+//
+// Only what is actually knowable. A value that cannot be read is left out rather
+// than sent as zero: the core shows an absent value as "not reported", which is
+// true, while a zero would claim an empty disk that nobody checked.
+func (c *coreClient) beatWithStats(ctx context.Context, reading map[string]any) error {
+	return c.post(ctx, "/api/v1/module/heartbeat", map[string]any{"stats": reading}, c.token, nil)
+}
+
+var startedAt = time.Now()
+
+// stats is this module's reading of its own surroundings.
+//
+// The container is the world this process knows: it can see its own memory
+// through /proc and the filesystem it writes to, and usually nothing of the node
+// underneath. Sending what it cannot see would be inventing numbers.
+func stats() map[string]any {
+	reading := map[string]any{
+		"uptime_seconds": int64(time.Since(startedAt).Seconds()),
+	}
+
+	if total, used, ok := storageStat(envOr("MODULE_CACHE_DIR", "/data/cache")); ok {
+		reading["storage_total_bytes"] = total
+		reading["storage_used_bytes"] = used
+	}
+	if rss, ok := residentBytes(); ok {
+		reading["process_memory_bytes"] = rss
+	}
+	return reading
+}
+
+// storageStat reports the filesystem behind a directory.
+func storageStat(dir string) (total, used int64, ok bool) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(dir, &stat); err != nil {
+		return 0, 0, false
+	}
+	total = int64(stat.Blocks) * int64(stat.Bsize)
+	free := int64(stat.Bavail) * int64(stat.Bsize)
+	return total, total - free, true
+}
+
+// residentBytes reads this process's own resident set from /proc.
+func residentBytes() (int64, bool) {
+	content, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return 0, false
+	}
+	fields := strings.Fields(string(content))
+	if len(fields) < 2 {
+		return 0, false
+	}
+	pages, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return pages * int64(os.Getpagesize()), true
 }
 
 func (c *coreClient) introspect(ctx context.Context, userToken string) (map[string]any, error) {

@@ -8,7 +8,14 @@
 
 CREATE TABLE module_uninstall_jobs (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    integration_id UUID NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+
+    -- The module is not referenced with a foreign key, and its kind and name are
+    -- kept here instead. A removal is finished when the module is gone, and a log
+    -- that vanished with the module it describes would be the one record anybody
+    -- wants afterwards.
+    integration_id UUID NOT NULL,
+    module_kind    TEXT NOT NULL,
+    module_name    TEXT NOT NULL,
 
     -- The keys of the options the administrator chose, as the module declared
     -- them. Only keys, no values: an option is a switch, and a switch's meaning
@@ -36,8 +43,8 @@ CREATE TABLE module_uninstall_jobs (
     last_line_at TIMESTAMPTZ
 );
 
--- One job per module at a time: a second deletion of the same module would be
--- deleting what the first one is still deleting.
+-- One job per module at a time: a second removal of the same module would be
+-- removing what the first one is still removing.
 CREATE UNIQUE INDEX module_uninstall_jobs_one_per_module_idx
     ON module_uninstall_jobs (integration_id)
     WHERE finished_at IS NULL;

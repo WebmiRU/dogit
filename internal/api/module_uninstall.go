@@ -72,7 +72,7 @@ func (s *Server) handleStartModuleUninstall(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	job, err := s.store.ModuleUninstall().Start(r.Context(), integration.ID, req.Options)
+	job, err := s.store.ModuleUninstall().Start(r.Context(), integration.ID, integration.Kind, integration.Name, req.Options)
 	if errors.Is(err, store.ErrJobRunning) {
 		s.writeError(w, r, errConflictf("module %q is already being removed", integration.Kind))
 		return
@@ -153,7 +153,15 @@ func (s *Server) runUninstall(ctx context.Context, integration *models.Integrati
 		if failure := repo.Finish(ctx, job.ID, models.UninstallDone, nil, ""); failure != nil {
 			s.log.Error("could not record the finished removal", "job_id", job.ID, "error", failure)
 		}
-		s.log.Info("module removed", "kind", integration.Kind, "module_id", integration.ID)
+		// The module has said it removed itself, so the core stops listing it. If
+		// the process is somehow still running, its next heartbeat is refused and it
+		// re-registers — which is the honest outcome, because a module that removed
+		// itself should not be able to keep serving by being merely alive.
+		if err := s.store.Integrations().Delete(ctx, integration.ID); err != nil {
+			s.log.Warn("forget the removed module", "module_id", integration.ID, "error", err)
+		} else {
+			s.log.Info("module removed", "kind", integration.Kind, "module_id", integration.ID)
+		}
 	case errors.Is(err, context.Canceled):
 		// Only the core going away produces this. What the module managed to do
 		// stays in the log, and the outcome is marked unknown rather than bad.

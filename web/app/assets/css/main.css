@@ -296,6 +296,36 @@ label {
   color: var(--text-muted);
 }
 
+/* A badge that means "stop and look": a removal that has stalled, an option that
+   cannot be undone. Amber rather than red, because red elsewhere in the interface
+   means something has already gone wrong. */
+.badge-warning {
+  background: #4a3a1c;
+  color: #f0c674;
+}
+
+.badge-danger {
+  background: #4a2326;
+  color: #ffb4ae;
+}
+
+.btn-danger {
+  background: #8e2b28;
+  border-color: #8e2b28;
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #a8322e;
+  border-color: #a8322e;
+}
+
+.alert-warning {
+  background: rgba(240, 198, 116, 0.1);
+  border: 1px solid rgba(240, 198, 116, 0.35);
+  color: #f0c674;
+}
+
 .badge-red {
   background: #4a2326;
   color: #ff9aa5;

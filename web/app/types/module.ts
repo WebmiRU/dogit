@@ -1,0 +1,121 @@
+/** Shapes of the module API, as the interface sees them. */
+
+export interface SettingSpec {
+  key: string
+  label: string
+  /** string | bool | int | enum | url */
+  type: string
+  default?: unknown
+  options?: string[]
+  description?: string
+  secret?: boolean
+}
+
+/**
+ * One switch in a module's removal dialog.
+ *
+ * The wording is the module's own: the core renders these and knows nothing about
+ * what any of them do, so "Delete all images" comes from the registry and would
+ * read just as well from a build cache or a package feed.
+ */
+export interface UninstallOption {
+  key: string
+  label: string
+  description?: string
+  default?: boolean
+  dangerous?: boolean
+  required?: boolean
+}
+
+export interface ModuleRouting {
+  domains?: string[]
+  path?: string
+  websocket?: boolean
+}
+
+export interface ModuleManifest {
+  version: string
+  description?: string
+  scopes: string[]
+  settings: SettingSpec[]
+  depends_on?: string[]
+  uninstall?: { options?: UninstallOption[] }
+  routing?: ModuleRouting
+}
+
+/** What a module reported with its heartbeat. Absent means it reported nothing. */
+export interface ModuleStats {
+  at: string
+  storage_total_bytes?: number
+  storage_used_bytes?: number
+  process_cpu_percent?: number
+  process_memory_bytes?: number
+  host_cpu_percent?: number
+  host_memory_total_bytes?: number
+  host_memory_used_bytes?: number
+  host_load1?: number
+  uptime_seconds?: number
+  extra?: Record<string, string>
+}
+
+export interface ModuleRow {
+  id: string
+  kind: string
+  name: string
+  endpoint: string
+  module_version: string
+  manifest: ModuleManifest
+  status: string
+  enabled: boolean
+  last_seen_at?: string
+  registered_at: string
+  settings: Record<string, unknown>
+  scopes: string[]
+  /** Where the module is reachable from outside, when it asked to be. */
+  public_url?: string | null
+  dedicated_host?: boolean
+  stats?: ModuleStats | null
+}
+
+export type UninstallStatus =
+  | 'queued'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'stalled'
+  | 'interrupted'
+
+export interface UninstallJob {
+  id: string
+  integration_id: string
+  options: string[]
+  status: UninstallStatus
+  progress_done?: number
+  progress_total?: number
+  summary?: Record<string, unknown>
+  error?: string
+  started_at?: string
+  finished_at?: string
+  created_at: string
+  updated_at: string
+  last_line_at?: string
+}
+
+export interface UninstallLogLine {
+  id: number
+  job_id: string
+  created_at: string
+  level: string
+  message: string
+  progress?: { done?: number; total?: number }
+}
+
+/** Wording for a job's state, in the terms an administrator thinks in. */
+export const uninstallStatusText: Record<UninstallStatus, string> = {
+  queued: 'Starting',
+  running: 'Running',
+  done: 'Finished',
+  failed: 'Failed',
+  stalled: 'Stopped talking',
+  interrupted: 'Outcome unknown',
+}

@@ -149,6 +149,11 @@ services:
       DOGIT_MODULE_NAME: ${DOGIT_MODULE_DEMO_NAME:-demo}
       # Instance token: created with "dogit module token create" and stored here.
       DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      # What the module reports about the storage it uses. It is a directory of
+      # its own rather than the instance's, so its numbers mean something.
+      MODULE_CACHE_DIR: /data/cache
+    volumes:
+      - dogit-module-cache:/data
     ports:
       - "127.0.0.1:8090:8090"
 
@@ -186,3 +191,6 @@ volumes:
   dogit-data:
   # The generated proxy configuration, shared between the writer and the reader.
   dogit-routes:
+  # The demo module's cache. A volume of its own so that what it reports about
+  # disk usage is about something real.
+  dogit-module-cache:

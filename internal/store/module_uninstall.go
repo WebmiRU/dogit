@@ -62,7 +62,9 @@ var ErrJobRunning = errors.New("module removal is already running")
 // The uniqueness that matters is enforced by the database, not here: two
 // administrators clicking Delete at the same moment is an ordinary thing that
 // should not depend on both of them losing a race in Go.
-func (r *ModuleUninstallRepo) Start(ctx context.Context, integrationID uuid.UUID, options []string) (*models.UninstallJob, error) {
+func (r *ModuleUninstallRepo) Start(ctx context.Context, integrationID uuid.UUID,
+	kind, name string, options []string) (*models.UninstallJob, error) {
+
 	if options == nil {
 		options = []string{}
 	}
@@ -70,14 +72,16 @@ func (r *ModuleUninstallRepo) Start(ctx context.Context, integrationID uuid.UUID
 	job := &models.UninstallJob{
 		ID:            uuid.New(),
 		IntegrationID: integrationID,
+		ModuleKind:    kind,
+		ModuleName:    name,
 		Options:       options,
 		Status:        models.UninstallQueued,
 	}
 
 	_, err := r.s.pool.Exec(ctx, `
-		INSERT INTO module_uninstall_jobs (id, integration_id, options, status)
-		VALUES ($1, $2, $3, $4)`,
-		job.ID, integrationID, options, job.Status)
+		INSERT INTO module_uninstall_jobs (id, integration_id, module_kind, module_name, options, status)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		job.ID, integrationID, kind, name, options, job.Status)
 	if err != nil {
 		// The partial unique index refuses a second open job for the same module.
 		if isUniqueViolation(err) {
@@ -111,10 +115,11 @@ func (r *ModuleUninstallRepo) one(ctx context.Context, where string, args ...any
 	var failure sql.NullString
 
 	err := r.s.pool.QueryRow(ctx, `
-		SELECT id, integration_id, options, status, progress_done, progress_total,
+		SELECT id, integration_id, module_kind, module_name, options, status,
+		       progress_done, progress_total,
 		       summary, error, started_at, finished_at, created_at, updated_at, last_line_at
 		FROM module_uninstall_jobs `+where, args...,
-	).Scan(&job.ID, &job.IntegrationID, &options, &job.Status,
+	).Scan(&job.ID, &job.IntegrationID, &job.ModuleKind, &job.ModuleName, &options, &job.Status,
 		&job.ProgressDone, &job.ProgressTotal, &job.Summary, &failure,
 		&job.StartedAt, &job.FinishedAt, &job.CreatedAt, &job.UpdatedAt, &job.LastLineAt)
 	if errors.Is(err, pgxNoRows) {

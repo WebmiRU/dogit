@@ -642,6 +642,15 @@ func (s *Server) integrationView(r *http.Request, integration *models.Integratio
 	// in the interface: the answer is needed by the push instructions, by the
 	// proxy configuration and by an operator reading this page, and three places
 	// answering it separately is how they end up disagreeing.
+	// What the module last said about itself, when it has said anything. A module
+	// that reports nothing is shown as reporting nothing rather than as having
+	// reported zeroes.
+	if stats, err := s.store.ModuleStats().Latest(r.Context(), integration.ID); err == nil {
+		view["stats"] = stats
+	} else if !errors.Is(err, store.ErrNotFound) {
+		s.log.Debug("read module stats", "module", integration.Name, "error", err)
+	}
+
 	if address, published := modulehost.BaseURL(s.cfg.PublicHost, integration.Capabilities.Routing); published {
 		view["public_url"] = address
 		view["dedicated_host"] = modulehost.IsDedicatedHost(s.cfg.PublicHost, integration.Capabilities.Routing)
