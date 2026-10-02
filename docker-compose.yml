@@ -64,6 +64,15 @@ services:
       DOGIT_SSH_PORT: ${DOGIT_SSH_PORT:-2222}
       DOGIT_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
       DOGIT_GIT_BINARY: /usr/bin/git
+      # Artifacts and build caches live in S3-compatible object storage, so a
+      # runner on another machine sees the same files and nothing is lost when a
+      # container is replaced.
+      DOGIT_S3_ENDPOINT: ${DOGIT_S3_ENDPOINT:-}
+      DOGIT_S3_ACCESS_KEY: ${DOGIT_S3_ACCESS_KEY:-}
+      DOGIT_S3_SECRET_KEY: ${DOGIT_S3_SECRET_KEY:-}
+      DOGIT_S3_BUCKET: ${DOGIT_S3_BUCKET:-}
+      DOGIT_S3_REGION: ${DOGIT_S3_REGION:-us-east-1}
+      DOGIT_OBJECTS_PREFIX: ${DOGIT_OBJECTS_PREFIX:-dogit}
     volumes:
       - dogit-data:/data
     ports:
@@ -129,6 +138,12 @@ services:
       DOGIT_REPO_DIR: /data/repos
       DOGIT_ARTIFACT_DIR: /data/artifacts
       DOGIT_RUNNER_CONCURRENCY: ${DOGIT_RUNNER_CONCURRENCY:-2}
+      DOGIT_S3_ENDPOINT: ${DOGIT_S3_ENDPOINT:-}
+      DOGIT_S3_ACCESS_KEY: ${DOGIT_S3_ACCESS_KEY:-}
+      DOGIT_S3_SECRET_KEY: ${DOGIT_S3_SECRET_KEY:-}
+      DOGIT_S3_BUCKET: ${DOGIT_S3_BUCKET:-}
+      DOGIT_S3_REGION: ${DOGIT_S3_REGION:-us-east-1}
+      DOGIT_OBJECTS_PREFIX: ${DOGIT_OBJECTS_PREFIX:-dogit}
     volumes:
       - dogit-data:/data
       # Jobs run in containers; the runner needs access to the Docker socket,

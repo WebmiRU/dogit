@@ -33,6 +33,19 @@ type Config struct {
 	RepoDir     string
 	ArtifactDir string
 
+	// Object storage for artifacts, build caches and package archives. When the
+	// endpoint is empty the application falls back to a directory on disk, which is
+	// what a single-node development instance uses.
+	ObjectsBackend   string // "s3" or "local"
+	ObjectsEndpoint  string
+	ObjectsAccessKey string
+	ObjectsSecretKey string
+	ObjectsBucket    string
+	ObjectsRegion    string
+	ObjectsPrefix    string
+	ObjectsLocalDir  string
+	ObjectsUseSSL    bool
+
 	// CI
 	PipelineConfigFile string
 	RunnerConcurrency  int
@@ -82,6 +95,15 @@ func Load() (*Config, error) {
 		DataDir:            env("DOGIT_DATA_DIR", "./data"),
 		RepoDir:            env("DOGIT_REPO_DIR", ""),
 		ArtifactDir:        env("DOGIT_ARTIFACT_DIR", ""),
+		ObjectsBackend:     env("DOGIT_OBJECTS_BACKEND", ""),
+		ObjectsEndpoint:    env("DOGIT_S3_ENDPOINT", ""),
+		ObjectsAccessKey:   env("DOGIT_S3_ACCESS_KEY", ""),
+		ObjectsSecretKey:   env("DOGIT_S3_SECRET_KEY", ""),
+		ObjectsBucket:      env("DOGIT_S3_BUCKET", ""),
+		ObjectsRegion:      env("DOGIT_S3_REGION", "us-east-1"),
+		ObjectsPrefix:      env("DOGIT_OBJECTS_PREFIX", "dogit"),
+		ObjectsLocalDir:    env("DOGIT_OBJECTS_DIR", ""),
+		ObjectsUseSSL:      true,
 		PipelineConfigFile: env("DOGIT_PIPELINE_CONFIG", ".gitlab-ci-lite.yml"),
 		RunnerConcurrency:  envInt("DOGIT_RUNNER_CONCURRENCY", 2),
 		JobTimeout:         envDuration("DOGIT_JOB_TIMEOUT", 30*time.Minute),
@@ -103,6 +125,17 @@ func Load() (*Config, error) {
 	// Derive storage paths that were not set explicitly.
 	if c.RepoDir == "" {
 		c.RepoDir = c.DataDir + "/repos"
+	}
+	if c.ObjectsLocalDir == "" {
+		c.ObjectsLocalDir = c.DataDir + "/objects"
+	}
+	// The backend is derived from what is configured rather than set separately, so
+	// an operator cannot end up with credentials and a local directory at once.
+	switch {
+	case c.ObjectsEndpoint != "":
+		c.ObjectsBackend = "s3"
+	case c.ObjectsBackend == "":
+		c.ObjectsBackend = "local"
 	}
 	if c.ArtifactDir == "" {
 		c.ArtifactDir = c.DataDir + "/artifacts"
@@ -150,6 +183,24 @@ func (c *Config) Validate() error {
 	}
 	if c.RunnerConcurrency < 1 {
 		return fmt.Errorf("DOGIT_RUNNER_CONCURRENCY must be >= 1")
+	}
+
+	// A half-configured remote store is worse than none: it would fail on the first
+	// upload instead of at start-up, so it is rejected here.
+	if c.ObjectsBackend == "s3" {
+		for name, value := range map[string]string{
+			"DOGIT_S3_ENDPOINT":   c.ObjectsEndpoint,
+			"DOGIT_S3_ACCESS_KEY": c.ObjectsAccessKey,
+			"DOGIT_S3_SECRET_KEY": c.ObjectsSecretKey,
+			"DOGIT_S3_BUCKET":     c.ObjectsBucket,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("%s is required when DOGIT_S3_ENDPOINT is set", name)
+			}
+		}
+	}
+	if c.ObjectsBackend != "s3" && c.ObjectsBackend != "local" {
+		return fmt.Errorf("DOGIT_OBJECTS_BACKEND must be s3 or local, got %q", c.ObjectsBackend)
 	}
 	return nil
 }

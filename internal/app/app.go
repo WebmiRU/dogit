@@ -12,16 +12,18 @@ import (
 	"github.com/ewolf/dogit/internal/events"
 	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/logger"
+	"github.com/ewolf/dogit/internal/objects"
 	"github.com/ewolf/dogit/internal/store"
 )
 
 // App holds the dependencies shared by all subcommands.
 type App struct {
-	Cfg    *config.Config
-	Log    *slog.Logger
-	Store  *store.Store
-	Git    *gitx.Git
-	Events *events.Bus
+	Cfg     *config.Config
+	Log     *slog.Logger
+	Store   *store.Store
+	Git     *gitx.Git
+	Events  *events.Bus
+	Objects objects.Store
 }
 
 // New loads configuration, initialises the logger, applies migrations and
@@ -51,14 +53,59 @@ func New(ctx context.Context) (*App, error) {
 		return nil, err
 	}
 
+	objectsStore, err := newObjectStore(ctx, cfg, log)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+
 	return &App{
-		Cfg:    cfg,
-		Log:    log,
-		Store:  st,
-		Git:    gitx.New(gitx.Options{Binary: cfg.GitBinary}),
-		Events: events.New(st, log),
+		Cfg:     cfg,
+		Log:     log,
+		Store:   st,
+		Git:     gitx.New(gitx.Options{Binary: cfg.GitBinary}),
+		Events:  events.New(st, log),
+		Objects: objectsStore,
 	}, nil
 }
+
+// newObjectStore builds the blob store.
+//
+// The remote store is verified at start-up on purpose: a wrong endpoint should
+// fail here, loudly, rather than halfway through the first job that uploads an
+// artifact.
+func newObjectStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (objects.Store, error) {
+	if cfg.ObjectsBackend != "s3" {
+		local, err := objects.NewLocal(cfg.ObjectsLocalDir, cfg.ObjectsPrefix)
+		if err != nil {
+			return nil, err
+		}
+		log.Info("object storage ready", "backend", "local", "dir", cfg.ObjectsLocalDir)
+		return local, nil
+	}
+
+	remote, err := objects.NewS3(objects.S3Options{
+		Endpoint:   cfg.ObjectsEndpoint,
+		AccessKey:  cfg.ObjectsAccessKey,
+		SecretKey:  cfg.ObjectsSecretKey,
+		Bucket:     cfg.ObjectsBucket,
+		Region:     cfg.ObjectsRegion,
+		Prefix:     cfg.ObjectsPrefix,
+		UseSSL:     boolPtr(cfg.ObjectsUseSSL),
+		PartSizeMB: 16,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := remote.EnsureBucket(ctx); err != nil {
+		return nil, err
+	}
+
+	log.Info("object storage ready", "backend", "s3", "bucket", cfg.ObjectsBucket)
+	return remote, nil
+}
+
+func boolPtr(v bool) *bool { return &v }
 
 // Close releases the database pool.
 func (a *App) Close() {
