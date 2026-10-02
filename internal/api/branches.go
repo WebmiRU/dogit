@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -122,10 +123,23 @@ func (s *Server) handleCreateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.git.CreateTag(r.Context(), rc.RepoDir, name, sha, req.Message); err != nil {
+	if err := s.git.CreateTag(r.Context(), rc.RepoDir, name, sha, req.Message, gitx.CommitIdentity{
+		Name:  displayName(userFrom(r.Context())),
+		Email: userFrom(r.Context()).Email,
+	}); err != nil {
+		// git says "already exists" in its own words; the caller asked for a new
+		// tag and silently moving an existing one would detach a release from the
+		// commit it named.
+		if strings.Contains(err.Error(), "already exists") {
+			s.writeError(w, r, errConflictf("tag %q already exists", name))
+			return
+		}
 		s.writeError(w, r, err)
 		return
 	}
+
+	s.log.Info("tag created", "project", rc.Project.Path, "tag", name,
+		"user", userFrom(r.Context()).Username)
 
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{
 		"tag": map[string]any{"name": name, "target": sha, "type": "tag"},

@@ -83,11 +83,49 @@ async function loadProject() {
     const response = await api.get<ProjectResponse>(`/projects/${encodedPath}`)
     project.value = response.project
 
-    refs.value = await api.get<RefsResponse>(`/projects/${response.project.id}/repository/refs`)
+    await loadRefs()
   } catch (caught) {
     loadError.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
     loading.value = false
+  }
+}
+
+// The refs live here rather than in the views, because more than one of them show
+// the same list: the branch selector in the header, the branch page and the tag
+// page. Reloading them in one place is what keeps those three from disagreeing
+// after a branch is created or deleted.
+async function loadRefs() {
+  if (!project.value) return
+
+  const response = await api.get<RefsResponse>(
+    `/projects/${project.value.id}/repository/refs`,
+  )
+  refs.value = response
+
+  // Deleting the branch the page is looking at leaves the page pointing at
+  // something that no longer exists. Moving it to the default branch is better
+  // than leaving an error in place of the content the person came for.
+  const name = activeRef.value
+  if (!name) return
+
+  const exists =
+    response.branches.some((branch) => branch.name === name) ||
+    response.tags.some((tag) => tag.name === name)
+  if (exists) return
+
+  const fallback = project.value.default_branch || response.default_branch
+  if (fallback && fallback !== name) {
+    await switchRef(fallback)
+  }
+}
+
+/** Reload the refs and, if the current one is gone, move off it. */
+async function refsChanged() {
+  try {
+    await loadRefs()
+  } catch (caught) {
+    loadError.value = caught instanceof ApiError ? caught.message : 'the request failed'
   }
 }
 
@@ -143,6 +181,7 @@ async function switchRef(next: string) {
     }
     case 'commits':
     case 'branches':
+    case 'tags':
       await navigateTo({ path: `${base}/-/${view.value.name}`, query: { ref: next } })
       return
     default:
@@ -162,6 +201,7 @@ const tabs = computed(() => {
     { label: 'Code', to: `${base}/-/tree/${ref}`, match: 'tree' },
     { label: 'Commits', to: `${base}/-/commits?ref=${ref}`, match: 'commits' },
     { label: 'Branches', to: `${base}/-/branches?ref=${ref}`, match: 'branches' },
+    { label: 'Tags', to: `${base}/-/tags?ref=${ref}`, match: 'tags' },
     { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
   ]
 })
@@ -257,7 +297,16 @@ async function copyCloneUrl() {
           :project-path="project.path"
           :refs="refs"
           :ref-name="activeRef"
+          :default-branch="project.default_branch"
           @change-ref="switchRef"
+          @refs-changed="refsChanged"
+        />
+        <RepositoryTags
+          v-else-if="view.name === 'tags'"
+          :project-id="projectId"
+          :project-path="project.path"
+          :refs="refs"
+          @refs-changed="refsChanged"
         />
         <RepositoryEditor
           v-else-if="view.name === 'edit'"

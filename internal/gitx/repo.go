@@ -406,16 +406,33 @@ func (g *Git) CreateBranch(ctx context.Context, repoPath, name, sha string) erro
 
 // CreateTag creates a lightweight tag at sha, or an annotated tag when message
 // is non-empty.
-func (g *Git) CreateTag(ctx context.Context, repoPath, name, sha, message string) error {
+// CommitIdentity is who a git object is attributed to.
+type CommitIdentity struct {
+	Name  string
+	Email string
+}
+
+// CreateTag creates a tag pointing at sha.
+//
+// The tagger is passed explicitly because git refuses to guess an identity: a
+// tag created without one fails outright, so the tag ends up attributed to
+// whoever happens to run the process rather than to the person who asked for it.
+func (g *Git) CreateTag(ctx context.Context, repoPath, name, sha, message string, tagger CommitIdentity) error {
 	if err := ValidateRefName(name); err != nil {
 		return err
 	}
-	args := []string{"tag", "-f", name}
+
+	args := []string{"tag", name}
 	if message != "" {
 		args = append(args, "-m", message)
 	}
 	args = append(args, sha)
-	_, err := g.run(ctx, repoPath, nil, args...)
+
+	env := []string{
+		"GIT_COMMITTER_NAME=" + tagger.Name,
+		"GIT_COMMITTER_EMAIL=" + tagger.Email,
+	}
+	_, err := g.runEnv(ctx, repoPath, env, nil, args...)
 	return err
 }
 
