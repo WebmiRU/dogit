@@ -27,8 +27,8 @@ git clone/push          browser                     CI jobs
   │  HTTP + API     │◀──────▶│                  │   │  19 beta │
   └────────┬────────┘  events└────────────────────┘   └────┬─────┘
            │                                               │
-           │  ┌──────────────────────────────────────────┐│
-           └─▶│ dogit-hook  git <user>                   ││
+           │  ┌──────────────────────────────────────────┐ │
+           └─▶│ dogit-hook  git <user>                  │ │
               │ dogit hook post-receive (installed hook) ◀┘
               └──────────────────────────────────────────┘
                              runs git in bare repos
