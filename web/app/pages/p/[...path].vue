@@ -54,13 +54,15 @@ const view = computed(() => {
 const currentRef = computed(() => {
   const fromQuery = route.query.ref
   if (typeof fromQuery === 'string' && fromQuery) return fromQuery
-  if (view.value.name === 'tree' || view.value.name === 'blob') return view.value.rest[0] ?? ''
+  // The file views carry the ref in the path; the listings carry it in the query.
+  if (['tree', 'blob', 'edit'].includes(view.value.name)) return view.value.rest[0] ?? ''
   return ''
 })
 
 const restPath = computed(() => {
-  if (view.value.name === 'blob') return decodeURIComponent(view.value.rest.slice(1).join('/'))
-  if (view.value.name === 'tree') return decodeURIComponent(view.value.rest.slice(1).join('/'))
+  if (['blob', 'tree', 'edit', 'new'].includes(view.value.name)) {
+    return decodeURIComponent(view.value.rest.slice(1).join('/'))
+  }
   return ''
 })
 
@@ -73,9 +75,12 @@ async function loadProject() {
   loading.value = true
   loadError.value = ''
   try {
-    const response = await api.get<ProjectResponse>(
-      `/projects/${encodeURIComponent(projectPath.value)}`,
-    )
+    // Each segment is encoded on its own. Encoding the whole path turns the slash
+    // of a grouped project into %2F, which arrives as one segment the server
+    // cannot resolve.
+    const encodedPath = projectPath.value.split('/').map(encodeURIComponent).join('/')
+
+    const response = await api.get<ProjectResponse>(`/projects/${encodedPath}`)
     project.value = response.project
 
     refs.value = await api.get<RefsResponse>(`/projects/${response.project.id}/repository/refs`)
@@ -90,6 +95,18 @@ onMounted(loadProject)
 watch(projectPath, loadProject)
 
 const projectId = computed(() => project.value?.id ?? '')
+
+/** Access levels, mirroring the values the API uses. */
+const AccessLevel = {
+  Guest: 10,
+  Reporter: 20,
+  Developer: 30,
+  Maintainer: 40,
+  Owner: 50,
+} as const
+
+const canPush = computed(() => (project.value?.access_level ?? 0) >= AccessLevel.Developer)
+const canManage = computed(() => (project.value?.access_level ?? 0) >= AccessLevel.Maintainer)
 
 const activeRef = computed(() => {
   if (currentRef.value) return currentRef.value
@@ -116,11 +133,12 @@ async function switchRef(next: string) {
       await navigateTo(`${base}/-/tree/${encode}/${path}`)
       return
     }
-    case 'blob': {
+    case 'blob':
+    case 'edit': {
       // The file may not exist on the new branch; the page reports that itself
       // rather than silently falling back.
       const path = view.value.rest.slice(1).join('/')
-      await navigateTo(`${base}/-/blob/${encode}/${path}`)
+      await navigateTo(`${base}/-/${view.value.name}/${encode}/${path}`)
       return
     }
     case 'commits':
@@ -144,6 +162,7 @@ const tabs = computed(() => {
     { label: 'Code', to: `${base}/-/tree/${ref}`, match: 'tree' },
     { label: 'Commits', to: `${base}/-/commits?ref=${ref}`, match: 'commits' },
     { label: 'Branches', to: `${base}/-/branches?ref=${ref}`, match: 'branches' },
+    { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
   ]
 })
 
@@ -176,7 +195,7 @@ async function copyCloneUrl() {
             <span class="badge" :class="`badge-${project.visibility}`">{{ project.visibility }}</span>
             <span class="badge">{{ project.access_name }}</span>
           </h1>
-          <p v-if="project.description" class="page-subtitle">{{ project.description }}</p>
+          <p class="page-subtitle">{{ project.description || 'No description yet.' }}</p>
         </div>
         <div class="repo-clone">
           <span class="muted">git clone</span>
@@ -215,6 +234,7 @@ async function copyCloneUrl() {
           :refs="refs"
           :ref-name="activeRef"
           :path="restPath"
+          :can-push="canPush"
           @change-ref="switchRef"
         />
         <RepositoryCommits
@@ -238,6 +258,22 @@ async function copyCloneUrl() {
           :refs="refs"
           :ref-name="activeRef"
           @change-ref="switchRef"
+        />
+        <RepositoryEditor
+          v-else-if="view.name === 'edit'"
+          :project-id="projectId"
+          :project-path="project.path"
+          :refs="refs"
+          :ref-name="activeRef"
+          :path="restPath"
+          :can-push="canPush"
+          @change-ref="switchRef"
+        />
+        <RepositorySettings
+          v-else-if="view.name === 'settings'"
+          :project="project"
+          :can-manage="canManage"
+          @saved="project = $event"
         />
         <div v-else class="card empty">Unknown view “{{ view.name }}”.</div>
       </div>

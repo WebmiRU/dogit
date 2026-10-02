@@ -145,12 +145,17 @@ func (s *Server) seedReadme(r *http.Request, project *models.Project) error {
 		return err
 	}
 
+	author := displayName(userFrom(r.Context()))
+
 	commit, err := s.git.CommitTree(r.Context(), repoDir, gitx.CommitTreeOptions{
-		Tree:           tree,
-		Message:        "Initial commit",
-		AuthorName:     userFrom(r.Context()).Name,
+		Tree:    tree,
+		Message: "Initial commit",
+		// A user without a display name still commits under their login: git
+		// refuses an empty identity outright, and a repository that silently has no
+		// first commit is much worse than one attributed to a username.
+		AuthorName:     author,
 		AuthorEmail:    userFrom(r.Context()).Email,
-		CommitterName:  userFrom(r.Context()).Name,
+		CommitterName:  author,
 		CommitterEmail: userFrom(r.Context()).Email,
 	})
 	if err != nil {

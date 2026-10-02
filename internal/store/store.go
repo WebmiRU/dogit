@@ -120,14 +120,6 @@ type Querier interface {
 
 func (s *Store) Q() Querier { return s.pool }
 
-// LockProject takes a transaction-scoped advisory lock keyed on the project ID.
-// It serialises operations that must not interleave, such as two merge requests
-// racing to update the same branch.
-func LockProject(ctx context.Context, tx pgx.Tx, projectID any) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1::text))`, projectID)
-	return err
-}
-
 // IsUniqueViolation reports whether err is a Postgres unique-constraint error.
 func IsUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError

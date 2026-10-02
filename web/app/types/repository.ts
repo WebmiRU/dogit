@@ -70,6 +70,7 @@ export interface CommitsResponse {
 
 export interface FileResponse {
   ref: string
+  /** The blob id of this file, sent back as start_sha when saving. */
   sha: string
   path: string
   content: string
@@ -79,9 +80,9 @@ export interface FileResponse {
   too_large_bytes?: number
   language: string
   lines: number
+  /** The commit that last changed this path, which is not always the branch tip. */
   last_commit_sha?: string
   blame_url?: string
-  edit_url?: string
   raw_url?: string
 }
 

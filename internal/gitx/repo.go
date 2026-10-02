@@ -159,6 +159,24 @@ func looksBinary(b []byte) bool {
 }
 
 // Log returns commits reachable from rev, newest first.
+// LogPath returns the commits that touched a single path, newest first.
+//
+// The path is given to git log itself rather than filtered afterwards, because
+// that is what makes the result correct across renames and copies: a file whose
+// name changed is still reported under its new name.
+func (g *Git) LogPath(ctx context.Context, repoPath, rev, path string, limit int) ([]CommitInfo, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	format := "%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%aI%x1f%cI%x1f%B%x1e"
+	out, err := g.run(ctx, repoPath, nil,
+		"log", "--format="+format, fmt.Sprintf("--max-count=%d", limit), rev, "--", path)
+	if err != nil {
+		return nil, err
+	}
+	return g.parseCommits(out), nil
+}
+
 func (g *Git) Log(ctx context.Context, repoPath, rev string, limit int, skip int) ([]CommitInfo, error) {
 	if limit <= 0 {
 		limit = 50
@@ -171,6 +189,15 @@ func (g *Git) Log(ctx context.Context, repoPath, rev string, limit int, skip int
 		return nil, err
 	}
 
+	return g.parseCommits(out), nil
+}
+
+// parseCommits decodes the record format shared by the log helpers.
+//
+// The unit and time separators are control characters chosen because no commit
+// message can contain them; the message is always the last field and keeps its
+// newlines.
+func (g *Git) parseCommits(out []byte) []CommitInfo {
 	commits := []CommitInfo{}
 	for _, rec := range strings.Split(string(out), "\x1e") {
 		rec = strings.TrimLeft(rec, "\n")
@@ -200,7 +227,7 @@ func (g *Git) Log(ctx context.Context, repoPath, rev string, limit int, skip int
 			Timestamp: author, CommittedAt: committed,
 		})
 	}
-	return commits, nil
+	return commits
 }
 
 // CommitCount returns the number of commits reachable from rev.
@@ -298,7 +325,10 @@ func (g *Git) BranchesContaining(ctx context.Context, repoPath, sha string) ([]s
 // HashObject writes content as a blob and returns its object ID. With write set
 // the object is added to the object database.
 func (g *Git) HashObject(ctx context.Context, repoPath string, content []byte, write bool, filePath string) (string, error) {
-	args := []string{"hash-object", "-t", "blob"}
+	// "--stdin" is required, not optional: older git treated a piped stdin as an
+	// implicit file, and current versions read nothing at all and print an empty
+	// object id. Being explicit works on both.
+	args := []string{"hash-object", "-t", "blob", "--stdin"}
 	if write {
 		args = append(args, "-w")
 	}

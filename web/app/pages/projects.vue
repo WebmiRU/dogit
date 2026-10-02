@@ -1,8 +1,12 @@
 <script setup lang="ts">
 /** Project list with a creation form. */
+import type { GroupSummary } from '~/types/dashboard'
 import type { ProjectSummary } from '~/types/repository'
 
 const projects = ref<ProjectSummary[]>([])
+// The groups the user may put a project into. A project created under a group
+// gets that group's namespace in its path and inherits the group's members.
+const groups = ref<GroupSummary[]>([])
 const loading = ref(true)
 const loadError = ref('')
 
@@ -12,6 +16,8 @@ async function load() {
   try {
     const response = await api.get<{ projects: ProjectSummary[] }>('/projects')
     projects.value = response.projects
+    const { groups: available } = await api.get<{ groups: GroupSummary[] }>('/groups')
+    groups.value = available
   } catch (caught) {
     loadError.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -38,6 +44,7 @@ const showForm = ref(false)
 const creating = ref(false)
 const createError = ref('')
 const form = reactive({
+  group_path: '',
   path: '',
   name: '',
   description: '',
@@ -49,7 +56,11 @@ async function createProject() {
   createError.value = ''
   creating.value = true
   try {
-    const response = await api.post<{ project: ProjectSummary }>('/projects', { ...form })
+    const response = await api.post<{ project: ProjectSummary }>('/projects', {
+      ...form,
+      // An empty namespace means the project is not in a group.
+      group_path: form.group_path || undefined,
+    })
     await navigateTo(`/p/${response.project.path}`)
   } catch (caught) {
     createError.value = caught instanceof ApiError ? caught.message : 'the request failed'
@@ -80,11 +91,20 @@ async function createProject() {
 
         <form @submit.prevent="createProject">
           <div class="field">
+            <label for="group">Namespace</label>
+            <select id="group" v-model="form.group_path">
+              <option value="">— no group —</option>
+              <option v-for="group in groups" :key="group.id" :value="group.full_path">
+                {{ group.full_path }}
+              </option>
+            </select>
+          </div>
+          <div class="field">
             <label for="path">Path</label>
             <input
               id="path"
               v-model="form.path"
-              placeholder="my-project or team/my-project"
+              :placeholder="form.group_path ? 'my-project' : 'my-project or team/my-project'"
               required
             />
           </div>

@@ -84,7 +84,9 @@ async function createGroup() {
     </div>
     <div v-else class="project-grid">
       <article v-for="group in groups" :key="group.id" class="project-card">
-        <h3>{{ group.name || group.slug }}</h3>
+        <h3>
+          <NuxtLink :to="`/groups/${group.id}`">{{ group.name || group.slug }}</NuxtLink>
+        </h3>
         <p class="mono">{{ group.full_path }}</p>
         <div class="meta">
           <span class="badge">{{ group.access_name }}</span>

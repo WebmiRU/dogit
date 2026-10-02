@@ -306,7 +306,58 @@ func (r *EventRepo) Append(ctx context.Context, e *models.Event) error {
 	return nil
 }
 
-// Since returns events with an ID greater than afterID, for polling consumers.
+// VisibleSince returns the events a user may see, with an ID greater than
+// afterID.
+//
+// Visibility is the same rule the project list uses: an event about a private
+// project is only visible to the people who can open that project. The filter
+// lives in the query rather than in Go, so a future WebSocket server can run the
+// exact same statement per connection and cannot accidentally be more permissive.
+func (r *EventRepo) VisibleSince(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID, afterID int64, limit int) ([]ActivityEntry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	rows, err := r.s.pool.Query(ctx, `
+		SELECT e.id, e.kind, e.created_at, e.project_id, p.path, p.name,
+		       e.actor_id, COALESCE(u.username, 'unknown'), e.payload
+		FROM events e
+		LEFT JOIN projects p ON p.id = e.project_id
+		LEFT JOIN users u ON u.id = e.actor_id
+		WHERE e.id > $1
+		  AND ($3::uuid IS NULL OR e.project_id = $3)
+		  AND (
+		      e.project_id IS NULL
+		      OR p.visibility <> 'private'
+		      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = $2)
+		      OR EXISTS (SELECT 1 FROM project_roles pr WHERE pr.project_id = p.id AND pr.source_user_id = $2)
+		      OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = p.group_id AND gm.user_id = $2)
+		  )
+		ORDER BY e.id
+		LIMIT $4`, afterID, userID, projectID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("visible events: %w", err)
+	}
+	defer rows.Close()
+
+	entries := []ActivityEntry{}
+	for rows.Next() {
+		var (
+			entry   ActivityEntry
+			payload []byte
+		)
+		if err := rows.Scan(&entry.ID, &entry.Kind, &entry.CreatedAt, &entry.ProjectID,
+			&entry.ProjectPath, &entry.ProjectName, &entry.ActorID, &entry.ActorName,
+			&payload); err != nil {
+			return nil, err
+		}
+		describeEvent(&entry, payload)
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
+// Since returns events with an ID greater than afterID, for internal consumers.
 func (r *EventRepo) Since(ctx context.Context, afterID int64, limit int) ([]models.Event, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100

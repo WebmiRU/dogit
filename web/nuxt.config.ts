@@ -39,6 +39,28 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
+  // The group list and the group page share a path prefix, which by default makes
+  // the list their parent and the detail a child rendered through a <NuxtPage>
+  // the list does not have. The two pages are siblings in every sense that
+  // matters, so the detail route is lifted to the top level.
+  hooks: {
+    'pages:extend'(pages) {
+      for (const page of pages) {
+        const detail = page.children?.find((child) => child.path === ':id()')
+        if (!detail) continue
+
+        page.children = page.children?.filter((child) => child !== detail)
+        if (page.children?.length === 0) delete page.children
+
+        // The parent link is internal to the router builder and is not part of the
+        // published type, so it is cleared through a narrow cast.
+        ;(detail as { parent?: unknown }).parent = undefined
+        detail.path = `${page.path}/:id()`
+        pages.push(detail)
+      }
+    },
+  },
+
   app: {
     head: {
       title: 'dogit',

@@ -101,7 +101,12 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 }
 
 type fileResponse struct {
-	Ref           string `json:"ref"`
+	Ref string `json:"ref"`
+	// SHA identifies the file itself: it is the blob id of its content at this
+	// revision. A client that read the file and wants to save it back sends this
+	// back, and the server refuses the save if the content moved on. It is
+	// deliberately not the commit: the commit says where the file is, the blob
+	// says what it says.
 	SHA           string `json:"sha"`
 	Path          string `json:"path"`
 	Content       string `json:"content"`
@@ -112,7 +117,6 @@ type fileResponse struct {
 	TooLargeBytes int64  `json:"too_large_bytes,omitempty"`
 	CommitSHA     string `json:"last_commit_sha,omitempty"`
 	BlameURL      string `json:"blame_url,omitempty"`
-	EditURL       string `json:"edit_url,omitempty"`
 	RawURL        string `json:"raw_url,omitempty"`
 	Lines         int    `json:"lines"`
 }
@@ -151,16 +155,23 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The blob id is what a later save is compared against, so it is resolved here
+	// rather than left to the client to derive from the content.
+	blobSHA, err := s.git.RevParseBlob(r.Context(), rc.RepoDir, sha, filePath)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
 	resp := fileResponse{
 		Ref:      ref,
-		SHA:      sha,
+		SHA:      blobSHA,
 		Path:     filePath,
 		Size:     size,
 		Binary:   binary,
 		Language: detectLanguage(filePath),
 		RawURL:   fmt.Sprintf("/api/v1/projects/%s/repository/raw?ref=%s&path=%s", rc.Project.ID, ref, filePath),
 		BlameURL: fmt.Sprintf("/api/v1/projects/%s/repository/blame?ref=%s&path=%s", rc.Project.ID, ref, filePath),
-		EditURL:  fmt.Sprintf("/api/v1/projects/%s/-/edit/%s", rc.Project.ID, filePath),
 	}
 
 	// Text files are returned whole; binary or oversized ones are not.
@@ -178,8 +189,11 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	resp.Content = string(content)
 	resp.Lines = strings.Count(string(content), "\n") + 1
 
-	// The last commit that touched this file powers the "last change" link.
-	if commits, err := s.git.Log(r.Context(), rc.RepoDir, ref, 1, 0); err == nil && len(commits) > 0 {
+	// The last commit that touched this file powers the "last change" link. It has
+	// to be the commit that changed *this path*, not the tip of the branch: on an
+	// active branch those are different commits, and the tip would send the reader
+	// to a change that has nothing to do with the file they were looking at.
+	if commits, err := s.git.LogPath(r.Context(), rc.RepoDir, ref, filePath, 1); err == nil && len(commits) > 0 {
 		resp.CommitSHA = commits[0].SHA
 	}
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/ewolf/dogit/internal/auth"
 	"github.com/ewolf/dogit/internal/config"
+	"github.com/ewolf/dogit/internal/events"
 	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/repos"
@@ -23,16 +24,20 @@ import (
 
 // Server holds the dependencies shared by all handlers.
 type Server struct {
-	cfg   *config.Config
-	log   *slog.Logger
-	store *store.Store
-	git   *gitx.Git
-	repos *repos.Service
+	cfg    *config.Config
+	log    *slog.Logger
+	store  *store.Store
+	git    *gitx.Git
+	repos  *repos.Service
+	events *events.Bus
 }
 
 // New creates the API server.
-func New(cfg *config.Config, log *slog.Logger, st *store.Store, git *gitx.Git, repoSvc *repos.Service) *Server {
-	return &Server{cfg: cfg, log: log, store: st, git: git, repos: repoSvc}
+func New(
+	cfg *config.Config, log *slog.Logger, st *store.Store,
+	git *gitx.Git, repoSvc *repos.Service, bus *events.Bus,
+) *Server {
+	return &Server{cfg: cfg, log: log, store: st, git: git, repos: repoSvc, events: bus}
 }
 
 // contextUserKey and contextIntegrationKey hold the authenticated caller on the
@@ -109,6 +114,10 @@ func (s *Server) Register(r chi.Router) {
 
 		authenticated.Get("/dashboard", s.handleDashboard)
 
+		// The event feed the frontend follows. A WebSocket will replace the polling
+		// without changing what a page has to do.
+		authenticated.Get("/events", s.handleEventStream)
+
 		// Module administration: an administrator sees and configures modules,
 		// and a user mints the tokens they present to them.
 		authenticated.Post("/modules/{kind}/token", s.handleMintModuleToken)
@@ -129,40 +138,51 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Get("/projects", s.handleListProjects)
 		authenticated.Post("/projects", s.handleCreateProject)
 
+		// Nested project paths reach the same handlers through the dispatcher.
+		authenticated.Get("/projects/*", s.handleNestedProjectPath)
 		s.mountProjectRoutes(authenticated)
 	})
 }
 
 // mountProjectRoutes registers every route scoped to a single project.
 //
-// The project handlers and the repository handlers share one Route block on
-// purpose: registering chi.Route at a pattern replaces any handler already
-// registered for that exact path, so a separate Get("/projects/{projectID}")
-// would be silently dropped.
+// The patterns are registered one by one rather than inside a chi.Route block,
+// and that is not a style choice. chi.Route mounts a sub-router at the pattern
+// plus "/*", so a Route on "/projects/{projectID}" claims every path underneath
+// it — including "/projects/platform/api", which the wildcard in Register has to
+// see. The claim is silent: the grouped project simply answered 404 while its
+// id-addressed twin worked, which is the worst shape a bug can have.
+//
+// A project inside a group is addressed as "group/project", and a path parameter
+// does not span a slash, so the wildcard registered in Register resolves the
+// reference to an id and replays the request against this table.
 func (s *Server) mountProjectRoutes(r chi.Router) {
-	r.Route("/projects/{projectID}", func(p chi.Router) {
-		p.Get("/", s.handleGetProject)
-		p.Patch("/", s.handleUpdateProject)
-		p.Delete("/", s.handleDeleteProject)
-		p.Get("/members", s.handleListProjectMembers)
+	const base = "/projects/{projectID}"
 
-		p.Get("/repository/tree", s.handleTree)
-		p.Get("/repository/file", s.handleFile)
-		p.Get("/repository/raw", s.handleRawFile)
-		p.Get("/repository/blame", s.handleBlame)
-		p.Get("/repository/refs", s.handleRefs)
-		p.Get("/repository/branches", s.handleBranches)
-		p.Post("/repository/branches", s.handleCreateBranch)
-		p.Delete("/repository/branches/{name}", s.handleDeleteBranch)
-		p.Get("/repository/tags", s.handleTags)
-		p.Post("/repository/tags", s.handleCreateTag)
-		p.Delete("/repository/tags/{name}", s.handleDeleteTag)
-		p.Get("/repository/commits", s.handleCommits)
-		p.Get("/repository/commits/{sha}", s.handleCommit)
-		p.Get("/repository/commits/{sha}/diff", s.handleCommitDiff)
-		p.Get("/repository/compare", s.handleCompare)
-		p.Get("/repository/commits_feed", s.handleCommitFeed)
-	})
+	r.Get(base, s.handleGetProject)
+	r.Patch(base, s.handleUpdateProject)
+	r.Delete(base, s.handleDeleteProject)
+	r.Get(base+"/members", s.handleListProjectMembers)
+
+	r.Get(base+"/repository/tree", s.handleTree)
+	r.Get(base+"/repository/file", s.handleFile)
+	// Writing from the browser: a file becomes a blob, a tree, a commit and a
+	// conditional ref update, without checking anything out.
+	r.Post(base+"/repository/files", s.handleCommitFile)
+	r.Get(base+"/repository/raw", s.handleRawFile)
+	r.Get(base+"/repository/blame", s.handleBlame)
+	r.Get(base+"/repository/refs", s.handleRefs)
+	r.Get(base+"/repository/branches", s.handleBranches)
+	r.Post(base+"/repository/branches", s.handleCreateBranch)
+	r.Delete(base+"/repository/branches/{name}", s.handleDeleteBranch)
+	r.Get(base+"/repository/tags", s.handleTags)
+	r.Post(base+"/repository/tags", s.handleCreateTag)
+	r.Delete(base+"/repository/tags/{name}", s.handleDeleteTag)
+	r.Get(base+"/repository/commits", s.handleCommits)
+	r.Get(base+"/repository/commits/{sha}", s.handleCommit)
+	r.Get(base+"/repository/commits/{sha}/diff", s.handleCommitDiff)
+	r.Get(base+"/repository/compare", s.handleCompare)
+	r.Get(base+"/repository/commits_feed", s.handleCommitFeed)
 }
 
 // userFrom returns the authenticated user stored by the authenticate middleware.

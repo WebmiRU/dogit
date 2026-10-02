@@ -11,6 +11,7 @@ const props = defineProps<{
   refs: RefsResponse | null
   refName: string
   path: string
+  canPush?: boolean
 }>()
 
 const file = ref<FileResponse | null>(null)
@@ -100,6 +101,13 @@ const rawUrl = computed(() =>
       </div>
 
       <div class="spacer" />
+      <NuxtLink
+        v-if="canPush"
+        class="btn btn-primary"
+        :to="`/p/${projectPath}/-/edit/${encodeURIComponent(refName)}/${path}`"
+      >
+        Edit
+      </NuxtLink>
       <button class="btn" type="button" @click="toggleBlame">
         {{ showBlame ? 'Hide blame' : 'Blame' }}
       </button>
