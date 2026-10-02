@@ -334,12 +334,12 @@ func (r *MergeRequestRepo) Notes(ctx context.Context, mrID int64) ([]models.Merg
 	return notes, rows.Err()
 }
 
-// openByBranch finds an open request that already covers a pair of branches.
+// OpenByBranch finds an open request that already covers a pair of branches.
 //
 // Opening a second request for work already under review is almost never what
 // someone means, and two requests for one branch pair make the merge button
 // ambiguous: either one merges the same commits twice.
-func (r *MergeRequestRepo) openByBranch(ctx context.Context, projectID uuid.UUID, source, target string) (*models.MergeRequest, error) {
+func (r *MergeRequestRepo) OpenByBranch(ctx context.Context, projectID uuid.UUID, source, target string) (*models.MergeRequest, error) {
 	row := r.r.pool.QueryRow(ctx,
 		`SELECT `+mergeRequestColumns+` FROM merge_requests mr
 		 WHERE mr.project_id = $1 AND mr.state = $2 AND mr.source_branch = $3 AND mr.target_branch = $4`,

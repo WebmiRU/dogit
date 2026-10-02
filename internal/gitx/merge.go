@@ -181,16 +181,32 @@ func (g *Git) mergeCommit(ctx context.Context, repoPath string, opts MergeOption
 	return result, nil
 }
 
+// PeekConflicts reports which files would conflict, without writing anything.
+//
+// It exists so a merge request page can say "this cannot be merged" before anyone
+// presses the button. The three-way merge runs and the result is thrown away: no
+// index, no working tree, no object written.
+func (g *Git) PeekConflicts(ctx context.Context, repoPath, ours, theirs string) (string, []string, error) {
+	if !g.SupportsMergeTree(ctx) {
+		return "", nil, fmt.Errorf("git 2.38 or newer is required (found %q)", g.Version(ctx))
+	}
+	return g.mergeTree(ctx, repoPath, ours, theirs)
+}
+
 // mergeTree runs the three-way merge and returns the resulting tree OID plus
 // the list of conflicted paths.
 func (g *Git) mergeTree(ctx context.Context, repoPath, ours, theirs string) (string, []string, error) {
 	args := []string{"merge-tree", "--write-tree", "--name-only", "-z", ours, theirs}
 	out, err := g.run(ctx, repoPath, nil, args...)
 
-	// Exit code 1 means "merged with conflicts"; the tree is still printed.
+	// Exit code 1 means "merged with conflicts", and git still prints the tree it
+	// built — that output arrives with the error and has to be kept.
 	var ce *CommandError
-	if err != nil && !(errorsAs(err, &ce) && ce.ExitCode == 1) {
-		return "", nil, fmt.Errorf("merge-tree: %w", err)
+	if err != nil {
+		if !errorsAs(err, &ce) || ce.ExitCode != 1 {
+			return "", nil, fmt.Errorf("merge-tree: %w", err)
+		}
+		out = []byte(ce.Stdout)
 	}
 
 	fields := strings.Split(string(out), "\x00")
@@ -198,11 +214,17 @@ func (g *Git) mergeTree(ctx context.Context, repoPath, ours, theirs string) (str
 		return "", nil, fmt.Errorf("merge-tree returned no tree")
 	}
 	tree := fields[0]
+
+	// After the tree come the names of the files that could not be combined, and
+	// then an empty field, then a human-readable section describing the conflict.
+	// Only the names are wanted: the description repeats them with prose, and
+	// including it turns the conflict list into a wall of git's own wording.
 	conflicts := []string{}
-	for _, f := range fields[1:] {
-		if strings.TrimSpace(f) != "" {
-			conflicts = append(conflicts, f)
+	for _, field := range fields[1:] {
+		if field == "" {
+			break
 		}
+		conflicts = append(conflicts, field)
 	}
 	return tree, conflicts, nil
 }

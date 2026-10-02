@@ -71,6 +71,7 @@ func TestRouteTableContainsFrontendEndpoints(t *testing.T) {
 		{http.MethodGet, "/admin/overview"},
 		{http.MethodGet, "/groups"},
 		{http.MethodGet, "/projects"},
+		{http.MethodGet, "/merge_requests"},
 		{http.MethodPost, "/projects"},
 		{http.MethodGet, "/projects/{projectID}"},
 		{http.MethodPatch, "/projects/{projectID}"},

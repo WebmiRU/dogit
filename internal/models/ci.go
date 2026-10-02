@@ -35,11 +35,13 @@ type MergeRequest struct {
 
 	// Joined in for display, so a list of requests does not need a query per row
 	// to know who opened one or where it lives.
-	AuthorName       string   `json:"author_name"`
-	AuthorUsername   string   `json:"author_username"`
-	MergedByName     string   `json:"merged_by_name,omitempty"`
-	MergedByUsername string   `json:"merged_by_username,omitempty"`
-	Project          *Project `json:"project,omitempty"`
+	AuthorName       string `json:"author_name"`
+	AuthorUsername   string `json:"author_username"`
+	MergedByName     string `json:"merged_by_name,omitempty"`
+	MergedByUsername string `json:"merged_by_username,omitempty"`
+	// URL is where the request lives in the web interface.
+	URL     string   `json:"url"`
+	Project *Project `json:"project,omitempty"`
 
 	// Computed fields, not persisted.
 	HasConflicts bool      `json:"has_conflicts"`

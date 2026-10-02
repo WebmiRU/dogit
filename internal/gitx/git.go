@@ -89,6 +89,10 @@ type CommandError struct {
 	Args     []string
 	ExitCode int
 	Stderr   string
+	// Stdout is kept because some git commands report their result on a non-zero
+	// exit: "merge-tree --write-tree" exits 1 when the merge conflicts and prints
+	// the conflicted tree on stdout, which is exactly what the caller needs.
+	Stdout string
 }
 
 func (e *CommandError) Error() string {
@@ -134,7 +138,9 @@ func (g *Git) run(ctx context.Context, dir string, stdin []byte, args ...string)
 		} else if ctx.Err() != nil {
 			return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), ctx.Err())
 		}
-		return nil, &CommandError{Args: args, ExitCode: exitCode, Stderr: stderr.String()}
+		return stdout.Bytes(), &CommandError{
+			Args: args, ExitCode: exitCode, Stderr: stderr.String(), Stdout: stdout.String(),
+		}
 	}
 	return stdout.Bytes(), nil
 }
@@ -168,7 +174,9 @@ func (g *Git) runEnv(ctx context.Context, dir string, extraEnv []string, stdin [
 		} else if ctx.Err() != nil {
 			return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), ctx.Err())
 		}
-		return nil, &CommandError{Args: args, ExitCode: exitCode, Stderr: stderr.String()}
+		return stdout.Bytes(), &CommandError{
+			Args: args, ExitCode: exitCode, Stderr: stderr.String(), Stdout: stdout.String(),
+		}
 	}
 	return stdout.Bytes(), nil
 }

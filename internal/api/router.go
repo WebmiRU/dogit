@@ -136,6 +136,8 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Get("/groups/{groupID}/projects", s.handleListGroupProjects)
 
 		authenticated.Get("/projects", s.handleListProjects)
+		// Every merge request the caller may read, across projects.
+		authenticated.Get("/merge_requests", s.handleListMergeRequests)
 		authenticated.Post("/projects", s.handleCreateProject)
 
 		// Nested project paths reach the same handlers through the dispatcher.
@@ -183,6 +185,16 @@ func (s *Server) mountProjectRoutes(r chi.Router) {
 	r.Get(base+"/repository/commits/{sha}/diff", s.handleCommitDiff)
 	r.Get(base+"/repository/compare", s.handleCompare)
 	r.Get(base+"/repository/commits_feed", s.handleCommitFeed)
+
+	// Merge requests. A global listing lives outside this block, because it spans
+	// every project the caller may read.
+	r.Get(base+"/merge_requests", s.handleListProjectMergeRequests)
+	r.Post(base+"/merge_requests", s.handleCreateMergeRequest)
+	r.Get(base+"/merge_requests/{iid}", s.handleGetMergeRequest)
+	r.Put(base+"/merge_requests/{iid}", s.handleUpdateMergeRequest)
+	r.Put(base+"/merge_requests/{iid}/state", s.handleCloseMergeRequest)
+	r.Post(base+"/merge_requests/{iid}/merge", s.handleMergeMergeRequest)
+	r.Post(base+"/merge_requests/{iid}/notes", s.handleAddMergeRequestNote)
 }
 
 // userFrom returns the authenticated user stored by the authenticate middleware.
