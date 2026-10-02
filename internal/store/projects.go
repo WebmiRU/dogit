@@ -226,6 +226,41 @@ func (r *ProjectRepo) Members(ctx context.Context, projectID uuid.UUID) ([]uuid.
 // ListVisible returns projects the user may see, together with the computed
 // access level for each. Public and internal projects are included for any
 // authenticated user; the rest require membership.
+// ListAll returns every project, for the core's own bookkeeping.
+//
+// It is not used to answer a caller's request: a module asking which project an
+// image belongs to needs the whole list to match a name against, and it gets that
+// answer from the core rather than paging through this itself.
+func (r *ProjectRepo) ListAll(ctx context.Context) ([]*models.Project, error) {
+	rows, err := r.s.pool.Query(ctx, `
+		SELECT id, group_id, path, name, description, visibility, default_branch,
+		       allow_pipeline_trigger, allow_merge, merge_method, remove_source_branch,
+		       public_emails, created_at, updated_at, archived_at
+		FROM projects
+		ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("list all projects: %w", err)
+	}
+	defer rows.Close()
+
+	projects := []*models.Project{}
+	for rows.Next() {
+		project := &models.Project{}
+		if err := rows.Scan(&project.ID, &project.GroupID, &project.Path, &project.Name,
+			&project.Description, &project.Visibility, &project.DefaultBranch,
+			&project.AllowPipelineTrigger, &project.AllowMerge, &project.MergeMethod,
+			&project.RemoveSourceBranch, &project.PublicEmails,
+			&project.CreatedAt, &project.UpdatedAt, &project.ArchivedAt); err != nil {
+			return nil, fmt.Errorf("scan project: %w", err)
+		}
+		projects = append(projects, project)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list all projects: %w", err)
+	}
+	return projects, nil
+}
+
 func (r *ProjectRepo) ListVisible(ctx context.Context, userID uuid.UUID, visibilityLimit string) ([]*models.Project, map[uuid.UUID]int, error) {
 	const q = `
 		SELECT p.id, p.group_id, p.path, p.name, p.description, p.visibility, p.default_branch,

@@ -122,6 +122,29 @@ type UninstallOption struct {
 	Required bool `json:"required,omitempty"`
 }
 
+// RegistryAccess is the core's answer to a module asking about a caller.
+//
+// It is deliberately blunt: allowed, and if not, why. A module has to be able to
+// log the reason without interpreting prose.
+type RegistryAccess struct {
+	Allowed bool   `json:"allowed"`
+	Action  string `json:"action,omitempty"`
+	// Reason explains a refusal in the module's terms, so it can be logged and
+	// shown without the core knowing which module asked.
+	Reason string `json:"reason,omitempty"`
+
+	// Level and Minimum make a refusal explainable: "you are a guest, this needs a
+	// developer" is something an administrator can act on.
+	Level    int        `json:"level,omitempty"`
+	Minimum  int        `json:"minimum,omitempty"`
+	Username string     `json:"username,omitempty"`
+	UserID   *uuid.UUID `json:"user_id,omitempty"`
+
+	// Project is echoed back when the answer is yes, so the module does not have
+	// to ask a second time to learn which project the path meant.
+	Project map[string]any `json:"project,omitempty"`
+}
+
 // SettingSpec is one configurable setting of a module.
 type SettingSpec struct {
 	Key         string   `json:"key"`
@@ -132,6 +155,18 @@ type SettingSpec struct {
 	Description string   `json:"description,omitempty"`
 	// Secret marks a value that is write-only: it is stored but never returned.
 	Secret bool `json:"secret,omitempty"`
+
+	// MustContain lists substrings every value of this setting must include, and
+	// WhichAreThen explains why in the module's own words.
+	//
+	// It exists so the core can enforce a rule without knowing what the rule is
+	// about: a registry's image name must contain its project's name, and the core
+	// has no business knowing that a registry exists. The module states the
+	// requirement and the reason; the core checks it on write, where refusing is
+	// cheap, rather than at push time, where refusing is an outage.
+	MustContain []string `json:"must_contain,omitempty"`
+	// WhyContains is shown when a value is refused.
+	WhyContains string `json:"why_contains,omitempty"`
 }
 
 // Integration is a registered module.

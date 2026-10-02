@@ -377,6 +377,32 @@ func (s *Server) handleSetModuleSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// A module may require something of a setting's value — that an image name
+	// template contain its project, for instance. It says so in its manifest, in
+	// its own words, and the core checks it here where refusing is free. Catching it
+	// at push time instead would mean a registry whose images cannot be traced back
+	// to a project, discovered by somebody trying to use them.
+	if spec, found := settingSpecOf(integration, key); found && len(spec.MustContain) > 0 {
+		var value string
+		if err := json.Unmarshal(req.Value, &value); err == nil {
+			var missing []string
+			for _, required := range spec.MustContain {
+				if !strings.Contains(value, required) {
+					missing = append(missing, required)
+				}
+			}
+			if len(missing) > 0 {
+				reason := spec.WhyContains
+				if reason == "" {
+					reason = "the module requires it, and does not say why"
+				}
+				s.writeError(w, r, errBadRequestf("%q is missing %s: %s",
+					value, strings.Join(missing, ", "), reason))
+				return
+			}
+		}
+	}
+
 	if err := s.store.Integrations().SetSetting(r.Context(), integration.ID, scopeType, scopeID, key, req.Value); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -550,14 +576,25 @@ func (s *Server) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	result := s.introspect(r, presented)
+	s.writeJSON(w, r, http.StatusOK, result)
+}
+
+// introspect resolves a credential a module presented.
+//
+// One function, because two callers asking the same question differently is how a
+// registry ends up allowing something the rest of the system refuses. An answer
+// is always 200 with a body: "who is this" has several correct answers, and the
+// module has to be able to tell them apart.
+func (s *Server) introspect(r *http.Request, presented []byte) models.Introspection {
+	inactive := models.Introspection{Active: false, Scopes: []string{}}
+
 	token, err := s.store.IntegrationTokens().Introspect(r.Context(), presented)
 	if err != nil {
-		s.writeJSON(w, r, http.StatusOK, models.Introspection{Active: false, Scopes: []string{}})
-		return
+		return inactive
 	}
 	if time.Now().After(token.ExpiresAt) {
-		s.writeJSON(w, r, http.StatusOK, models.Introspection{Active: false, Scopes: []string{}})
-		return
+		return inactive
 	}
 	if !token.ModuleEnabled {
 		// Forbidding a module has to take effect at once, without asking the module
@@ -566,8 +603,7 @@ func (s *Server) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		// the button work on modules nobody has updated.
 		s.log.Info("module token presented by a forbidden module",
 			"module_id", token.IntegrationID)
-		s.writeJSON(w, r, http.StatusOK, models.Introspection{Active: false, Scopes: []string{}})
-		return
+		return inactive
 	}
 
 	result := models.Introspection{
@@ -578,28 +614,26 @@ func (s *Server) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if token.UserID != nil {
-		if user, err := s.store.Users().ByID(r.Context(), *token.UserID); err == nil {
-			result.Username = user.Username
-
-			if token.ProjectID != nil {
-				if level, err := s.store.Permissions().AccessLevel(r.Context(), user.ID, *token.ProjectID); err == nil {
-					result.AccessLevel = level
-					result.AccessName = models.AccessLevelName(level)
-				}
-			}
-		} else {
+		user, err := s.store.Users().ByID(r.Context(), *token.UserID)
+		if err != nil {
 			// The account is gone. Revoking by disappearance is the whole point of
 			// the core owning identity, so the token stops working immediately.
-			s.writeJSON(w, r, http.StatusOK, models.Introspection{Active: false, Scopes: []string{}})
-			return
+			return inactive
+		}
+		result.Username = user.Username
+
+		if token.ProjectID != nil {
+			if level, err := s.store.Permissions().AccessLevel(r.Context(), user.ID, *token.ProjectID); err == nil {
+				result.AccessLevel = level
+				result.AccessName = models.AccessLevelName(level)
+			}
 		}
 	}
 
 	if err := s.store.IntegrationTokens().TouchUsed(r.Context(), token.ID); err != nil {
 		s.log.Debug("record module token usage", "token_id", token.ID, "error", err)
 	}
-
-	s.writeJSON(w, r, http.StatusOK, result)
+	return result
 }
 
 // --- helpers ------------------------------------------------------------
@@ -723,6 +757,16 @@ func redactSettings(settings map[string]json.RawMessage, secret map[string]bool)
 	return out
 }
 
+// settingSpecOf finds what a module said about one of its settings.
+func settingSpecOf(integration *models.Integration, key string) (models.SettingSpec, bool) {
+	for _, spec := range integration.Capabilities.Settings {
+		if spec.Key == key {
+			return spec, true
+		}
+	}
+	return models.SettingSpec{}, false
+}
+
 func moduleDeclaresSetting(integration *models.Integration, key string) bool {
 	for _, spec := range integration.Capabilities.Settings {
 		if spec.Key == key {
@@ -838,7 +882,18 @@ func validateModuleEndpoint(endpoint string) error {
 
 // tokenFromHeader reads a bearer token presented by a module.
 func (s *Server) tokenFromHeader(r *http.Request) ([]byte, error) {
-	header := r.Header.Get("Authorization")
+	return hashBearer(r.Header.Get("Authorization"))
+}
+
+// tokenFromHeaderValue hashes a credential a module found somewhere other than
+// its own request — a registry client presenting a token through the module, for
+// instance. The module passes the token as it received it; deciding what it means
+// happens here.
+func (s *Server) tokenFromHeaderValue(token string) ([]byte, error) {
+	return hashBearer("Bearer " + strings.TrimSpace(token))
+}
+
+func hashBearer(header string) ([]byte, error) {
 	const prefix = "Bearer "
 	if len(header) <= len(prefix) || header[:len(prefix)] != prefix {
 		return nil, errors.New("no bearer token")

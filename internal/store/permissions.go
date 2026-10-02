@@ -26,6 +26,14 @@ const (
 	ActionManageProject     Action = "manage_project" // settings, members, delete
 	ActionManageGroup       Action = "manage_group"
 	ActionAdmin             Action = "admin"
+
+	// Registry access. Pulling an image is reading the project's code; pushing one
+	// is writing it; deleting is managing. A module asks the core these questions
+	// rather than keeping its own member list, so an account removed here stops
+	// pushing images at the very next request.
+	ActionRegistryPull   Action = "registry_pull"
+	ActionRegistryPush   Action = "registry_push"
+	ActionRegistryDelete Action = "registry_delete"
 )
 
 // MinLevel maps an action to the lowest access level that satisfies it.
@@ -39,6 +47,9 @@ var MinLevel = map[Action]int{
 	ActionTriggerCI:         models.AccessLevelDeveloper,
 	ActionPushProtected:     models.AccessLevelMaintainer,
 	ActionMergeMR:           models.AccessLevelMaintainer,
+	ActionRegistryPull:      models.AccessLevelReporter,
+	ActionRegistryPush:      models.AccessLevelDeveloper,
+	ActionRegistryDelete:    models.AccessLevelMaintainer,
 	ActionManageProject:     models.AccessLevelMaintainer,
 	ActionManageGroup:       models.AccessLevelOwner,
 	ActionAdmin:             models.AccessLevelOwner,
