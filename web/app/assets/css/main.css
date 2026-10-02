@@ -341,7 +341,11 @@ label {
   border-bottom: 2px solid transparent;
 }
 
+/* The active tab is marked by the page, not by the router. A tab points at the
+   list while the reader may be on a single merge request, and no address-matching
+   rule can say that both are the same tab. */
 .repo-tabs a.router-link-active,
+.repo-tabs a.active,
 .repo-tabs a:hover {
   color: var(--text);
   border-bottom-color: var(--accent);

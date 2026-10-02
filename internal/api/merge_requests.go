@@ -387,8 +387,9 @@ func (s *Server) handleMergeMergeRequest(w http.ResponseWriter, r *http.Request)
 	}
 
 	var body struct {
-		Method       string `json:"method"`
-		ShouldRemove bool   `json:"should_remove_source_branch"`
+		Method       string            `json:"method"`
+		ShouldRemove bool              `json:"should_remove_source_branch"`
+		Resolutions  []gitx.Resolution `json:"resolutions"`
 	}
 	if r.ContentLength > 0 {
 		if err := decodeJSON(r, &body); err != nil {
@@ -431,21 +432,93 @@ func (s *Server) handleMergeMergeRequest(w http.ResponseWriter, r *http.Request)
 			return errBadRequestf("this merge request is already %s", current.State)
 		}
 
-		result, err = s.git.Merge(r.Context(), rc.RepoDir, gitx.MergeOptions{
+		options := gitx.MergeOptions{
 			TargetBranch: mr.TargetBranch, SourceBranch: mr.SourceBranch,
 			Method: method,
 			Message: fmt.Sprintf("Merge branch '%s' into '%s'\n\n%s",
 				mr.SourceBranch, mr.TargetBranch, firstLine(mr.Title)),
 			AuthorName: author, AuthorEmail: user.Email,
 			CommitterName: author, CommitterEmail: user.Email,
-		})
-		if err != nil {
-			return err
 		}
-		if len(result.Conflicts) > 0 {
-			return errConflictf("the branches conflict in %d %s: %s",
-				len(result.Conflicts), pluralFiles(len(result.Conflicts)),
-				strings.Join(result.Conflicts, ", "))
+
+		if len(body.Resolutions) > 0 {
+			// A resolution is only accepted for a merge that actually conflicts:
+			// silently ignoring extra resolutions would let a caller believe a
+			// conflict was resolved when it never was.
+			conflictedTree, probe, err := s.git.PeekConflicts(r.Context(), rc.RepoDir,
+				resolveOrEmpty(r, s, rc, mr.TargetBranch), resolveOrEmpty(r, s, rc, mr.SourceBranch))
+			if err != nil {
+				return err
+			}
+			if len(probe) == 0 {
+				return errBadRequest("these branches do not conflict, so there is nothing to resolve")
+			}
+			// A named stage is turned into a blob here, where the three versions
+			// are known: the tree merge-tree produced has no stages left in it, so
+			// "take theirs" has to be resolved against the tips rather than against
+			// the tree.
+			base, err := s.git.MergeBase(r.Context(), rc.RepoDir,
+				resolveOrEmpty(r, s, rc, mr.TargetBranch), resolveOrEmpty(r, s, rc, mr.SourceBranch))
+			if err != nil {
+				return err
+			}
+			versions, err := s.git.ConflictVersions(r.Context(), rc.RepoDir, base,
+				resolveOrEmpty(r, s, rc, mr.TargetBranch), resolveOrEmpty(r, s, rc, mr.SourceBranch), probe)
+			if err != nil {
+				return err
+			}
+
+			byPath := map[string]gitx.ConflictStage{}
+			for _, version := range versions {
+				byPath[version.Path] = version
+			}
+
+			resolved := make([]gitx.Resolution, 0, len(body.Resolutions))
+			for _, resolution := range body.Resolutions {
+				// Written text is passed through: the merge writes it as a blob.
+				if resolution.Text != "" {
+					if _, known := byPath[resolution.Path]; !known {
+						return errBadRequestf("%q is not one of the conflicted files", resolution.Path)
+					}
+					resolved = append(resolved, resolution)
+					continue
+				}
+				if resolution.Blob == "" {
+					version, known := byPath[resolution.Path]
+					if !known {
+						return errBadRequestf("%q is not one of the conflicted files", resolution.Path)
+					}
+					switch resolution.Stage {
+					case "base":
+						resolution.Blob = version.Base
+					case "ours":
+						resolution.Blob = version.Ours
+					case "theirs":
+						resolution.Blob = version.Theirs
+					default:
+						return errBadRequestf("resolution for %q must name base, ours or theirs", resolution.Path)
+					}
+					if resolution.Blob == "" {
+						return errBadRequestf("%q has no %s version", resolution.Path, resolution.Stage)
+					}
+				}
+				resolved = append(resolved, resolution)
+			}
+			body.Resolutions = resolved
+			result, err = s.git.CompleteMerge(r.Context(), rc.RepoDir, options, conflictedTree, body.Resolutions)
+			if err != nil {
+				return err
+			}
+		} else {
+			result, err = s.git.Merge(r.Context(), rc.RepoDir, options)
+			if err != nil {
+				return err
+			}
+			if len(result.Conflicts) > 0 {
+				return errConflictf("the branches conflict in %d %s: %s",
+					len(result.Conflicts), pluralFiles(len(result.Conflicts)),
+					strings.Join(result.Conflicts, ", "))
+			}
 		}
 
 		merged, err = s.store.MergeRequests().MarkMerged(r.Context(), current.ID, result.CommitSHA, user.ID)
@@ -479,6 +552,102 @@ func (s *Server) handleMergeMergeRequest(w http.ResponseWriter, r *http.Request)
 		"merge_request": s.mergeRequestToView(r, merged),
 		"commit_sha":    result.CommitSHA,
 	})
+}
+
+// handleMergeRequestConflicts returns the three versions of every conflicted
+// file, so the interface can offer a choice per file.
+//
+// Nothing is written: the merge is computed in memory and thrown away, which is
+// the only way to answer "what would conflict" without touching the repository.
+func (s *Server) handleMergeRequestConflicts(w http.ResponseWriter, r *http.Request) {
+	rc, mr, err := s.mergeRequestContext(r, store.ActionReadProject)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if !mr.IsOpen() {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"conflicts": []any{}})
+		return
+	}
+
+	target, err := s.git.RevParse(r.Context(), rc.RepoDir, mr.TargetBranch)
+	if err != nil {
+		s.writeError(w, r, errNotFoundf("branch %q does not exist", mr.TargetBranch))
+		return
+	}
+	source, err := s.git.RevParse(r.Context(), rc.RepoDir, mr.SourceBranch)
+	if err != nil {
+		s.writeError(w, r, errNotFoundf("branch %q does not exist", mr.SourceBranch))
+		return
+	}
+
+	conflictedTree, conflictNames, err := s.git.PeekConflicts(r.Context(), rc.RepoDir, target, source)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if len(conflictNames) == 0 {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"conflicts": []any{}})
+		return
+	}
+
+	base, err := s.git.MergeBase(r.Context(), rc.RepoDir, target, source)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	stages, err := s.git.ConflictVersions(r.Context(), rc.RepoDir, base, target, source, conflictNames)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	type conflictView struct {
+		Path   string `json:"path"`
+		Status string `json:"status"`
+		Base   string `json:"base"`
+		Ours   string `json:"ours"`
+		Theirs string `json:"theirs"`
+		// The content of each side, so the interface can show them without a
+		// request per file and per side.
+		BaseText   string `json:"base_text,omitempty"`
+		OursText   string `json:"ours_text,omitempty"`
+		TheirsText string `json:"theirs_text,omitempty"`
+	}
+
+	out := []conflictView{}
+	for _, stage := range stages {
+		item := conflictView{
+			Path: stage.Path, Status: stage.Status,
+			Base: stage.Base, Ours: stage.Ours, Theirs: stage.Theirs,
+		}
+		// A side that does not exist is an addition, not an empty file, and the
+		// interface has to be able to tell those apart.
+		item.BaseText = s.blobText(r, rc, stage.Base)
+		item.OursText = s.blobText(r, rc, stage.Ours)
+		item.TheirsText = s.blobText(r, rc, stage.Theirs)
+		out = append(out, item)
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"conflicts":       out,
+		"conflicted_tree": conflictedTree,
+		"target_branch":   mr.TargetBranch,
+		"source_branch":   mr.SourceBranch,
+	})
+}
+
+// blobText returns the content of a blob, or an empty string when there is none.
+func (s *Server) blobText(r *http.Request, rc *repoContext, blobSHA string) string {
+	if blobSHA == "" {
+		return ""
+	}
+	content, _, _, err := s.git.CatFileBlob(r.Context(), rc.RepoDir, blobSHA)
+	if err != nil {
+		return ""
+	}
+	return string(content)
 }
 
 // handleCloseMergeRequest closes a request without merging, or reopens one.
@@ -619,6 +788,16 @@ func (s *Server) publishMergeRequest(r *http.Request, rc *repoContext, mr *model
 		"target_branch": mr.TargetBranch,
 		"state":         mr.State,
 	})
+}
+
+// mustRev resolves a ref, returning an empty string when it does not exist so the
+// caller reports a conflict rather than dereferencing nothing.
+func resolveOrEmpty(r *http.Request, s *Server, rc *repoContext, ref string) string {
+	sha, err := s.git.RevParse(r.Context(), rc.RepoDir, ref)
+	if err != nil {
+		return ""
+	}
+	return sha
 }
 
 func mergeStatusName(mergeable string, hasConflicts bool) string {

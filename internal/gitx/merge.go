@@ -232,6 +232,52 @@ func (g *Git) mergeTree(ctx context.Context, repoPath, ours, theirs string) (str
 // Conflicts returns the stage-1/2/3 blob IDs for every conflicted file in a
 // merge-tree result. The stages are read with `git ls-files --stage` against a
 // temporary index, which keeps the repository itself untouched.
+// ConflictVersions returns the three versions of each conflicted path.
+//
+// A conflicted tree carries no stages: stages live in an index, and the
+// three-way merge that produced the tree never built one. The versions are
+// therefore read back from the common ancestor and from the two tips, which is
+// exactly what the three stages would have held.
+func (g *Git) ConflictVersions(
+	ctx context.Context, repoPath, base, ours, theirs string, paths []string,
+) ([]ConflictStage, error) {
+	out := []ConflictStage{}
+
+	for _, path := range paths {
+		stage := ConflictStage{Path: path, Status: "both modified"}
+		// A side that has no file is an addition rather than an empty file, and the
+		// difference matters to whoever resolves it.
+		if blob, err := g.RevParseBlob(ctx, repoPath, base, path); err == nil {
+			stage.Base = blob
+		}
+		if blob, err := g.RevParseBlob(ctx, repoPath, ours, path); err == nil {
+			stage.Ours = blob
+		}
+		if blob, err := g.RevParseBlob(ctx, repoPath, theirs, path); err == nil {
+			stage.Theirs = blob
+		}
+
+		switch {
+		case stage.Base == "" && stage.Ours == "":
+			stage.Status = "added by them"
+		case stage.Base == "" && stage.Theirs == "":
+			stage.Status = "added by us"
+		case stage.Ours == "":
+			stage.Status = "deleted by them"
+		case stage.Theirs == "":
+			stage.Status = "deleted by us"
+		}
+
+		out = append(out, stage)
+	}
+	return out, nil
+}
+
+// Conflicts reads the conflict stages from a tree that still has them.
+//
+// A tree written by merge-tree has no stages left in it, so this is only useful
+// for an index that was prepared elsewhere; ConflictVersions is what the merge
+// request path uses.
 func (g *Git) Conflicts(ctx context.Context, repoPath, conflictedTree string) ([]ConflictStage, error) {
 	idx, cleanup, err := g.tempIndex()
 	if err != nil {
@@ -291,9 +337,13 @@ func (g *Git) Conflicts(ctx context.Context, repoPath, conflictedTree string) ([
 // Resolution maps a conflicted path to its resolved blob OID, or to the stage
 // to take verbatim ("base", "ours", "theirs") when the user did not edit.
 type Resolution struct {
-	Path  string `json:"path"`
-	Blob  string `json:"blob,omitempty"`
+	Path string `json:"path"`
+	Blob string `json:"blob,omitempty"`
+	// Stage names one of the three versions git left behind.
 	Stage string `json:"stage,omitempty"` // base | ours | theirs
+	// Text is what a person wrote to settle the conflict. It is written as a blob
+	// before the merge, so the browser never has to create an object itself.
+	Text string `json:"text,omitempty"`
 }
 
 // CompleteMerge finishes a conflicted merge using the resolutions collected by
@@ -316,6 +366,13 @@ func (g *Git) CompleteMerge(ctx context.Context, repoPath string, opts MergeOpti
 			return nil, err
 		}
 		blob := r.Blob
+		if r.Text != "" {
+			written, err := g.HashObject(ctx, repoPath, []byte(r.Text), true, r.Path)
+			if err != nil {
+				return nil, fmt.Errorf("write the resolution for %q: %w", r.Path, err)
+			}
+			blob = written
+		}
 		if blob == "" && r.Stage != "" {
 			s, err := g.ConflictBlob(ctx, repoPath, conflictedTree, r.Path, r.Stage)
 			if err != nil {

@@ -76,6 +76,12 @@ await clickButton('Create project')
 await page.waitForFunction(() => location.pathname.startsWith('/p/'), { timeout: 10000 }).catch(() => {})
 
 const projectPath = page.url().replace(`${baseUrl}`, '')
+// The tree is fetched after the project itself, so the checks below wait for it
+// rather than reading a page that has only finished half loading.
+await page
+  .waitForFunction(() => document.body.innerText.includes('README.md'), { timeout: 10000 })
+  .catch(() => {})
+
 check('the project opened', projectPath.startsWith('/p/'), projectPath)
 check('it lives in the group namespace', projectPath.includes('/team-'), projectPath)
 check(

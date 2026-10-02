@@ -150,6 +150,12 @@ async function refsChanged() {
 onMounted(loadProject)
 watch(projectPath, loadProject)
 
+/** The merge request number in the address, when the address carries one. */
+const mergeRequestNumber = computed(() => {
+  const candidate = view.value.rest[0] ?? ''
+  return /^\d+$/.test(candidate) ? candidate : ''
+})
+
 const projectId = computed(() => project.value?.id ?? '')
 
 /** Access levels, mirroring the values the API uses. */
@@ -316,9 +322,12 @@ async function copyCloneUrl() {
           :default-branch="project.default_branch"
           @refs-changed="refsChanged"
         />
+        <!-- Only a number after the name makes it one request rather than the
+             list; anything else is a mistyped address, and showing the list beats
+             an error about a merge request number. -->
         <MergeRequestView
-          v-else-if="view.name === 'merge_requests' && view.rest[0]"
-          :key="view.rest[0]"
+          v-else-if="view.name === 'merge_requests' && mergeRequestNumber"
+          :key="mergeRequestNumber"
         />
         <MergeRequestList
           v-else-if="view.name === 'merge_requests'"

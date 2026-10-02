@@ -93,30 +93,43 @@ async function load() {
 onMounted(load)
 watch(() => [projectPath.value, iid.value], load)
 
-/** What the button should say, and whether it should exist at all. */
+/**
+ * What the merge button says and whether it can be pressed.
+ *
+ * A button that is simply absent is worse than one that is disabled with a
+ * reason: "there is nothing here to merge" and "this is not mergeable" look the
+ * same from the outside, and both look like a broken page.
+ */
 const mergeState = computed(() => {
   const request = mr.value
-  if (!request) return { label: '', enabled: false, note: '' }
+  if (!request) return { label: 'Merge', enabled: false, reason: '' }
+
   if (request.state === 'merged') {
-    return { label: 'Merged', enabled: false, note: '' }
+    return { label: 'Merged', enabled: false, reason: '' }
   }
   if (request.state === 'closed') {
-    return { label: 'Reopen', enabled: true, note: '' }
+    return { label: 'Reopen', enabled: true, reason: '' }
   }
   if (request.has_conflicts) {
+    // The button stays disabled because the conflict has to be answered first;
+    // the resolver below is what makes it answerable without a local clone.
     return {
-      label: 'Resolve conflicts',
+      label: 'Merge',
       enabled: false,
-      note: 'The branches cannot be combined automatically. Resolve the conflict in a local clone and push.',
+      reason: 'The branches conflict. Choose what each file should contain below, then merge.',
     }
   }
   if (request.merge_status === 'up_to_date') {
-    return { label: 'Nothing to merge', enabled: false, note: 'The target branch already contains this work.' }
+    return {
+      label: 'Nothing to merge',
+      enabled: false,
+      reason: 'The target branch already contains everything from the source branch.',
+    }
   }
   if (request.merge_status === 'can_fast_forward') {
-    return { label: 'Merge (fast-forward)', enabled: true, note: '' }
+    return { label: 'Merge (fast-forward)', enabled: true, reason: '' }
   }
-  return { label: 'Merge', enabled: true, note: '' }
+  return { label: 'Merge', enabled: true, reason: '' }
 })
 
 async function merge() {
@@ -146,6 +159,26 @@ async function changeState(state: 'opened' | 'closed') {
     working.value = ''
   }
 }
+
+/** The merge state in words, rather than the label on the button. */
+const statusText = computed(() => {
+  const request = mr.value
+  if (!request) return ''
+  switch (request.merge_status) {
+    case 'conflicts':
+      return 'Has conflicts'
+    case 'can_fast_forward':
+      return 'Ready to merge, no merge commit needed'
+    case 'can_merge':
+      return 'Ready to merge'
+    case 'up_to_date':
+      return 'Nothing to merge'
+    case 'branches_gone':
+      return 'The branches are gone'
+    default:
+      return request.state
+  }
+})
 
 const comment = ref('')
 const commenting = ref(false)
@@ -198,16 +231,16 @@ const patch = computed(() => {
 
         <div class="repo-clone">
           <button
-            v-if="mergeState.enabled"
             class="btn btn-primary"
             type="button"
-            :disabled="!!working"
-            @click="mr.state === 'closed' ? changeState('opened') : merge()"
+            :disabled="!!working || !mergeState.enabled"
+            :title="mergeState.reason"
+            @click="mr?.state === 'closed' ? changeState('opened') : merge()"
           >
             {{ working ? 'Working…' : mergeState.label }}
           </button>
           <button
-            v-else-if="mr.state === 'opened'"
+            v-if="mr.state === 'opened'"
             class="btn"
             type="button"
             :disabled="!!working"
@@ -219,7 +252,9 @@ const patch = computed(() => {
       </div>
 
       <div v-if="actionError" class="alert alert-error">{{ actionError }}</div>
-      <div v-if="mergeState.note" class="alert" style="margin-bottom: 16px">{{ mergeState.note }}</div>
+      <div v-if="mergeState.reason" class="alert" style="margin-bottom: 16px">
+        {{ mergeState.reason }}
+      </div>
 
       <div style="display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start">
         <div>
@@ -230,6 +265,14 @@ const patch = computed(() => {
               <p v-for="(line, index) in patch" :key="index" class="mr-line">{{ line.text }}</p>
             </div>
           </div>
+
+          <MergeConflictResolver
+            v-if="mr.has_conflicts && mr.state === 'opened' && project"
+            :project-id="project.id"
+            :project-path="projectPath"
+            :mr="mr"
+            @resolved="load"
+          />
 
           <div class="card" style="margin-bottom: 16px">
             <div class="card-header">
@@ -247,15 +290,9 @@ const patch = computed(() => {
                 already part of the target branch.
               </div>
               <div v-else-if="files.length === 0" class="muted">No changes to show.</div>
-              <div v-for="change in files" :key="change.path" class="diff-file">
-                <div class="toolbar">
-                  <span class="name mono">{{ change.path }}</span>
-                  <span class="badge">{{ change.status }}</span>
-                  <span class="add">+{{ change.additions }}</span>
-                  <span class="del">−{{ change.deletions }}</span>
-                </div>
-                <pre class="patch">{{ change.patch || 'No textual changes' }}</pre>
-              </div>
+              <!-- A merge request is read through its diff, so it opens
+                   expanded; the commit view is the one that collapses files. -->
+              <DiffFile v-for="change in files" :key="change.path" :change="change" />
             </div>
           </div>
 
@@ -298,7 +335,7 @@ const patch = computed(() => {
                 </NuxtLink>
               </dd>
               <dt>Status</dt>
-              <dd class="mono">{{ mergeState.label || mr.state }}</dd>
+              <dd>{{ statusText }}</dd>
               <dt v-if="mr.diff_stats">Changes</dt>
               <dd v-if="mr.diff_stats">
                 {{ mr.diff_stats.files_changed }} files,

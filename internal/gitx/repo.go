@@ -131,6 +131,22 @@ func (g *Git) ListTree(ctx context.Context, repoPath, rev, path string, recursiv
 
 // CatFile returns the raw bytes of path at rev, plus its blob size. The bool
 // reports whether the content looks binary.
+// CatFileBlob returns the content of a blob by its object id.
+//
+// A merge conflict hands out blob ids rather than paths, and the text of each
+// side has to be readable to be shown to a person deciding what to keep.
+func (g *Git) CatFileBlob(ctx context.Context, repoPath, blobSHA string) (content []byte, size int64, binary bool, err error) {
+	if blobSHA == "" {
+		return nil, 0, false, fmt.Errorf("no blob given")
+	}
+
+	out, err := g.run(ctx, repoPath, nil, "cat-file", "blob", blobSHA)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("read blob %s: %w", blobSHA, err)
+	}
+	return out, int64(len(out)), looksBinary(out), nil
+}
+
 func (g *Git) CatFile(ctx context.Context, repoPath, rev, path string) (content []byte, size int64, binary bool, err error) {
 	oid, err := g.RevParseBlob(ctx, repoPath, rev, path)
 	if err != nil {
@@ -246,8 +262,12 @@ func (g *Git) Branches(ctx context.Context, repoPath string) ([]Ref, error) {
 	// characters are passed through, so a pipe separator is used instead. Ref
 	// names and object IDs never contain one.
 	const format = "%(refname:short)|%(objectname)|%(committerdate:unix)"
-	out, err := g.run(ctx, repoPath, nil, "for-each-ref", "--sort=-committerdate",
-		"--format="+format, "refs/heads/")
+	// The second sort is what makes the order predictable. Half the branches in a
+	// repository usually share one commit — everything branched off main — and then
+	// the first sort alone leaves the tie to git, which is not an order anyone
+	// would describe as sorted.
+	out, err := g.run(ctx, repoPath, nil, "for-each-ref",
+		"--sort=-committerdate", "--sort=refname", "--format="+format, "refs/heads/")
 	if err != nil {
 		return nil, err
 	}

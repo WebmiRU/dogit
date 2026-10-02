@@ -58,16 +58,31 @@ try {
   await page.setViewport({ width: 1400, height: 900 })
 
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text())
+    if (message.type() !== 'error') return
+
+    const text = message.text()
+    // The browser logs a line for every non-2xx response. The session check that
+    // runs before anyone signs in answers 401 on purpose, so its line is noise
+    // rather than a fault; anything else is reported.
+    if (/Failed to load resource.*401/.test(text) && expectedBeforeLogin('/api/v1/user')) {
+      return
+    }
+    consoleErrors.push(text)
   })
   page.on('pageerror', (error) => consoleErrors.push(String(error)))
 
   // Track failing requests with their URL: a bare "404" in the console says
   // nothing about which asset is missing.
+  //
+  // The one that is not a failure is the session check the app makes before
+  // anyone signs in: asking who you are and being told "nobody" is how it knows
+  // to show the login page rather than the dashboard.
+  const expectedBeforeLogin = (url) => url.includes('/api/v1/user')
+
   page.on('response', (response) => {
-    if (response.status() >= 400) {
-      failedRequests.push(`${response.status()} ${response.url()}`)
-    }
+    if (response.status() < 400) return
+    if (response.status() === 401 && expectedBeforeLogin(response.url())) return
+    failedRequests.push(`${response.status()} ${response.url()}`)
   })
 
   // --- sign in ---------------------------------------------------------
@@ -183,14 +198,18 @@ try {
 
   if (commitRows.length > 0) {
     await page.click('.commit-list li .msg a')
-    await page.waitForSelector('.file-change, .empty', { timeout: 15000 })
+    await page.waitForSelector('.diff-file, .empty', { timeout: 15000 })
     await new Promise((resolve) => setTimeout(resolve, 700))
 
-    const files = await page.$$('.file-change')
+    // The diff is rendered by the shared component every view uses.
+    const files = await page.$$('.diff-file')
     check('commit diff renders files', files.length > 0, `${files.length} files`)
 
-    const additions = await page.$$('.code-line.add')
-    check('diff shows added lines', additions.length > 0)
+    const additions = await page.$$('.diff-line.k-add')
+    check('diff shows added lines', additions.length > 0, `${additions.length} added lines`)
+
+    const removals = await page.$$('.diff-line.k-del')
+    check('diff shows removed lines', removals.length > 0, `${removals.length} removed lines`)
   }
 } catch (error) {
   failures.push(`FAIL unexpected error: ${error.message}`)

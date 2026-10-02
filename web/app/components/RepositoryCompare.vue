@@ -143,20 +143,21 @@ async function compare() {
         These refs point at the same content.
       </div>
       <div v-else class="card-body">
-        <div v-for="change in files" :key="change.path" class="diff-file">
-          <div class="toolbar">
+        <DiffFile
+          v-for="change in files"
+          :key="change.path"
+          :change="change"
+          collapsible
+        >
+          <template #title>
             <NuxtLink
-              class="name mono"
+              class="mono"
               :to="repoViewUrl(projectPath, 'blob', to, change.path)"
             >
               {{ change.path }}
             </NuxtLink>
-            <span class="badge">{{ change.status }}</span>
-            <span class="add">+{{ change.additions }}</span>
-            <span class="del">−{{ change.deletions }}</span>
-          </div>
-          <pre class="patch">{{ change.patch || 'No textual changes' }}</pre>
-        </div>
+          </template>
+        </DiffFile>
       </div>
     </div>
   </div>

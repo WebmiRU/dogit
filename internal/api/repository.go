@@ -299,7 +299,7 @@ func (s *Server) handleBranches(w http.ResponseWriter, r *http.Request) {
 		branches = []gitx.Ref{}
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"branches":       branches,
+		"branches":       defaultBranchFirst(branches, rc.Project.DefaultBranch),
 		"default_branch": rc.Project.DefaultBranch,
 	})
 }
@@ -576,6 +576,28 @@ func splitPaths(raw string) []string {
 	return out
 }
 
+// defaultBranchFirst pins the project's default branch to the top of the list.
+//
+// Git has no opinion about which branch a project considers default, and the
+// order it returns is by date: the branch people work on most often ends up in
+// the middle of a dropdown, which is the opposite of what they expect when they
+// open it.
+func defaultBranchFirst(branches []gitx.Ref, defaultBranch string) []gitx.Ref {
+	out := make([]gitx.Ref, 0, len(branches))
+	for _, branch := range branches {
+		if branch.Name == defaultBranch {
+			out = append(out, branch)
+			break
+		}
+	}
+	for _, branch := range branches {
+		if branch.Name != defaultBranch {
+			out = append(out, branch)
+		}
+	}
+	return out
+}
+
 func (s *Server) writeRefs(w http.ResponseWriter, r *http.Request, rc *repoContext) {
 	branches, err := s.git.Branches(r.Context(), rc.RepoDir)
 	if err != nil {
@@ -593,8 +615,9 @@ func (s *Server) writeRefs(w http.ResponseWriter, r *http.Request, rc *repoConte
 	if tags == nil {
 		tags = []gitx.Ref{}
 	}
+
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"branches":       branches,
+		"branches":       defaultBranchFirst(branches, rc.Project.DefaultBranch),
 		"tags":           tags,
 		"default_branch": rc.Project.DefaultBranch,
 	})

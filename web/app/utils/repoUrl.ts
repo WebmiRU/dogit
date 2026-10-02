@@ -15,10 +15,21 @@ export function refFitsInPath(ref: string): boolean {
 }
 
 /**
+ * Views that address a file or a directory, where the ref is the first path
+ * segment and everything after it is the path inside the repository.
+ *
+ * Every other view lists something, and its only path segment is something else
+ * entirely: "/-/merge_requests/7" is request seven, not the ref "7". Those views
+ * carry the ref in the query so the two can never be confused.
+ */
+const pathViews = new Set(['tree', 'blob', 'edit'])
+
+/**
  * The address of a repository view.
  *
- * The result carries the ref in the path when it can, and in the query when it
- * cannot, so the same link works for "main" and for "feature/deep/name".
+ * The result carries the ref in the path when the view allows it and the ref has
+ * no slash, and in the query otherwise, so the same link works for "main" and for
+ * "feature/deep/name".
  */
 export function repoViewUrl(
   projectPath: string,
@@ -26,11 +37,13 @@ export function repoViewUrl(
   ref: string,
   path = '',
 ): string {
-  const encodedPath = path.split('/').filter(Boolean).map(encodeURIComponent).join('/')
   const base = `/p/${projectPath}/-/${view}`
+  const encodedPath = path.split('/').filter(Boolean).map(encodeURIComponent).join('/')
 
-  if (refFitsInPath(ref)) {
-    return encodedPath ? `${base}/${encodeURIComponent(ref)}/${encodedPath}` : `${base}/${encodeURIComponent(ref)}`
+  if (pathViews.has(view) && refFitsInPath(ref)) {
+    return encodedPath
+      ? `${base}/${encodeURIComponent(ref)}/${encodedPath}`
+      : `${base}/${encodeURIComponent(ref)}`
   }
 
   const query = new URLSearchParams({ ref })

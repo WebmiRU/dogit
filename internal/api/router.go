@@ -210,6 +210,7 @@ func (s *Server) projectRoutes() chi.Router {
 	projects.Put(base+"/merge_requests/{iid}", s.handleUpdateMergeRequest)
 	projects.Put(base+"/merge_requests/{iid}/state", s.handleCloseMergeRequest)
 	projects.Post(base+"/merge_requests/{iid}/merge", s.handleMergeMergeRequest)
+	projects.Get(base+"/merge_requests/{iid}/conflicts", s.handleMergeRequestConflicts)
 	projects.Post(base+"/merge_requests/{iid}/notes", s.handleAddMergeRequestNote)
 
 	// Anything unmatched is a project whose path contains a slash.

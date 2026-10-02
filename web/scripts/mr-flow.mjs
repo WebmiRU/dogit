@@ -206,10 +206,16 @@ await page
 const conflictText = await text()
 check('the conflict is reported', conflictText.includes('conflict'), conflictText.slice(0, 220).replace(/\n/g, ' '))
 check(
-  'the merge button is not offered for a conflict',
-  !(await clickButton('Merge')),
+  'the merge button is present but disabled for a conflict',
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find((b) =>
+      b.textContent.trim().startsWith('Merge'),
+    )
+    return !!button && button.disabled
+  }),
   '',
 )
+check('the conflict can be resolved from the page', (await text()).includes('Resolve conflicts'))
 await page.screenshot({ path: '/tmp/opencode/mr-conflict.png', fullPage: true })
 
 console.log(steps.join('\n'))

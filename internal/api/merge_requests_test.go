@@ -412,6 +412,98 @@ func TestMergedRequestSurvivesItsBranchBeingRemoved(t *testing.T) {
 	}
 }
 
+// A conflict can be resolved in the interface: the three versions are offered,
+// and merging with a resolution writes the chosen side.
+func TestMergeRequestConflictIsResolvable(t *testing.T) {
+	ctx := context.Background()
+	f := newMergeFixture(t)
+
+	mainHead := mustRev(t, f, "main")
+	ours := f.write(t, "README.md", "the target side\n", mainHead)
+	if err := f.git.UpdateRef(ctx, f.repo, "refs/heads/main", ours, mainHead); err != nil {
+		t.Fatal(err)
+	}
+	featureHead := mustRev(t, f, "feature")
+	theirs := f.write(t, "README.md", "the source side\n", featureHead)
+	if err := f.git.UpdateRef(ctx, f.repo, "refs/heads/feature", theirs, featureHead); err != nil {
+		t.Fatal(err)
+	}
+
+	f.do(t, http.MethodPost, f.mrURL(""), `{"source_branch":"feature","target_branch":"main"}`)
+
+	// What the resolver needs: both sides, by content, so a person can choose.
+	status, body := f.do(t, http.MethodGet, f.mrURL("/1/conflicts"), "")
+	if status != http.StatusOK {
+		t.Fatalf("conflicts: status %d, body %v", status, body)
+	}
+	items, _ := body["conflicts"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("got %d conflicts, want 1: %v", len(items), body)
+	}
+	conflict, _ := items[0].(map[string]any)
+	if conflict["path"] != "README.md" {
+		t.Errorf("path = %v", conflict["path"])
+	}
+	if conflict["ours_text"] != "the target side\n" {
+		t.Errorf("ours = %q", conflict["ours_text"])
+	}
+	if conflict["theirs_text"] != "the source side\n" {
+		t.Errorf("theirs = %q", conflict["theirs_text"])
+	}
+
+	// Taking the source side resolves it.
+	status, body = f.do(t, http.MethodPost, f.mrURL("/1/merge"),
+		`{"method":"merge","resolutions":[{"path":"README.md","stage":"theirs"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("merge with a resolution: status %d, body %v", status, body)
+	}
+
+	content, _, _, err := f.git.CatFile(ctx, f.repo, "main", "README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "the source side\n" {
+		t.Errorf("main has %q, want the resolved side", content)
+	}
+
+	mr, _ := body["merge_request"].(map[string]any)
+	if mr["state"] != "merged" {
+		t.Errorf("state = %v, want merged", mr["state"])
+	}
+}
+
+// Resolutions offered to a merge that has no conflict are refused rather than
+// ignored: accepting them silently would let someone believe they resolved
+// something.
+func TestMergeRequestRefusesResolutionsWithoutAConflict(t *testing.T) {
+	f := newMergeFixture(t)
+
+	f.do(t, http.MethodPost, f.mrURL(""), `{"source_branch":"feature","target_branch":"main"}`)
+
+	status, body := f.do(t, http.MethodPost, f.mrURL("/1/merge"),
+		`{"resolutions":[{"path":"README.md","stage":"theirs"}]}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400; body %v", status, body)
+	}
+}
+
+// A merge that does not conflict reports none, so the interface has nothing to
+// resolve.
+func TestMergeRequestConflictsEndpointIsEmptyWhenClean(t *testing.T) {
+	f := newMergeFixture(t)
+
+	f.do(t, http.MethodPost, f.mrURL(""), `{"source_branch":"feature","target_branch":"main"}`)
+
+	status, body := f.do(t, http.MethodGet, f.mrURL("/1/conflicts"), "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %v", status, body)
+	}
+	items, _ := body["conflicts"].([]any)
+	if len(items) != 0 {
+		t.Errorf("got %d conflicts for a clean merge", len(items))
+	}
+}
+
 func TestMergeRequestRefusesABranchWithNothingNew(t *testing.T) {
 	ctx := context.Background()
 	f := newMergeFixture(t)
@@ -638,6 +730,7 @@ func TestMergeRequestEditIsRefusedAfterMerging(t *testing.T) {
 	}
 }
 
+// mustRev resolves a ref in the fixture's repository.
 func mustRev(t *testing.T, f *mergeFixture, ref string) string {
 	t.Helper()
 
