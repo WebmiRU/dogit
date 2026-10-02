@@ -150,6 +150,19 @@ async function refsChanged() {
 onMounted(loadProject)
 watch(projectPath, loadProject)
 
+/**
+ * A repository with nothing in it.
+ *
+ * Every tab below this point answers a question about content, and an empty
+ * repository has none of it: showing a file tree or a commit list for it produces
+ * errors that read like faults rather than the state the project is actually in.
+ */
+const repositoryIsEmpty = computed(() => {
+  const list = refs.value
+  if (!list) return false
+  return list.branches.length === 0 && list.tags.length === 0
+})
+
 /** The merge request number in the address, when the address carries one. */
 const mergeRequestNumber = computed(() => {
   const candidate = view.value.rest[0] ?? ''
@@ -200,7 +213,7 @@ async function switchRef(next: string) {
 }
 
 const tabs = computed(() => {
-  if (!project.value) return []
+  if (!project.value || repositoryIsEmpty.value) return []
   const base = `/p/${project.value.path}`
 
   // Every tab carries the ref, so a chosen branch does not reset when moving
@@ -220,6 +233,14 @@ const tabs = computed(() => {
 
 /** Clone URL shown in the header. */
 const cloneUrl = computed(() => project.value?.ssh_url ?? '')
+
+/** The first thing to run, ready to copy. */
+const cloneCommand = computed(() => `git clone ${cloneUrl.value}
+cd ${project.value?.path.split('/').pop() ?? ''}
+touch README.md
+git add README.md
+git commit -m "Initial commit"
+git push -u origin HEAD`)
 
 const copyState = ref('')
 async function copyCloneUrl() {
@@ -258,7 +279,7 @@ async function copyCloneUrl() {
         </div>
       </div>
 
-      <nav class="repo-tabs">
+      <nav v-if="!repositoryIsEmpty" class="repo-tabs">
         <NuxtLink
           v-for="tab in tabs"
           :key="tab.match"
@@ -269,7 +290,22 @@ async function copyCloneUrl() {
         </NuxtLink>
       </nav>
 
-      <div style="margin-top: 16px">
+      <div v-if="repositoryIsEmpty" class="card empty-repo">
+        <h2>This repository is empty</h2>
+        <p class="muted">
+          Nothing has been pushed to it yet, so there is no code to show. The
+          quickest way to start is to push a commit from a machine you have an
+          SSH key on.
+        </p>
+        <pre class="clone-command">{{ cloneCommand }}</pre>
+        <p class="muted">
+          Once there is a first commit, the code, commit and branch pages all
+          start to mean something.
+        </p>
+        <NuxtLink class="btn" to="/projects">Back to projects</NuxtLink>
+      </div>
+
+      <div v-else style="margin-top: 16px">
         <RepositoryTree
           v-if="view.name === 'tree'"
           :project-id="projectId"
@@ -363,6 +399,39 @@ async function copyCloneUrl() {
         />
         <div v-else class="card empty">Unknown view “{{ view.name }}”.</div>
       </div>
-    </template>
-  </div>
+    
 </template>
+  </div>
+
+</template>
+
+<style>
+.empty-repo {
+  margin-top: 20px;
+  padding: 40px;
+  text-align: center;
+  max-width: 720px;
+}
+
+.empty-repo h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.empty-repo p {
+  margin: 0 auto 16px;
+  max-width: 56ch;
+}
+
+.clone-command {
+  display: inline-block;
+  text-align: left;
+  padding: 12px 16px;
+  border-radius: 6px;
+  background: var(--bg-code, #0d1117);
+  font: 12px/1.7 var(--mono);
+  white-space: pre;
+  overflow-x: auto;
+  margin-bottom: 20px;
+}
+</style>

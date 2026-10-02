@@ -55,7 +55,7 @@ const browser = await puppeteer.launch({
 
 try {
   const page = await browser.newPage()
-  await page.setViewport({ width: 1400, height: 900 })
+  await page.setViewport({ width: 1280, height: 965 })
 
   page.on('console', (message) => {
     if (message.type() !== 'error') return

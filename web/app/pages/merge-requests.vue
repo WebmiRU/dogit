@@ -55,6 +55,9 @@ watch(state, load)
         <p class="page-subtitle">Requests to bring one branch into another.</p>
       </div>
       <nav class="repo-tabs">
+        <!-- The page marks the current filter itself. These links differ only by
+             query, which the router does not take into account when deciding what
+             is active, so it would call all of them current at once. -->
         <NuxtLink
           v-for="option in states"
           :key="option.value"
@@ -133,17 +136,6 @@ watch(state, load)
   color: #f85149;
 }
 
-.badge.state-opened {
-  border-color: #3fb950;
-  color: #3fb950;
-}
 
-.badge.state-merged {
-  border-color: #a371f7;
-  color: #a371f7;
-}
 
-.badge.state-closed {
-  color: var(--muted);
-}
 </style>

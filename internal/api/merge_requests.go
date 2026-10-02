@@ -252,7 +252,14 @@ func (s *Server) handleGetMergeRequest(w http.ResponseWriter, r *http.Request) {
 	// remove the source branch.
 	diffURL := ""
 	branchesExist := true
-	if mr.IsOpen() {
+
+	// Whether the branches are still there is asked for every request, not only
+	// the open ones: merging can remove the source branch, and a merged request
+	// whose branch has gone has no diff left to show.
+	branchesExist = s.git.Exists(r.Context(), rc.RepoDir, mr.SourceBranch) &&
+		s.git.Exists(r.Context(), rc.RepoDir, mr.TargetBranch)
+
+	if mr.IsOpen() && branchesExist {
 		mergeable, conflicts, err := s.mergeability(r, rc, mr.SourceBranch, mr.TargetBranch)
 		if err != nil {
 			s.writeError(w, r, err)
@@ -271,20 +278,15 @@ func (s *Server) handleGetMergeRequest(w http.ResponseWriter, r *http.Request) {
 				Deletions:    stats.Deletions,
 			}
 		}
+	} else if branchesExist {
 		diffURL = fmt.Sprintf("/projects/%s/repository/compare?from=%s&to=%s",
 			rc.Project.ID, url.QueryEscape(mr.TargetBranch), url.QueryEscape(mr.SourceBranch))
-	} else {
-		branchesExist = s.git.Exists(r.Context(), rc.RepoDir, mr.SourceBranch) &&
-			s.git.Exists(r.Context(), rc.RepoDir, mr.TargetBranch)
-		if branchesExist {
-			diffURL = fmt.Sprintf("/projects/%s/repository/compare?from=%s&to=%s",
-				rc.Project.ID, url.QueryEscape(mr.TargetBranch), url.QueryEscape(mr.SourceBranch))
-		}
 	}
 
 	if !branchesExist {
 		// The branches are gone, so there is no diff to show. Saying so is better
-		// than an error page: the request itself is still perfectly readable.
+		// than an error page: the request itself is still perfectly readable, and
+		// there is nothing left to merge.
 		view.MergeStatus = "branches_gone"
 	}
 

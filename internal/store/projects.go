@@ -153,6 +153,37 @@ func (r *ProjectRepo) Update(ctx context.Context, p *models.Project) error {
 	return nil
 }
 
+// Rename changes a project's path, which is also its address and the directory
+// its repository lives in. The caller moves the directory; this records where it
+// went.
+func (r *ProjectRepo) Rename(ctx context.Context, id uuid.UUID, path string) error {
+	tag, err := r.s.pool.Exec(ctx,
+		`UPDATE projects SET path = $2, updated_at = now() WHERE id = $1`, id, path)
+	if err != nil {
+		return fmt.Errorf("rename the project: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetGroup puts a project in a group, or takes it out of one when groupID is nil.
+//
+// The path is not changed here: moving a project changes both, and doing it in
+// two places would let one succeed while the other failed.
+func (r *ProjectRepo) SetGroup(ctx context.Context, id uuid.UUID, groupID *uuid.UUID) error {
+	tag, err := r.s.pool.Exec(ctx,
+		`UPDATE projects SET group_id = $2, updated_at = now() WHERE id = $1`, id, groupID)
+	if err != nil {
+		return fmt.Errorf("set the project group: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *ProjectRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := r.s.pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, id)
 	return err

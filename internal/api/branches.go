@@ -88,7 +88,25 @@ func (s *Server) handleDeleteBranch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	s.log.Info("branch deleted", "project", rc.Project.Path, "branch", name)
+
+	// Merge requests waiting on this branch have lost what they were about. They
+	// are closed rather than left open: an open request whose source is gone
+	// offers a merge button that can only fail, which reads as a fault in the
+	// page rather than the branch having been deleted.
+	closed, err := s.store.MergeRequests().CloseForBranch(r.Context(), rc.Project.ID, name, userFrom(r.Context()).ID)
+	if err != nil {
+		// The branch is already deleted; failing the whole request now would claim
+		// the deletion did not happen.
+		s.log.Warn("close the merge requests of a deleted branch",
+			"project", rc.Project.Path, "branch", name, "error", err)
+	}
+	for _, mr := range closed {
+		s.log.Info("merge request closed with its branch",
+			"project", rc.Project.Path, "iid", mr.IID, "branch", name)
+	}
+
+	s.log.Info("branch deleted", "project", rc.Project.Path, "branch", name,
+		"merge_requests_closed", len(closed))
 	s.writeJSON(w, r, http.StatusNoContent, nil)
 }
 

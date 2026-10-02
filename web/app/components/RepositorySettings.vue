@@ -6,6 +6,7 @@
  * each field is sent on its own so an unchanged field never overwrites a change
  * someone else made while the form was open.
  */
+import type { GroupSummary } from '~/types/dashboard'
 import type { ProjectSummary } from '~/types/repository'
 
 const props = defineProps<{
@@ -13,7 +14,10 @@ const props = defineProps<{
   canManage: boolean
 }>()
 
-const emit = defineEmits<{ (event: 'saved', project: ProjectSummary): void }>()
+const emit = defineEmits<{
+  (event: 'saved', project: ProjectSummary): void
+  (event: 'moved', path: string): void
+}>()
 
 const form = reactive({
   name: props.project.name ?? '',
@@ -35,6 +39,81 @@ watch(
 const saving = ref(false)
 const saveError = ref('')
 const saved = ref(false)
+
+/**
+ * Moving a project between groups.
+ *
+ * It is a separate form from the fields above because it is a different kind of
+ * change: a rename fixes a typo, while a move changes the address the project is
+ * reached at and where its repository lives.
+ */
+const groups = ref<GroupSummary[]>([])
+const targetGroup = ref('')
+const newName = ref('')
+
+onMounted(async () => {
+  const response = await api.get<{ groups: GroupSummary[] }>('/groups')
+  // Only a group this person owns can receive the project, so the list is not
+  // filtered here: the server refuses the rest, and hiding them would hide why.
+  groups.value = response.groups.filter((group) => group.access_level >= 50)
+})
+
+const pathParts = computed(() => props.project.path.split('/'))
+const currentGroup = computed(() => (pathParts.value.length > 1 ? pathParts.value[0] : ''))
+
+watch(
+  () => props.project.path,
+  (path) => {
+    const parts = path.split('/')
+    targetGroup.value = parts.length > 1 ? (parts[0] ?? '') : ''
+    newName.value = parts[parts.length - 1] ?? ''
+  },
+  { immediate: true },
+)
+
+const moving = ref(false)
+const moveError = ref('')
+
+// The outcome goes through the notification pool: the page follows the project to
+// its new address, and a message kept on this page would be gone before it had
+// been read.
+const { add: notify } = useNotifyPool()
+const moveTarget = computed(() => {
+  const name = newName.value.trim()
+  return targetGroup.value ? `${targetGroup.value}/${name}` : name
+})
+
+const canMove = computed(
+  () =>
+    moveTarget.value.length > 0 &&
+    moveTarget.value !== props.project.path &&
+    !moving.value,
+)
+
+async function move() {
+  moveError.value = ''
+  moving.value = true
+  try {
+    await api.post(`/projects/${props.project.id}/move`, { group_path: targetGroup.value })
+
+    // A move changes where the project lives, so the page follows it. Staying on
+    // the old address would leave a form that claims to move something which has
+    // already gone somewhere else.
+    const from = props.project.path
+    const to = moveTarget.value
+
+    // The lines are the message; the link is where the project now lives.
+    notify(`Project moved to ${to}\n${from} no longer resolves — clone URLs and links to it have to be updated.`, {
+      links: [{ label: `Open ${to}`, to: `/p/${to}` }],
+      timer: 12,
+    })
+    await navigateTo(`/p/${to}/-/settings`)
+  } catch (caught) {
+    moveError.value = caught instanceof ApiError ? caught.message : 'the request failed'
+  } finally {
+    moving.value = false
+  }
+}
 
 async function save() {
   saveError.value = ''
@@ -103,6 +182,73 @@ async function save() {
           {{ saving ? 'Saving…' : 'Save changes' }}
         </button>
       </form>
+
+      <hr class="divider" />
+
+      <h3 class="section-title">Move to a group</h3>
+      <p class="muted section-note">
+        A project inside a group is reached at
+        <span class="mono">{{ currentGroup }}/{{ project.path.split('/').pop() }}</span
+        >, and its members gain access. Moving is an owner's decision on both the
+        project and the group it goes into.
+      </p>
+
+      <div class="field">
+        <label for="move-group">Namespace</label>
+        <select id="move-group" v-model="targetGroup">
+          <option value="">— no group —</option>
+          <option v-for="group in groups" :key="group.id" :value="group.full_path">
+            {{ group.full_path }}
+          </option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="move-name">Name</label>
+        <input id="move-name" v-model="newName" />
+      </div>
+
+      <div v-if="moveError" class="alert alert-error">{{ moveError }}</div>
+
+      <button
+        class="btn btn-primary"
+        type="button"
+        :disabled="!canMove || !canManage"
+        @click="move"
+      >
+        {{ moving ? 'Moving…' : 'Move project' }}
+      </button>
+
+      <p class="muted move-note">
+        This changes the project's address and where its repository is stored.
+        Existing clone URLs stop working.
+      </p>
     </div>
   </div>
 </template>
+
+<style scoped>
+
+.move-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  max-width: 62ch;
+}
+
+.divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 24px 0 16px;
+}
+
+.section-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.section-note {
+  margin: 0 0 16px;
+  font-size: 13px;
+  max-width: 62ch;
+}
+</style>

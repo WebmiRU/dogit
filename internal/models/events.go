@@ -17,6 +17,7 @@ const (
 	EventJobCreated          EventKind = "job.created"
 	EventJobUpdated          EventKind = "job.updated"
 	EventMergeRequestChanged EventKind = "merge_request.changed"
+	EventProjectUpdated      EventKind = "project.updated"
 )
 
 // Event is a row in the durable event log. The post-receive hook writes events

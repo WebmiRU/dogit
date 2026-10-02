@@ -24,7 +24,7 @@ const browser = await puppeteer.launch({
   headless: 'new',
 })
 const page = await browser.newPage()
-await page.setViewport({ width: 1400, height: 1100 })
+await page.setViewport({ width: 1280, height: 965 })
 page.on('dialog', (dialog) => dialog.accept())
 
 const text = () => page.evaluate(() => document.body.innerText)

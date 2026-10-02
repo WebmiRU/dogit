@@ -142,17 +142,6 @@ async function created(mr: MergeRequest) {
   color: #f85149;
 }
 
-.badge.state-opened {
-  border-color: #3fb950;
-  color: #3fb950;
-}
 
-.badge.state-merged {
-  border-color: #a371f7;
-  color: #a371f7;
-}
 
-.badge.state-closed {
-  color: var(--muted);
-}
 </style>

@@ -151,3 +151,86 @@ func lastSegment(path string) string {
 	}
 	return path
 }
+
+// MoveResult describes what a move changed.
+type MoveResult struct {
+	FromPath string
+	ToPath   string
+	FromDir  string
+	ToDir    string
+}
+
+// Move puts a project at a new path, which is what moving it into or out of a
+// group amounts to.
+//
+// A project's path is not only its name in the interface: the repository
+// directory is derived from it, and the hook that reports pushes reads the path
+// out of the repository's own configuration. All three move together, and in
+// that order, with the rename undone if a later step fails — a project whose
+// row says one path and whose directory says another is unreachable and hard to
+// tell apart from a permission problem.
+func (s *Service) Move(ctx context.Context, project *models.Project, newPath string, groupID *uuid.UUID) (*MoveResult, error) {
+	fromPath := project.Path
+	newPath = strings.ToLower(strings.Trim(newPath, "/"))
+	if !ValidPath(newPath) {
+		return nil, fmt.Errorf("invalid project path %q", newPath)
+	}
+	if newPath == project.Path {
+		// Same address, different owner: nothing on disk moves.
+		if err := s.store.Projects().SetGroup(ctx, project.ID, groupID); err != nil {
+			return nil, err
+		}
+		project.Path, project.GroupID = newPath, groupID
+		return &MoveResult{FromPath: fromPath, ToPath: newPath}, nil
+	}
+
+	fromDir, err := gitserver.ResolveRepo(s.repoRoot, project.Path)
+	if err != nil {
+		return nil, err
+	}
+	toDir, err := gitserver.ResolveRepo(s.repoRoot, newPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := os.Stat(toDir); err == nil {
+		return nil, fmt.Errorf("%s already exists", newPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	// The parent has to exist before the directory can be renamed into it.
+	if parent := filepath.Dir(toDir); parent != filepath.Dir(fromDir) {
+		if err := os.MkdirAll(parent, 0o750); err != nil {
+			return nil, fmt.Errorf("create the group directory: %w", err)
+		}
+	}
+
+	if err := os.Rename(fromDir, toDir); err != nil {
+		return nil, fmt.Errorf("move the repository: %w", err)
+	}
+
+	rollback := func(cause error) (*MoveResult, error) {
+		if err := os.Rename(toDir, fromDir); err != nil {
+			// Both the rename and the undo failed, and the caller has to be told
+			// where the repository now is rather than left guessing.
+			return nil, fmt.Errorf("%w (the repository is now at %s and could not be moved back: %v)",
+				cause, toDir, err)
+		}
+		return nil, cause
+	}
+
+	if err := s.git.SetConfig(ctx, toDir, hooks.ConfigProjectPath, newPath); err != nil {
+		return rollback(fmt.Errorf("record the new path in the repository: %w", err))
+	}
+
+	if err := s.store.Projects().SetGroup(ctx, project.ID, groupID); err != nil {
+		return rollback(fmt.Errorf("record the new path: %w", err))
+	}
+	if err := s.store.Projects().Rename(ctx, project.ID, newPath); err != nil {
+		return rollback(fmt.Errorf("record the new name: %w", err))
+	}
+
+	project.Path, project.GroupID, project.RepoPath = newPath, groupID, toDir
+	return &MoveResult{FromPath: project.Path, ToPath: newPath, FromDir: fromDir, ToDir: toDir}, nil
+}

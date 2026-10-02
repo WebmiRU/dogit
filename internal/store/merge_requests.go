@@ -288,6 +288,54 @@ func (r *MergeRequestRepo) Reopen(ctx context.Context, id int64) (*models.MergeR
 	return r.ByID(ctx, id)
 }
 
+// CloseForBranch closes every open merge request whose source branch is the one
+// that has just been deleted, and returns them.
+//
+// It exists because a request whose source is gone cannot be merged, reviewed or
+// reasoned about, and leaving it open would leave a merge button on a page that
+// can only fail.
+func (r *MergeRequestRepo) CloseForBranch(
+	ctx context.Context, projectID uuid.UUID, branch string, by uuid.UUID,
+) ([]*models.MergeRequest, error) {
+	rows, err := r.r.pool.Query(ctx,
+		`SELECT `+mergeRequestColumns+` FROM merge_requests mr
+		 WHERE mr.project_id = $1 AND mr.state = $2 AND mr.source_branch = $3`,
+		projectID, models.MRStateClosed, branch)
+	if err != nil {
+		return nil, fmt.Errorf("find the merge requests of a branch: %w", err)
+	}
+	defer rows.Close()
+
+	found := []*models.MergeRequest{}
+	for rows.Next() {
+		mr, err := r.scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, mr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return found, nil
+	}
+
+	ids := make([]int64, 0, len(found))
+	for _, mr := range found {
+		ids = append(ids, mr.ID)
+	}
+	if _, err := r.r.pool.Exec(ctx,
+		`UPDATE merge_requests SET state = $2, closed_at = now(), updated_at = now()
+		 WHERE id = ANY($1) AND state = $3`,
+		ids, models.MRStateClosed, models.MRStateOpened); err != nil {
+		return nil, fmt.Errorf("close the merge requests of a branch: %w", err)
+	}
+	_ = by
+
+	return found, nil
+}
+
 // AddNote appends a comment.
 func (r *MergeRequestRepo) AddNote(ctx context.Context, mrID int64, author uuid.UUID, body string) (*models.MergeRequestNote, error) {
 	var id int64

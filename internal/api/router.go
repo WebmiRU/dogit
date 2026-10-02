@@ -204,6 +204,8 @@ func (s *Server) projectRoutes() chi.Router {
 
 	// Merge requests. A global listing lives outside this router, because it spans
 	// every project the caller may read.
+	projects.Post(base+"/move", s.handleMoveProject)
+
 	projects.Get(base+"/merge_requests", s.handleListProjectMergeRequests)
 	projects.Post(base+"/merge_requests", s.handleCreateMergeRequest)
 	projects.Get(base+"/merge_requests/{iid}", s.handleGetMergeRequest)

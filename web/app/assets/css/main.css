@@ -53,10 +53,19 @@ pre,
 
 /* --- layout ---------------------------------------------------------- */
 
-.app-shell {
+/* The wrapper has to fill the window, or the shell's "fill the height" has
+   nothing to fill against and the sidebar stops wherever the content does. */
+#__nuxt {
   display: flex;
   flex-direction: column;
   min-height: 100%;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 100vh;
 }
 
 .topbar {
@@ -231,24 +240,65 @@ label {
   color: #bcd5ff;
 }
 
+/* Badges are solid, square-cornered chips rather than outlines: an outline next
+   to the solid buttons and panels elsewhere in the interface reads as belonging
+   to something else. Four pixels of radius is the same radius the cards use, so
+   a row of them lines up with the panel they sit in. */
 .badge {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 10px;
+  /* A flex box with centred items is what keeps the text off the baseline: with
+     inline-block and a line-height, the label sits low in the chip and a row of
+     them looks uneven. */
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 4px;
   font-size: 11px;
-  border: 1px solid var(--border-strong);
-  color: var(--text-muted);
+  font-weight: 500;
+  line-height: 1.4;
+  background: var(--badge-bg, #262b36);
+  color: var(--badge-fg, var(--text-muted));
   white-space: nowrap;
+  /* Every badge reads the same way: the words are stored as they come from the
+     server and capitalised here, so no one of them is left lowercase. */
+  text-transform: capitalize;
 }
 
 .badge-private {
-  border-color: rgba(210, 153, 34, 0.5);
-  color: var(--yellow);
+  background: #4a3320;
+  color: #f0c674;
 }
 
-.badge-green {
-  border-color: rgba(63, 185, 80, 0.5);
-  color: var(--green);
+.badge-internal {
+  background: #23384f;
+  color: #9ec7f0;
+}
+
+.badge-public {
+  background: #1f4530;
+  color: #8fdca6;
+}
+
+.badge-green,
+.badge.state-opened {
+  background: #1d4227;
+  color: #7ee29a;
+}
+
+.badge.state-merged {
+  background: #35285a;
+  color: #c3abff;
+}
+
+.badge.state-closed,
+.badge-neutral {
+  background: #262b36;
+  color: var(--text-muted);
+}
+
+.badge-red {
+  background: #4a2326;
+  color: #ff9aa5;
 }
 
 .muted {
@@ -344,12 +394,23 @@ label {
 /* The active tab is marked by the page, not by the router. A tab points at the
    list while the reader may be on a single merge request, and no address-matching
    rule can say that both are the same tab. */
-.repo-tabs a.router-link-active,
 .repo-tabs a.active,
 .repo-tabs a:hover {
   color: var(--text);
   border-bottom-color: var(--accent);
   text-decoration: none;
+}
+
+/* Tabs that differ only by query are all "active" as far as the router is
+   concerned, which lights up every filter at once; the page's own mark wins. */
+.repo-tabs a.router-link-active:not(.active) {
+  color: var(--text-muted);
+  border-bottom-color: transparent;
+}
+
+.repo-tabs a.router-link-active:not(.active):hover {
+  color: var(--text);
+  border-bottom-color: var(--accent);
 }
 
 .toolbar {
@@ -580,6 +641,158 @@ label {
   color: var(--text-muted);
 }
 
+/* --- notifications ---------------------------------------------------- */
+
+/*
+ * Taken from the shop's interface, where the same kind of notice has to report a
+ * bulk result: a solid panel with a coloured left edge for the kind of outcome,
+ * a bar along the bottom that shows the time left, and a close button drawn from
+ * two rules rather than a glyph.
+ */
+.notification {
+  position: relative;
+  overflow: hidden;
+  min-height: 52px;
+  padding: 15px 48px 15px 18px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--text-muted);
+  border-radius: 6px;
+  background-color: var(--bg-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.notification > span {
+  display: block;
+}
+
+.notification > span + span {
+  margin-top: 6px;
+}
+
+.notification__link {
+  display: block;
+  margin-top: 4px;
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1.4;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notification__link:hover {
+  text-decoration: underline;
+}
+
+.notification__more {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.notification--success {
+  border-left-color: var(--green);
+}
+
+.notification--success .progress {
+  background-color: var(--green);
+}
+
+.notification--error {
+  border-left-color: var(--red);
+}
+
+.notification--error .progress {
+  background-color: var(--red);
+}
+
+.notification--warning {
+  border-left-color: var(--yellow);
+}
+
+.notification--warning .progress {
+  background-color: var(--yellow);
+}
+
+.notification--info {
+  border-left-color: var(--accent);
+}
+
+.notification--info .progress {
+  background-color: var(--accent);
+}
+
+/* The close button is drawn rather than typed: a glyph would sit differently at
+   each size and would depend on the font being loaded. */
+.notification .delete {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.notification .delete::before,
+.notification .delete::after {
+  content: '';
+  position: absolute;
+  top: 13px;
+  left: 7px;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  background-color: currentColor;
+}
+
+.notification .delete::before {
+  transform: rotate(45deg);
+}
+
+.notification .delete::after {
+  transform: rotate(-45deg);
+}
+
+.notification .delete:hover {
+  background-color: var(--bg-inset);
+  color: var(--text);
+}
+
+/* Fills from left to right while the notice counts down; the reversed direction
+   is what makes it read as time remaining. */
+.notification .progress {
+  height: 3px;
+  width: 100%;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  transform-origin: left;
+  background-color: var(--text-muted);
+  opacity: 0.8;
+  animation: progress linear;
+  animation-direction: reverse;
+  animation-fill-mode: forwards;
+}
+
+@keyframes progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
 /* --- shell: sidebar + content ---------------------------------------- */
 
 .body {
@@ -648,6 +861,28 @@ label {
   padding-top: 16px;
   border-top: 1px solid var(--border);
   font-size: 12px;
+}
+
+/* The footer runs the width of the page rather than sitting under the sidebar:
+   it belongs to the whole interface, not to one column of it. */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.footer strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.footer .dot {
+  opacity: 0.4;
 }
 
 /* --- header menus ----------------------------------------------------- */

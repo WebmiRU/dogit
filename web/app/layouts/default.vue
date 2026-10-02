@@ -68,7 +68,12 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
 </script>
 
 <template>
-  <div class="app-shell">
+  <div>
+    <!-- Notifications are mounted outside the shell so a notice survives the
+         navigation that caused it. -->
+    <NotifyPool />
+
+    <div class="app-shell">
     <header class="topbar">
       <NuxtLink to="/" class="brand">
         <span class="brand-mark">◆</span>
@@ -150,6 +155,15 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
       <main class="page" :class="{ 'page-wide': onRepository }">
         <slot />
       </main>
-    </div>
+      </div>
+
+      <footer class="footer">
+        <strong>dogit</strong>
+        <span class="dot">·</span>
+        <span>© 2026</span>
+        <span class="dot">·</span>
+        <span>self-hosted, all rights reserved</span>
+      </footer>
+  </div>
   </div>
 </template>

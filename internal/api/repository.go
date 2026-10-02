@@ -37,10 +37,46 @@ func (s *Server) resolveRef(r *http.Request, rc *repoContext) (ref, sha string, 
 	}
 
 	sha, err = s.git.RevParse(r.Context(), rc.RepoDir, ref)
-	if err != nil {
-		return ref, "", errNotFoundf("revision %q does not exist", ref)
+	if err == nil {
+		return ref, sha, nil
 	}
-	return ref, sha, nil
+
+	// A ref that is not there is not always a mistake. A project can have no
+	// branch called "main" at all, and answering "revision main does not exist"
+	// describes the request rather than the repository. The caller gets the ref
+	// that does exist, or — if the repository is genuinely empty — an answer that
+	// says so.
+	fallback, sha, err := s.fallbackRef(r, rc)
+	if err != nil {
+		return ref, "", err
+	}
+	if sha == "" {
+		return "", "", newError(http.StatusNotFound, "repository_empty",
+			"this repository has no commits yet")
+	}
+	return fallback, sha, nil
+}
+
+// fallbackRef picks something to show when the requested ref is missing: the
+// project's default branch if it exists, otherwise the first branch there is.
+// The returned sha is empty when the repository has no branches at all.
+func (s *Server) fallbackRef(r *http.Request, rc *repoContext) (string, string, error) {
+	branches, err := s.git.Branches(r.Context(), rc.RepoDir)
+	if err != nil {
+		return "", "", err
+	}
+	if len(branches) == 0 {
+		return "", "", nil
+	}
+
+	if rc.Project.DefaultBranch != "" {
+		for _, branch := range branches {
+			if branch.Name == rc.Project.DefaultBranch {
+				return branch.Name, branch.Target, nil
+			}
+		}
+	}
+	return branches[0].Name, branches[0].Target, nil
 }
 
 func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {

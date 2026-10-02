@@ -175,6 +175,124 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		map[string]any{"project": s.projectToView(project, models.AccessLevelOwner)})
 }
 
+// handleMoveProject moves a project into a group, or out of one.
+func (s *Server) handleMoveProject(w http.ResponseWriter, r *http.Request) {
+	rc, err := s.repoWithAccess(r, store.ActionManageProject)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	// Moving changes a project's address and the directory its history lives in,
+	// which is a bigger step than renaming it. It is left to owners on both sides:
+	// whoever owns the project, and whoever owns the group it is going into.
+	if rc.Level < models.AccessLevelOwner && !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("moving a project needs the owner role"))
+		return
+	}
+
+	var req struct {
+		GroupPath string `json:"group_path"`
+		// Name overrides the last segment of the path, for moving into a group
+		// under a different name. Empty keeps it.
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	var (
+		groupID *uuid.UUID
+		target  *models.Group
+	)
+
+	groupPath := strings.ToLower(strings.Trim(strings.TrimSpace(req.GroupPath), "/"))
+	if groupPath != "" {
+		group, err := s.store.Groups().ByPath(r.Context(), groupPath)
+		if err != nil {
+			s.writeError(w, r, errNotFoundf("group %q does not exist", groupPath))
+			return
+		}
+
+		// Being able to read a group is not being able to put a project in it: the
+		// group's members gain access to the project, so this is an owner's
+		// decision on the group as well as on the project.
+		level, err := s.store.Permissions().GroupAccessLevel(r.Context(), userFrom(r.Context()).ID, group.ID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if level < models.AccessLevelOwner && !userFrom(r.Context()).IsAdmin {
+			s.writeError(w, r, errForbidden("moving a project into a group needs the owner role in that group"))
+			return
+		}
+		groupID, target = &group.ID, group
+	}
+
+	name := strings.ToLower(strings.Trim(strings.TrimSpace(req.Name), "/"))
+	if name == "" {
+		name = lastSegmentOf(rc.Project.Path)
+	}
+
+	newPath := name
+	if target != nil {
+		newPath = target.FullPath + "/" + name
+	}
+	if newPath == rc.Project.Path {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{
+			"project": s.projectToView(rc.Project, models.AccessLevelOwner),
+		})
+		return
+	}
+	if !repos.ValidPath(newPath) {
+		s.writeError(w, r, errBadRequestf("%q is not a valid project path", newPath))
+		return
+	}
+
+	moved, err := s.repos.Move(r.Context(), rc.Project, newPath, groupID)
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			s.writeError(w, r, errConflictf("a project at %s already exists", newPath))
+			return
+		}
+		s.writeError(w, r, err)
+		return
+	}
+
+	// A push that arrives between reading and writing the row would report the
+	// old path, so the event carries the new one.
+	_ = s.git.UpdateServerInfo(r.Context(), rc.RepoDir)
+	s.log.Info("project moved",
+		"project", rc.Project.Path, "from", moved.FromPath, "to", moved.ToPath,
+		"user", userFrom(r.Context()).Username)
+
+	s.publish(r.Context(), rc, userFrom(r.Context()), models.EventProjectUpdated, map[string]any{
+		"action": "moved",
+		"from":   moved.FromPath,
+		"to":     moved.ToPath,
+	})
+
+	updated, err := s.store.Projects().ByID(r.Context(), rc.Project.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"project": s.projectToView(updated, models.AccessLevelOwner),
+		"web_url": "/p/" + moved.ToPath,
+	})
+}
+
+// lastSegmentOf is the part of a path after the last slash.
+func lastSegmentOf(path string) string {
+	if i := strings.LastIndexByte(path, '/'); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	project, level, err := s.projectWithAccess(r, store.ActionReadProject)
 	if err != nil {
@@ -193,6 +311,11 @@ type updateProjectRequest struct {
 	MergeMethod          *string `json:"merge_method"`
 	RemoveSourceBranch   *bool   `json:"remove_source_branch"`
 	AllowPipelineTrigger *bool   `json:"allow_pipeline_trigger"`
+	// MoveToGroup moves the project into a group, or out of one when it is empty.
+	// Moving changes the project's path, and therefore its address and the place
+	// its repository lives, so it is a separate request rather than another field
+	// of the same one.
+	MoveToGroup *string `json:"move_to_group"`
 }
 
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {

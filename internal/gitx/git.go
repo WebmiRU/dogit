@@ -241,6 +241,21 @@ func (g *Git) Run(ctx context.Context, repoDir string, stdin []byte, args ...str
 }
 
 // SetConfig sets a single git configuration value in the repository.
+// GetConfig reads one repository setting. A key that is not set is an empty
+// string rather than an error, because the callers ask about settings that are
+// optional.
+func (g *Git) GetConfig(ctx context.Context, repoPath, key string) (string, error) {
+	out, err := g.run(ctx, repoPath, nil, "config", "--get", key)
+	if err != nil {
+		var commandError *CommandError
+		if errors.As(err, &commandError) && commandError.ExitCode == 1 {
+			return "", nil
+		}
+		return "", fmt.Errorf("read config %s: %w", key, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func (g *Git) SetConfig(ctx context.Context, repoPath, key, value string) error {
 	_, err := g.run(ctx, repoPath, nil, "config", key, value)
 	if err != nil {
