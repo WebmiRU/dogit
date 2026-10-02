@@ -17,7 +17,16 @@ import (
 // which already know how to answer "you may not see this" correctly. Resolving
 // without asking only decides which handler answers.
 func (s *Server) handleNestedProjectPath(w http.ResponseWriter, r *http.Request) {
+	// The wildcard parameter is empty inside a mounted sub-router, so the matched
+	// path is taken from the routing context, which is set either way. It is
+	// relative to the mount point, which is exactly what is wanted here: the part
+	// of the address that follows /projects.
 	rest := strings.Trim(chi.URLParam(r, "*"), "/")
+	if rest == "" {
+		if routeContext := chi.RouteContext(r.Context()); routeContext != nil {
+			rest = strings.Trim(routeContext.RoutePath, "/")
+		}
+	}
 	if rest == "" {
 		s.writeError(w, r, errNotFound("the requested resource does not exist"))
 		return
@@ -36,7 +45,8 @@ func (s *Server) handleNestedProjectPath(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rewritten, err := url.Parse("/projects/" + project.String())
+	// Paths on the project router are relative to its mount point.
+	rewritten, err := url.Parse("/" + project.String())
 	if err != nil {
 		s.writeError(w, r, errNotFound("the requested resource does not exist"))
 		return
@@ -65,15 +75,4 @@ func routeContextFor(path string) *chi.Context {
 	routeContext := chi.NewRouteContext()
 	routeContext.RoutePath = path
 	return routeContext
-}
-
-// projectRoutes returns the router holding every per-project route.
-//
-// It holds exactly the same table that is mounted for direct id requests, so the
-// two cannot drift apart. Building it per call costs a few map insertions, which
-// is not worth caching for a path that is taken once per page load.
-func (s *Server) projectRoutes() chi.Router {
-	r := chi.NewRouter()
-	s.mountProjectRoutes(r)
-	return r
 }

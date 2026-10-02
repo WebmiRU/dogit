@@ -50,10 +50,10 @@ const isEmpty = computed(
 )
 
 const treeUrl = (path: string, ref: string) =>
-  `/p/${props.projectPath}/-/tree/${encodeURIComponent(ref)}/${path}`
+  repoViewUrl(props.projectPath, 'tree', ref, path)
 
 const fileUrl = (path: string, ref: string) =>
-  `/p/${props.projectPath}/-/blob/${encodeURIComponent(ref)}/${path}`
+  repoViewUrl(props.projectPath, 'blob', ref, path)
 
 function entryLink(entry: TreeEntry) {
   const fullPath = props.path ? `${props.path}/${entry.path}` : entry.path

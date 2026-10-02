@@ -135,66 +135,87 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Get("/groups/{groupID}", s.handleGetGroup)
 		authenticated.Get("/groups/{groupID}/projects", s.handleListGroupProjects)
 
-		authenticated.Get("/projects", s.handleListProjects)
 		// Every merge request the caller may read, across projects.
 		authenticated.Get("/merge_requests", s.handleListMergeRequests)
-		authenticated.Post("/projects", s.handleCreateProject)
 
-		// Nested project paths reach the same handlers through the dispatcher.
-		authenticated.Get("/projects/*", s.handleNestedProjectPath)
 		s.mountProjectRoutes(authenticated)
 	})
 }
 
 // mountProjectRoutes registers every route scoped to a single project.
 //
-// The patterns are registered one by one rather than inside a chi.Route block,
-// and that is not a style choice. chi.Route mounts a sub-router at the pattern
-// plus "/*", so a Route on "/projects/{projectID}" claims every path underneath
-// it — including "/projects/platform/api", which the wildcard in Register has to
-// see. The claim is silent: the grouped project simply answered 404 while its
-// id-addressed twin worked, which is the worst shape a bug can have.
+// The routes live on a sub-router mounted at /projects, and a project inside a
+// group — "group/project" — is picked up by that router's NotFound handler. Two
+// other arrangements were tried and both break something invisible:
 //
-// A project inside a group is addressed as "group/project", and a path parameter
-// does not span a slash, so the wildcard registered in Register resolves the
-// reference to an id and replays the request against this table.
+//   - A chi.Route block mounts at the pattern plus "/*", so it claims every path
+//     underneath "/projects/{projectID}", including a grouped project's own
+//     address. Grouped projects answered 404 while their id-addressed twins
+//     worked.
+//   - A "/projects/*" wildcard registered next to the parameter routes wins over
+//     them, and then "/projects/{id}/compare" stops resolving — a route that has
+//     existed all along stops being reachable.
+//
+// NotFound is the one place that is only consulted when nothing else matched, so
+// the two can no longer compete.
 func (s *Server) mountProjectRoutes(r chi.Router) {
-	const base = "/projects/{projectID}"
+	r.Mount("/projects", s.projectRoutes())
+}
 
-	r.Get(base, s.handleGetProject)
-	r.Patch(base, s.handleUpdateProject)
-	r.Delete(base, s.handleDeleteProject)
-	r.Get(base+"/members", s.handleListProjectMembers)
+// projectRoutes builds the per-project router. It is built per call rather than
+// cached because it holds nothing but closures over the server, and the cost is a
+// few map insertions on a path that is walked once per request.
+func (s *Server) projectRoutes() chi.Router {
+	projects := chi.NewRouter()
+	// Paths here are relative to the mount point.
+	const base = "/{projectID}"
 
-	r.Get(base+"/repository/tree", s.handleTree)
-	r.Get(base+"/repository/file", s.handleFile)
+	// The collection sits next to the individual projects so that "/" and
+	// "/{projectID}" are resolved by one router: registering the collection on the
+	// outer router while mounting a sub-router on the same prefix let the mount
+	// shadow it.
+	projects.Get("/", s.handleListProjects)
+	projects.Post("/", s.handleCreateProject)
+
+	projects.Get(base, s.handleGetProject)
+	projects.Patch(base, s.handleUpdateProject)
+	projects.Delete(base, s.handleDeleteProject)
+	projects.Get(base+"/members", s.handleListProjectMembers)
+
+	projects.Get(base+"/repository/tree", s.handleTree)
+	projects.Get(base+"/repository/file", s.handleFile)
 	// Writing from the browser: a file becomes a blob, a tree, a commit and a
 	// conditional ref update, without checking anything out.
-	r.Post(base+"/repository/files", s.handleCommitFile)
-	r.Get(base+"/repository/raw", s.handleRawFile)
-	r.Get(base+"/repository/blame", s.handleBlame)
-	r.Get(base+"/repository/refs", s.handleRefs)
-	r.Get(base+"/repository/branches", s.handleBranches)
-	r.Post(base+"/repository/branches", s.handleCreateBranch)
-	r.Delete(base+"/repository/branches/{name}", s.handleDeleteBranch)
-	r.Get(base+"/repository/tags", s.handleTags)
-	r.Post(base+"/repository/tags", s.handleCreateTag)
-	r.Delete(base+"/repository/tags/{name}", s.handleDeleteTag)
-	r.Get(base+"/repository/commits", s.handleCommits)
-	r.Get(base+"/repository/commits/{sha}", s.handleCommit)
-	r.Get(base+"/repository/commits/{sha}/diff", s.handleCommitDiff)
-	r.Get(base+"/repository/compare", s.handleCompare)
-	r.Get(base+"/repository/commits_feed", s.handleCommitFeed)
+	projects.Post(base+"/repository/files", s.handleCommitFile)
+	projects.Get(base+"/repository/raw", s.handleRawFile)
+	projects.Get(base+"/repository/blame", s.handleBlame)
+	projects.Get(base+"/repository/refs", s.handleRefs)
+	projects.Get(base+"/repository/branches", s.handleBranches)
+	projects.Post(base+"/repository/branches", s.handleCreateBranch)
+	projects.Delete(base+"/repository/branches/{name}", s.handleDeleteBranch)
+	projects.Get(base+"/repository/tags", s.handleTags)
+	projects.Post(base+"/repository/tags", s.handleCreateTag)
+	projects.Delete(base+"/repository/tags/{name}", s.handleDeleteTag)
+	projects.Get(base+"/repository/commits", s.handleCommits)
+	projects.Get(base+"/repository/commits/{sha}", s.handleCommit)
+	projects.Get(base+"/repository/commits/{sha}/diff", s.handleCommitDiff)
+	projects.Get(base+"/repository/compare", s.handleCompare)
+	projects.Get(base+"/repository/commits_feed", s.handleCommitFeed)
 
-	// Merge requests. A global listing lives outside this block, because it spans
+	// Merge requests. A global listing lives outside this router, because it spans
 	// every project the caller may read.
-	r.Get(base+"/merge_requests", s.handleListProjectMergeRequests)
-	r.Post(base+"/merge_requests", s.handleCreateMergeRequest)
-	r.Get(base+"/merge_requests/{iid}", s.handleGetMergeRequest)
-	r.Put(base+"/merge_requests/{iid}", s.handleUpdateMergeRequest)
-	r.Put(base+"/merge_requests/{iid}/state", s.handleCloseMergeRequest)
-	r.Post(base+"/merge_requests/{iid}/merge", s.handleMergeMergeRequest)
-	r.Post(base+"/merge_requests/{iid}/notes", s.handleAddMergeRequestNote)
+	projects.Get(base+"/merge_requests", s.handleListProjectMergeRequests)
+	projects.Post(base+"/merge_requests", s.handleCreateMergeRequest)
+	projects.Get(base+"/merge_requests/{iid}", s.handleGetMergeRequest)
+	projects.Put(base+"/merge_requests/{iid}", s.handleUpdateMergeRequest)
+	projects.Put(base+"/merge_requests/{iid}/state", s.handleCloseMergeRequest)
+	projects.Post(base+"/merge_requests/{iid}/merge", s.handleMergeMergeRequest)
+	projects.Post(base+"/merge_requests/{iid}/notes", s.handleAddMergeRequestNote)
+
+	// Anything unmatched is a project whose path contains a slash.
+	projects.NotFound(s.handleNestedProjectPath)
+
+	return projects
 }
 
 // userFrom returns the authenticated user stored by the authenticate middleware.

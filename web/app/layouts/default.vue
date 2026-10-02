@@ -52,7 +52,7 @@ const navItems = computed<NavItem[]>(() => [
   { label: 'Dashboard', to: '/', icon: '◧', match: '/' },
   { label: 'Projects', to: '/projects', icon: '▤', match: '/projects' },
   { label: 'Groups', to: '/groups', icon: '◫', match: '/groups' },
-  { label: 'Merge requests', to: '/merge-requests', icon: '⑂', disabled: true },
+  { label: 'Merge requests', to: '/merge-requests', icon: '⑂', match: '/merge-requests' },
   { label: 'CI/CD', to: '/pipelines', icon: '▷', disabled: true },
   { label: 'Activity', to: '/activity', icon: '≡', match: '/activity' },
 ])

@@ -103,6 +103,14 @@ func TestNestedProjectPathResolves(t *testing.T) {
 			path: "/api/v1/projects/" + project.Path + "/repository/file?ref=main&path=README.md",
 			want: `"content":"hi\n"`,
 		},
+		// A static tail under the parameter. The grouped-project dispatcher has to
+		// sit in NotFound rather than in a wildcard, because a wildcard competes
+		// with the parameter routes and silently takes "/compare" away from them.
+		{
+			name: "compare",
+			path: "/api/v1/projects/" + project.Path + "/repository/compare?from=main&to=main",
+			want: `"files"`,
+		},
 	}
 
 	for _, tc := range cases {

@@ -65,7 +65,7 @@ async function remove(name: string) {
           <span class="icon">◈</span>
           <NuxtLink
             class="name"
-            :to="`/p/${projectPath}/-/tree/${encodeURIComponent(tag.name)}`"
+            :to="repoViewUrl(projectPath, 'tree', tag.name)"
           >
             {{ tag.name }}
           </NuxtLink>

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -245,7 +246,12 @@ func (s *Server) handleGetMergeRequest(w http.ResponseWriter, r *http.Request) {
 	view := s.mergeRequestToView(r, mr)
 
 	// A merge request that is still open is only meaningful next to the state of
-	// the branches right now, so the answer carries it.
+	// the branches right now, so the answer carries it. A merged or closed
+	// request is a record of something that happened and does not depend on the
+	// branches still being there — which they may not be, since merging can
+	// remove the source branch.
+	diffURL := ""
+	branchesExist := true
 	if mr.IsOpen() {
 		mergeable, conflicts, err := s.mergeability(r, rc, mr.SourceBranch, mr.TargetBranch)
 		if err != nil {
@@ -265,6 +271,21 @@ func (s *Server) handleGetMergeRequest(w http.ResponseWriter, r *http.Request) {
 				Deletions:    stats.Deletions,
 			}
 		}
+		diffURL = fmt.Sprintf("/projects/%s/repository/compare?from=%s&to=%s",
+			rc.Project.ID, url.QueryEscape(mr.TargetBranch), url.QueryEscape(mr.SourceBranch))
+	} else {
+		branchesExist = s.git.Exists(r.Context(), rc.RepoDir, mr.SourceBranch) &&
+			s.git.Exists(r.Context(), rc.RepoDir, mr.TargetBranch)
+		if branchesExist {
+			diffURL = fmt.Sprintf("/projects/%s/repository/compare?from=%s&to=%s",
+				rc.Project.ID, url.QueryEscape(mr.TargetBranch), url.QueryEscape(mr.SourceBranch))
+		}
+	}
+
+	if !branchesExist {
+		// The branches are gone, so there is no diff to show. Saying so is better
+		// than an error page: the request itself is still perfectly readable.
+		view.MergeStatus = "branches_gone"
 	}
 
 	notes, err := s.store.MergeRequests().Notes(r.Context(), mr.ID)
@@ -273,12 +294,18 @@ func (s *Server) handleGetMergeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
+	// The diff address is relative to the API root, without the version prefix:
+	// the client prepends that itself, and a prefix here would end up doubled.
+	response := map[string]any{
 		"merge_request": view,
 		"notes":         notes,
-		"diff_url": fmt.Sprintf("/api/v1/projects/%s/compare?from=%s&to=%s",
-			rc.Project.ID, mr.TargetBranch, mr.SourceBranch),
-	})
+		"diff_url":      diffURL,
+	}
+	if !branchesExist {
+		response["branches_gone"] = true
+	}
+
+	s.writeJSON(w, r, http.StatusOK, response)
 }
 
 // handleUpdateMergeRequest edits an open merge request.

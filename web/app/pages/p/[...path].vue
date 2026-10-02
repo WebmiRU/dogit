@@ -50,20 +50,38 @@ const view = computed(() => {
   }
 })
 
-/** A ref may contain slashes, so it is taken from the query when present. */
-const currentRef = computed(() => {
-  const fromQuery = route.query.ref
-  if (typeof fromQuery === 'string' && fromQuery) return fromQuery
-  // The file views carry the ref in the path; the listings carry it in the query.
-  if (['tree', 'blob', 'edit'].includes(view.value.name)) return view.value.rest[0] ?? ''
-  return ''
+/**
+ * Where the ref of a view lives.
+ *
+ * A ref with a slash cannot sit in the path — the router decodes %2F into a real
+ * separator — so views either carry it in the query or, when it has no slash, in
+ * the path. The two are told apart by the ref itself rather than by the view, so
+ * a link and its page always agree.
+ */
+const refFromQuery = computed(() =>
+  typeof route.query.ref === 'string' ? route.query.ref : '',
+)
+
+const refFromPath = computed(() => {
+  if (!['tree', 'blob', 'edit'].includes(view.value.name)) return ''
+  const first = view.value.rest[0] ?? ''
+  return first ? decodeURIComponent(first) : ''
 })
 
+/** True while the ref is the first path segment and nothing was moved to the query. */
+const refIsInPath = computed(
+  () => !!refFromPath.value && !refFromQuery.value && refFitsInPath(refFromPath.value),
+)
+
+const currentRef = computed(
+  () => refFromQuery.value || refFromPath.value || project.value?.default_branch || 'main',
+)
+
+/** The directory or file the view is about, which follows the ref if it is in the path. */
 const restPath = computed(() => {
-  if (['blob', 'tree', 'edit', 'new'].includes(view.value.name)) {
-    return decodeURIComponent(view.value.rest.slice(1).join('/'))
-  }
-  return ''
+  if (!['blob', 'tree', 'edit'].includes(view.value.name)) return ''
+  const rest = refIsInPath.value ? view.value.rest.slice(1) : view.value.rest
+  return decodeURIComponent(rest.join('/'))
 })
 
 const project = ref<ProjectSummary | null>(null)
@@ -163,45 +181,33 @@ async function switchRef(next: string) {
   if (!project.value || next === activeRef.value) return
 
   const base = `/p/${project.value.path}`
-  const encode = encodeURIComponent(next)
+  const known = ['tree', 'blob', 'edit', 'commits', 'branches', 'tags', 'compare']
 
-  switch (view.value.name) {
-    case 'tree': {
-      const path = view.value.rest.slice(1).join('/')
-      await navigateTo(`${base}/-/tree/${encode}/${path}`)
-      return
-    }
-    case 'blob':
-    case 'edit': {
-      // The file may not exist on the new branch; the page reports that itself
-      // rather than silently falling back.
-      const path = view.value.rest.slice(1).join('/')
-      await navigateTo(`${base}/-/${view.value.name}/${encode}/${path}`)
-      return
-    }
-    case 'commits':
-    case 'branches':
-    case 'tags':
-      await navigateTo({ path: `${base}/-/${view.value.name}`, query: { ref: next } })
-      return
-    default:
-      await navigateTo(`${base}/-/tree/${encode}`)
+  if (known.includes(view.value.name)) {
+    // The file may not exist on the branch being switched to; the page reports
+    // that itself rather than silently falling back to another file.
+    await navigateTo(repoViewUrl(project.value.path, view.value.name, next, restPath.value))
+    return
   }
+
+  await navigateTo(repoViewUrl(project.value.path, 'tree', next))
 }
 
 const tabs = computed(() => {
   if (!project.value) return []
   const base = `/p/${project.value.path}`
-  const ref = encodeURIComponent(activeRef.value)
 
-  // The ref travels differently per view: in the path for the file views, as a
-  // query parameter for the listings. Carrying it into every tab is what keeps a
-  // chosen branch from resetting when the user clicks between Code and Commits.
+  // Every tab carries the ref, so a chosen branch does not reset when moving
+  // between Code and Commits.
+  const path = project.value.path
+
   return [
-    { label: 'Code', to: `${base}/-/tree/${ref}`, match: 'tree' },
-    { label: 'Commits', to: `${base}/-/commits?ref=${ref}`, match: 'commits' },
-    { label: 'Branches', to: `${base}/-/branches?ref=${ref}`, match: 'branches' },
-    { label: 'Tags', to: `${base}/-/tags?ref=${ref}`, match: 'tags' },
+    { label: 'Code', to: repoViewUrl(path, 'tree', activeRef.value), match: 'tree' },
+    { label: 'Commits', to: repoViewUrl(path, 'commits', activeRef.value), match: 'commits' },
+    { label: 'Branches', to: repoViewUrl(path, 'branches', activeRef.value), match: 'branches' },
+    { label: 'Tags', to: repoViewUrl(path, 'tags', activeRef.value), match: 'tags' },
+    { label: 'Compare', to: repoViewUrl(path, 'compare', activeRef.value), match: 'compare' },
+    { label: 'Merge requests', to: repoViewUrl(path, 'merge_requests', activeRef.value), match: 'merge_requests' },
     { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
   ]
 })
@@ -299,6 +305,28 @@ async function copyCloneUrl() {
           :ref-name="activeRef"
           :default-branch="project.default_branch"
           @change-ref="switchRef"
+          @refs-changed="refsChanged"
+        />
+        <!-- A number after the name makes it one request rather than the list. -->
+        <RepositoryCompare
+          v-else-if="view.name === 'compare'"
+          :project-id="projectId"
+          :project-path="project.path"
+          :refs="refs"
+          :default-branch="project.default_branch"
+          @refs-changed="refsChanged"
+        />
+        <MergeRequestView
+          v-else-if="view.name === 'merge_requests' && view.rest[0]"
+          :key="view.rest[0]"
+        />
+        <MergeRequestList
+          v-else-if="view.name === 'merge_requests'"
+          :project-id="projectId"
+          :project-path="project.path"
+          :refs="refs"
+          :default-branch="project.default_branch"
+          :can-create="canPush"
           @refs-changed="refsChanged"
         />
         <RepositoryTags

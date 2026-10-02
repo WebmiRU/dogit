@@ -1,5 +1,5 @@
-<script setup lang="ts">
 /** Merge request types, mirroring the API responses. */
+import type { ProjectSummary } from '~/types/repository'
 
 export type MergeRequestState = 'opened' | 'merged' | 'closed'
 

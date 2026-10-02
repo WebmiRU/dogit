@@ -371,6 +371,47 @@ func TestMergeRequestDoesNotDuplicateABranchPair(t *testing.T) {
 }
 
 // A branch that is already merged into the target has nothing to review.
+// A merged request whose source branch was removed is still readable.
+//
+// Merging can delete the source branch, which is what keeps a repository from
+// filling with branches that are already merged. The request outlives that
+// branch, so reading it must not fail: the answer says the branches are gone
+// instead of asking for a diff that cannot exist.
+func TestMergedRequestSurvivesItsBranchBeingRemoved(t *testing.T) {
+	ctx := context.Background()
+	f := newMergeFixture(t, func(p *models.Project) { p.RemoveSourceBranch = true })
+
+	f.do(t, http.MethodPost, f.mrURL(""), `{"source_branch":"feature","target_branch":"main"}`)
+	if status, body := f.do(t, http.MethodPost, f.mrURL("/1/merge"), ""); status != http.StatusOK {
+		t.Fatalf("merge: status %d, body %v", status, body)
+	}
+	if f.git.Exists(ctx, f.repo, "feature") {
+		t.Fatal("the source branch is still there, so the rest of this test proves nothing")
+	}
+
+	status, body := f.do(t, http.MethodGet, f.mrURL("/1"), "")
+	if status != http.StatusOK {
+		t.Fatalf("reading a merged request whose branch is gone: status %d, body %v", status, body)
+	}
+	if body["branches_gone"] != true {
+		t.Errorf("branches_gone = %v, want true", body["branches_gone"])
+	}
+	if url, _ := body["diff_url"].(string); url != "" {
+		t.Errorf("diff_url = %q, want it left out when there is nothing to compare", url)
+	}
+
+	mr, _ := body["merge_request"].(map[string]any)
+	if mr["state"] != "merged" {
+		t.Errorf("state = %v, want merged", mr["state"])
+	}
+	if mr["merge_status"] != "branches_gone" {
+		t.Errorf("merge_status = %v, want branches_gone", mr["merge_status"])
+	}
+	if title, _ := mr["title"].(string); title == "" {
+		t.Error("the request itself did not come back")
+	}
+}
+
 func TestMergeRequestRefusesABranchWithNothingNew(t *testing.T) {
 	ctx := context.Background()
 	f := newMergeFixture(t)

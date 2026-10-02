@@ -129,6 +129,37 @@ check(
   still.slice(0, 160).replace(/\n/g, ' '),
 )
 
+// --- a branch whose name contains a slash has to be reachable.
+//
+// A slash cannot live in the path: the router decodes %2F into a real separator,
+// so the link has to carry the ref in the query instead. Getting this wrong sends
+// the browser to the tree of "feature" filtered by the directory "x".
+await page.goto(`${baseUrl}/p/hello/-/branches`, { waitUntil: 'networkidle2' })
+
+const slashed = await page.evaluate(() => {
+  const row = [...document.querySelectorAll('li')].find((li) =>
+    li.innerText.includes('feature/export-csv'),
+  )
+  return row?.querySelector('a')?.getAttribute('href') ?? null
+})
+check('a slashed branch is linked', !!slashed && slashed.includes('ref='), slashed ?? '')
+
+if (slashed) {
+  await page.goto(`${baseUrl}${slashed}`, { waitUntil: 'networkidle2' })
+  await new Promise((r) => setTimeout(r, 800))
+  const treeText = await text()
+  check(
+    'following the link shows that branch',
+    treeText.includes('README.md') && !treeText.includes('unexpected error'),
+    treeText.slice(0, 160).replace(/\n/g, ' '),
+  )
+
+  const selected = await page.evaluate(
+    () => document.querySelector('select[aria-label="Ref"]')?.value ?? null,
+  )
+  check('the selector agrees about the branch', selected === 'feature/export-csv', String(selected))
+}
+
 // --- tags have their own page
 await page.goto(`${baseUrl}/p/hello/-/tags`, { waitUntil: 'networkidle2' })
 const tagsText = await text()

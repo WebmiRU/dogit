@@ -45,8 +45,6 @@ async function load() {
 onMounted(load)
 watch(state, load)
 
-/** The same reader the project views use, so dates look the same everywhere. */
-const relative = (value: string) => formatRelative(value)
 </script>
 
 <template>
@@ -93,7 +91,7 @@ const relative = (value: string) => formatRelative(value)
             <div class="meta">
               <span>opened by {{ mr.author_name || mr.author_username }}</span>
               <span>·</span>
-              <span>{{ relative(mr.updated_at) }}</span>
+              <span>{{ timeAgo(mr.updated_at) }}</span>
               <span
                 v-if="mr.diff_stats"
                 class="diff-stat"
@@ -116,6 +114,15 @@ const relative = (value: string) => formatRelative(value)
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+/* The meta line is a row of words, so it is laid out as one: without this the
+   spans sit against each other and "into main" reads as "intom ain". */
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .diff-stat .add {

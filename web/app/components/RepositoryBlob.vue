@@ -88,11 +88,11 @@ const rawUrl = computed(() =>
       <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
 
       <div class="breadcrumbs">
-        <NuxtLink :to="`/p/${projectPath}/-/tree/${encodeURIComponent(refName)}`">{{ projectPath }}</NuxtLink>
+        <NuxtLink :to="repoViewUrl(projectPath, 'tree', refName)">{{ projectPath }}</NuxtLink>
         <span class="sep">/</span>
         <NuxtLink
           v-if="directory"
-          :to="`/p/${projectPath}/-/tree/${encodeURIComponent(refName)}/${directory}`"
+          :to="repoViewUrl(projectPath, 'tree', refName, directory)"
         >
           {{ directory }}
         </NuxtLink>
@@ -104,7 +104,7 @@ const rawUrl = computed(() =>
       <NuxtLink
         v-if="canPush"
         class="btn btn-primary"
-        :to="`/p/${projectPath}/-/edit/${encodeURIComponent(refName)}/${path}`"
+        :to="repoViewUrl(projectPath, 'edit', refName, path)"
       >
         Edit
       </NuxtLink>

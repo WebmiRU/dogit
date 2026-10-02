@@ -178,7 +178,7 @@ async function save() {
       <BranchSelector v-if="!isNewFile" :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
 
       <div class="breadcrumbs">
-        <NuxtLink :to="`/p/${projectPath}/-/tree/${encodeURIComponent(refName)}`">{{ projectPath }}</NuxtLink>
+        <NuxtLink :to="repoViewUrl(projectPath, 'tree', refName)">{{ projectPath }}</NuxtLink>
         <span class="sep">/</span>
         <span>{{ path }}</span>
       </div>
@@ -187,7 +187,7 @@ async function save() {
       <NuxtLink
         v-if="!isNewFile"
         class="btn"
-        :to="`/p/${projectPath}/-/blob/${encodeURIComponent(refName)}/${path}`"
+        :to="repoViewUrl(projectPath, 'blob', refName, path)"
       >
         Cancel
       </NuxtLink>
