@@ -1,0 +1,63 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/ewolf/dogit/internal/app"
+	"github.com/ewolf/dogit/internal/web"
+)
+
+// Serve runs the web and API tier.
+func Serve(ctx context.Context, args []string) error {
+	fs := newFlagSet("serve")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+
+	a, err := app.New(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	web.SetVersion(Version)
+
+	srv := web.NewServer(a.Cfg, a.Log, a.Store)
+	if err := srv.Listen(); err != nil {
+		return err
+	}
+
+	// Consume the durable event log so subscribers see hook-published events.
+	go a.Events.RunTail(ctx, 0)
+
+	a.Log.Info("dogit starting",
+		"version", Version,
+		"env", a.Cfg.Environment,
+		"git", a.Cfg.GitBinary,
+		"repo_root", a.Cfg.RepoDir)
+
+	if err := srv.Serve(ctx); err != nil {
+		return fmt.Errorf("http server: %w", err)
+	}
+	return nil
+}
+
+// Migrate applies pending database migrations and exits. The web, ssh and
+// runner processes apply migrations on start-up as well, so this command exists
+// mainly for deployments that want to gate start-up on the schema.
+func Migrate(ctx context.Context, args []string) error {
+	fs := newFlagSet("migrate")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+
+	a, err := app.New(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	a.Log.Info("migrations applied", "version", Version)
+	return nil
+}

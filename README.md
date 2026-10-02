@@ -1,0 +1,148 @@
+# dogit
+
+A self-hosted Git forge: repositories over SSH, browsing and editing code in the
+browser, merge requests, and CI/CD.
+
+Status: early. Push, clone and the commit/event pipeline work end to end; the web
+API and the UI are next.
+
+## How it is put together
+
+One Go binary provides every process role, and the system OpenSSH server carries
+git traffic:
+
+```
+git clone/push          browser                     CI jobs
+      │                     │                            │
+      ▼                     ▼                            ▼
+  ┌────────────┐      ┌──────────────┐            ┌────────────┐
+  │   sshd     │      │ nginx / caddy│            │  runner    │
+  │ (system)   │      │  static SPA  │            │ (separate  │
+  └─────┬──────┘      └──────┬───────┘            │  service)  │
+        │ AuthorizedKeysCommand                    └─────┬──────┘
+        │ force-exec                                      │
+        ▼                                                ▼
+  ┌─────────────────┐        ┌────────────────────┐   ┌──────────┐
+  │  dogit serve    │        │  dogit runner      │   │ postgres │
+  │  HTTP + API     │◀──────▶│                    │   │  19 beta │
+  └────────┬────────┘  events└────────────────────┘   └────┬─────┘
+           │                                               │
+           │  ┌──────────────────────────────────────────┐│
+           └─▶│ dogit-hook  git <user>                   ││
+              │ dogit hook post-receive (installed hook) ◀┘
+              └──────────────────────────────────────────┘
+                             runs git in bare repos
+```
+
+Git traffic never touches the Go HTTP server. sshd authenticates the key through
+`dogit authorized-keys`, force-executes `dogit-hook`, and that process execs the
+real `git upload-pack` / `git receive-pack` with the SSH channel wired to its
+stdin and stdout. That is the git wire protocol, which is why every stock git
+client works with no client-side configuration and no port number in the URL.
+
+All repository operations go through git's plumbing commands against bare
+repositories. There is no working tree anywhere in the system, which makes
+concurrent operations safe and lets git do the hard parts (pack negotiation,
+object validation, three-way merges).
+
+## Running it
+
+```sh
+cp .env.example .env      # optional; defaults work
+docker compose up -d --build
+```
+
+Then create the first account and a project:
+
+```sh
+docker compose exec app dogit user create \
+    --username alice --password secret123 --admin
+
+docker compose exec app dogit project create --path hello --owner alice
+```
+
+Register a public key:
+
+```sh
+cat ~/.ssh/id_ed25519.pub | docker compose exec -T app \
+    dogit key add --username alice --title laptop
+```
+
+Then:
+
+```sh
+git clone ssh://git@localhost:2222/hello.git     # port 2222 in development
+```
+
+In production publish port 22 and the URL becomes `git@host:hello.git`.
+
+Useful commands:
+
+```sh
+docker compose logs -f app runner
+docker compose exec app dogit user list
+docker compose exec app dogit key list --username alice
+docker compose exec postgres psql -U dogit -d dogit
+```
+
+## Layout
+
+```
+cmd/dogit/            main entry point, subcommand dispatch
+cmd/dogit-hook/       forced command executed by sshd for every git session
+internal/config/      environment-based configuration
+internal/store/       PostgreSQL access, repositories, permissions
+internal/models/      domain types
+internal/auth/        argon2id passwords, tokens, SSH key parsing
+internal/gitserver/   git command parsing, authorisation, git execution
+internal/gitx/        typed wrapper around the git binary
+internal/hooks/       hook installation and post-receive handling
+internal/events/      durable event bus (pushes trigger pipelines)
+internal/repos/       bare repository lifecycle
+internal/web/         HTTP server, routing, middleware
+internal/app/         shared dependency wiring
+migrations/           SQL migrations, embedded into the binary
+deploy/               sshd configuration and container entrypoint
+web/                  Nuxt frontend (not implemented yet)
+```
+
+## Access levels
+
+Numeric levels follow GitLab's scale, so roles read the same way:
+
+| Level | Role | Can |
+|---|---|---|
+| 10 | Guest | view, clone |
+| 20 | Reporter | view CI, download artifacts |
+| 30 | Developer | push to own branches, open merge requests, trigger pipelines |
+| 40 | Maintainer | push anywhere, merge, manage the project |
+| 50 | Owner | manage the group, delete it |
+
+Roles are named bundles of levels (`Owner`, `Maintainer`, `Developer`, `Guest`)
+attached to a user or to a group. The effective level is the maximum across all
+applicable roles; `internal/store/permissions.go` holds the single SQL
+expression that computes it.
+
+## Configuration
+
+Everything is an environment variable prefixed with `DOGIT_`; see
+`internal/config/config.go` for the full list and defaults. The settings that
+matter most:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DOGIT_DATABASE_URL` | localhost postgres | PostgreSQL connection string |
+| `DOGIT_REPO_DIR` | `$DOGIT_DATA_DIR/repos` | bare repositories root |
+| `DOGIT_SSH_HOST` | `localhost` | hostname in clone URLs |
+| `DOGIT_HOOK_BINARY` | `dogit-hook` | forced-command binary |
+| `DOGIT_ENV_FILE` | `/etc/dogit/env` | where to read settings OpenSSH hides |
+
+`DOGIT_ENV_FILE` exists because OpenSSH runs `AuthorizedKeysCommand` and forced
+commands with a deliberately minimal environment: a container's variables never
+reach dogit on a git connection, so the entrypoint writes them to that file.
+
+## Not implemented yet
+
+- REST API and the web UI
+- Branches, tags, merge requests and conflict resolution in the browser
+- CI job execution, artifacts and deployments
