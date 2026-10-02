@@ -382,25 +382,9 @@ func (s *Server) handleSetModuleSettings(w http.ResponseWriter, r *http.Request)
 	// its own words, and the core checks it here where refusing is free. Catching it
 	// at push time instead would mean a registry whose images cannot be traced back
 	// to a project, discovered by somebody trying to use them.
-	if spec, found := settingSpecOf(integration, key); found && len(spec.MustContain) > 0 {
-		var value string
-		if err := json.Unmarshal(req.Value, &value); err == nil {
-			var missing []string
-			for _, required := range spec.MustContain {
-				if !strings.Contains(value, required) {
-					missing = append(missing, required)
-				}
-			}
-			if len(missing) > 0 {
-				reason := spec.WhyContains
-				if reason == "" {
-					reason = "the module requires it, and does not say why"
-				}
-				s.writeError(w, r, errBadRequestf("%q is missing %s: %s",
-					value, strings.Join(missing, ", "), reason))
-				return
-			}
-		}
+	if problem := s.checkSettingValue(integration, key, req.Value); problem != nil {
+		s.writeError(w, r, problem)
+		return
 	}
 
 	if err := s.store.Integrations().SetSetting(r.Context(), integration.ID, scopeType, scopeID, key, req.Value); err != nil {
@@ -414,6 +398,224 @@ func (s *Server) handleSetModuleSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"settings": settings})
+}
+
+// handleResetModuleSetting puts one setting back to what the module declared.
+//
+// An operator who set a value they did not mean — and was allowed to, because the
+// module allowed it — needs a way back that is not "remember what it was". There
+// is no DELETE on the settings endpoint itself, because deleting the row and
+// deleting the setting are different things and only the first is meaningful here.
+func (s *Server) handleResetModuleSetting(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("administrator rights are required"))
+		return
+	}
+
+	integration, err := s.moduleFromPath(r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	if key == "" {
+		s.writeError(w, r, errBadRequest("a setting key is required"))
+		return
+	}
+	if !moduleDeclaresSetting(integration, key) {
+		s.writeError(w, r, errBadRequestf("module %s does not declare a setting named %q",
+			integration.Kind, key))
+		return
+	}
+
+	scopeType, scopeID, err := s.settingScope(r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	if err := s.store.Integrations().DeleteSettingAt(r.Context(), integration.ID, scopeType, scopeID, key); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// Already at its default, which is the state that was asked for. Saying so
+			// rather than refusing keeps the button from becoming an error for
+			// something the operator has already done.
+			s.writeJSON(w, r, http.StatusOK, map[string]any{"reset": key, "already": true})
+			return
+		}
+		s.writeError(w, r, err)
+		return
+	}
+
+	s.log.Info("module setting reset to its default", "kind", integration.Kind, "key", key,
+		"scope", scopeType, "user", userFrom(r.Context()).Username)
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"reset": key})
+}
+
+// handleSetModuleSettingsBulk writes several settings at once.
+//
+// One request rather than one per row, because that is what the interface does:
+// a form is submitted, not a series of unrelated actions. It also makes the write
+// one decision — every value is checked before any is stored, so a form with one
+// wrong value changes nothing rather than half of it.
+func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("administrator rights are required"))
+		return
+	}
+
+	integration, err := s.moduleFromPath(r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	var req struct {
+		Values map[string]json.RawMessage `json:"values"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if len(req.Values) == 0 {
+		s.writeError(w, r, errBadRequest("no settings were given"))
+		return
+	}
+
+	scopeType, scopeID, err := s.settingScope(r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	// Everything is checked first. A form saved in one go should either land or
+	// leave nothing half-written, or the operator is left guessing which half took.
+	for key, value := range req.Values {
+		if !moduleDeclaresSetting(integration, key) {
+			// Writing a setting the module never announced would leave it silently
+			// ignored, which is worse than a clear rejection.
+			s.writeError(w, r, errBadRequestf("module %s does not declare a setting named %q",
+				integration.Kind, key))
+			return
+		}
+		if problem := s.checkSettingValue(integration, key, value); problem != nil {
+			s.writeError(w, r, problem)
+			return
+		}
+	}
+
+	for key, value := range req.Values {
+		if err := s.store.Integrations().SetSetting(r.Context(), integration.ID,
+			scopeType, scopeID, key, value); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		s.log.Info("module setting changed", "kind", integration.Kind, "key", key,
+			"scope", scopeType, "user", userFrom(r.Context()).Username)
+	}
+
+	settings, err := s.store.Integrations().SettingsAt(r.Context(), integration.ID, scopeType, scopeID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"settings": settings})
+}
+
+// checkSettingValue enforces whatever the module said about one value: its type,
+// and any requirement it stated about its contents.
+//
+// The type is checked here because the module declared it in order to have it
+// checked. "600" written where an integer was declared is refused at the door
+// rather than stored and found later by whatever read it.
+func (s *Server) checkSettingValue(integration *models.Integration, key string, value json.RawMessage) error {
+	spec, found := settingSpecOf(integration, key)
+	if !found {
+		return nil
+	}
+
+	if err := checkSettingType(spec, value); err != nil {
+		return err
+	}
+
+	if len(spec.MustContain) == 0 {
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(value, &text); err != nil {
+		// A value of another type cannot be checked against substrings, and a
+		// requirement that only sometimes applies would be worse than none.
+		return errBadRequestf("%q must be text", spec.Label)
+	}
+
+	var missing []string
+	for _, required := range spec.MustContain {
+		if !strings.Contains(text, required) {
+			missing = append(missing, required)
+		}
+	}
+	if len(missing) > 0 {
+		reason := spec.WhyContains
+		if reason == "" {
+			reason = "the module requires it, and does not say why"
+		}
+		return errBadRequestf("%q is missing %s: %s", text, strings.Join(missing, ", "), reason)
+	}
+	return nil
+}
+
+// checkSettingType refuses a value that is not the kind the module declared.
+//
+// A number written as a quoted string is refused as well as nonsense: the module
+// said what it expects, and a value it will have to parse again later is worth
+// catching while the operator is still looking at the field.
+func checkSettingType(spec models.SettingSpec, value json.RawMessage) error {
+	var (
+		text    string
+		number  float64
+		flag    bool
+		decoded any
+	)
+
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return errBadRequestf("%s is not a value this module accepts", spec.Label)
+	}
+
+	switch spec.Type {
+	case "int":
+		if err := json.Unmarshal(value, &number); err == nil {
+			return nil
+		}
+		return errBadRequestf("%s must be a whole number", spec.Label)
+
+	case "bool":
+		if err := json.Unmarshal(value, &flag); err == nil {
+			return nil
+		}
+		return errBadRequestf("%s must be true or false", spec.Label)
+
+	case "string", "url":
+		if err := json.Unmarshal(value, &text); err == nil {
+			return nil
+		}
+		return errBadRequestf("%s must be text", spec.Label)
+
+	case "enum":
+		if err := json.Unmarshal(value, &text); err == nil {
+			for _, option := range spec.Options {
+				if option == text {
+					return nil
+				}
+			}
+			return errBadRequestf("%s must be one of: %s", spec.Label, strings.Join(spec.Options, ", "))
+		}
+		return errBadRequestf("%s must be one of: %s", spec.Label, strings.Join(spec.Options, ", "))
+
+	default:
+		return nil
+	}
 }
 
 func (s *Server) handleGetModuleSettings(w http.ResponseWriter, r *http.Request) {

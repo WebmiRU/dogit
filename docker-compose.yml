@@ -163,6 +163,14 @@ services:
       # host port; in production it is the module's own name on 443, which is what
       # the shared web server routes here.
       DOGIT_MODULE_PUBLIC_URL: ${DOGIT_REGISTRY_PUBLIC_URL:-http://127.0.0.1:8091}
+      # The project's own page reads images from this module, so the module has to
+      # answer a browser on the instance's address. Named explicitly rather than
+      # left open: the answer is per project, and the credential is short.
+      DOGIT_MODULE_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      # Written once, at registration: the module is published on a host port during
+      # development and on its own name in production, and the project's page has to
+      # be told which it is. An operator changes it in the module's settings.
+      DOGIT_REGISTRY_PUBLIC_ADDRESS: ${DOGIT_REGISTRY_PUBLIC_ADDRESS:-http://127.0.0.1:8091}
       DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
       REGISTRY_URL: http://registry:5000
       REGISTRY_STORAGE_DIR: /var/lib/registry

@@ -19,6 +19,10 @@ import (
 // end of, and the second attempt must finish the job rather than refuse.
 func uninstall(core *coreClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// The core may stop listening at any moment; every call below is made with
+		// this context so a removal stops rather than writing into nothing.
+		ctx := r.Context()
+
 		var body struct {
 			Options []string `json:"options"`
 		}
@@ -58,7 +62,7 @@ func uninstall(core *coreClient) http.HandlerFunc {
 		var freed int64
 
 		if purge {
-			repositories, bytesFreed, err := removeImages(r, say)
+			repositories, bytesFreed, err := removeImages(ctx, say)
 			if err != nil {
 				say(map[string]any{"level": "error", "message": err.Error()})
 				return
@@ -86,7 +90,7 @@ func uninstall(core *coreClient) http.HandlerFunc {
 			// only thing that knows how. Images are not in there, so this is not a
 			// way to delete any.
 			say(map[string]any{"message": "asking the core to drop the module database"})
-			if err := core.dropDatabase(r.Context()); err != nil {
+			if err := core.dropDatabase(ctx); err != nil {
 				say(map[string]any{"level": "error", "message": err.Error()})
 				return
 			}
@@ -105,10 +109,10 @@ func uninstall(core *coreClient) http.HandlerFunc {
 // driver's layout is not this module's to know, and deleting a blob behind a
 // running registry's back leaves it answering from a catalogue that no longer
 // matches anything on disk.
-func removeImages(r *http.Request, say func(map[string]any)) (repositories int, freed int64, err error) {
+func removeImages(ctx context.Context, say func(map[string]any)) (repositories int, freed int64, err error) {
 	client := &http.Client{Timeout: 2 * time.Minute}
 
-	catalogue, err := fetchCatalogue(r, client)
+	catalogue, err := fetchCatalogue(ctx, client)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -119,10 +123,10 @@ func removeImages(r *http.Request, say func(map[string]any)) (repositories int, 
 
 	for index, repository := range catalogue {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			// The core stopped listening. What was deleted stays deleted, and running
 			// on would mean writing into a connection nobody is reading.
-			return index, freed, r.Context().Err()
+			return index, freed, ctx.Err()
 		default:
 		}
 
@@ -131,7 +135,7 @@ func removeImages(r *http.Request, say func(map[string]any)) (repositories int, 
 			"progress": map[string]any{"done": index, "total": len(catalogue)},
 		})
 
-		bytesFreed, err := deleteRepository(r, client, repository)
+		bytesFreed, err := deleteRepository(ctx, client, repository)
 		if err != nil {
 			// One repository failing is reported and the rest are left alone: a
 			// half-finished removal that is visible is recoverable, and one that
@@ -152,8 +156,8 @@ func removeImages(r *http.Request, say func(map[string]any)) (repositories int, 
 	return repositories, freed, nil
 }
 
-func fetchCatalogue(r *http.Request, client *http.Client) ([]string, error) {
-	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
+func fetchCatalogue(ctx context.Context, client *http.Client) ([]string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimRight(upstreamURL, "/")+"/v2/_catalog?n=10000", nil)
 	if err != nil {
 		return nil, err
@@ -182,33 +186,33 @@ func fetchCatalogue(r *http.Request, client *http.Client) ([]string, error) {
 //
 // The registry specification has no "delete a repository": tags are deleted one at
 // a time, and the repository stops being listed once its last tag is gone.
-func deleteRepository(r *http.Request, client *http.Client, repository string) (int64, error) {
+func deleteRepository(ctx context.Context, client *http.Client, repository string) (int64, error) {
 	var freed int64
 
-	tags, err := fetchTags(r, client, repository)
+	tags, err := fetchTags(ctx, client, repository)
 	if err != nil {
 		return 0, err
 	}
 
 	for _, tag := range tags {
-		digest, err := manifestDigest(r, client, repository, tag)
+		digest, err := manifestDigest(ctx, client, repository, tag)
 		if err != nil {
 			return freed, err
 		}
 
-		bytesFreed := deleteManifest(r, client, repository, digest)
+		bytesFreed := deleteManifest(ctx, client, repository, digest)
 		freed += bytesFreed
 	}
 
 	// The digest itself, now that no tag points at it.
-	if err := deleteByDigest(r, client, repository, "manifests", ""); err != nil {
+	if err := deleteByDigest(ctx, client, repository, "manifests", ""); err != nil {
 		return freed, err
 	}
 	return freed, nil
 }
 
-func fetchTags(r *http.Request, client *http.Client, repository string) ([]string, error) {
-	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
+func fetchTags(ctx context.Context, client *http.Client, repository string) ([]string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		fmt.Sprintf("%s/v2/%s/tags/list?n=10000", strings.TrimRight(upstreamURL, "/"), repository), nil)
 	if err != nil {
 		return nil, err
@@ -239,18 +243,13 @@ func fetchTags(r *http.Request, client *http.Client, repository string) ([]strin
 // manifestDigest finds the digest behind a tag, which is what deleting a tag
 // means: the specification deletes by digest, and the tag is removed by deleting
 // what it pointed at.
-func manifestDigest(r *http.Request, client *http.Client, repository, tag string) (string, error) {
-	request, err := http.NewRequestWithContext(r.Context(), http.MethodHead,
+func manifestDigest(ctx context.Context, client *http.Client, repository, tag string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead,
 		fmt.Sprintf("%s/v2/%s/manifests/%s", strings.TrimRight(upstreamURL, "/"), repository, tag), nil)
 	if err != nil {
 		return "", err
 	}
-	request.Header.Set("Accept", strings.Join([]string{
-		"application/vnd.docker.distribution.manifest.v2+json",
-		"application/vnd.oci.image.manifest.v1+json",
-		"application/vnd.docker.distribution.manifest.list.v2+json",
-		"application/vnd.oci.image.index.v1+json",
-	}, ", "))
+	request.Header.Set("Accept", acceptManifests)
 
 	response, err := client.Do(request)
 	if err != nil {
@@ -265,19 +264,19 @@ func manifestDigest(r *http.Request, client *http.Client, repository, tag string
 	return response.Header.Get("Docker-Content-Digest"), nil
 }
 
-func deleteManifest(r *http.Request, client *http.Client, repository, digest string) int64 {
+func deleteManifest(ctx context.Context, client *http.Client, repository, digest string) int64 {
 	if digest == "" {
 		return 0
 	}
-	if err := deleteByDigest(r, client, repository, "manifests", digest); err != nil {
+	if err := deleteByDigest(ctx, client, repository, "manifests", digest); err != nil {
 		return 0
 	}
 	return 1
 }
 
-func deleteByDigest(r *http.Request, client *http.Client, repository, kind, digest string) error {
+func deleteByDigest(ctx context.Context, client *http.Client, repository, kind, digest string) error {
 	url := fmt.Sprintf("%s/v2/%s/%s/%s", strings.TrimRight(upstreamURL, "/"), repository, kind, digest)
-	request, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, url, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return err
 	}

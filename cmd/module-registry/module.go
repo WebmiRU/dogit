@@ -24,7 +24,11 @@ type config struct {
 	upstream          string
 	// publicURL is the address clients use, which is not the address the core uses.
 	publicURL string
-	interval  time.Duration
+	// publicAddress is the default of the module's public_address setting: a
+	// deployment knows at start-up where it publishes itself, and an administrator
+	// can still change it afterwards.
+	publicAddress string
+	interval      time.Duration
 }
 
 var errUnauthorized = errors.New("unauthorized")
@@ -161,8 +165,15 @@ func residentBytes() (int64, bool) {
 // handler is the module's own HTTP surface: the endpoints the core and Kubernetes
 // need, kept away from the registry paths so that nothing collides with an image
 // name.
-func handler(core *coreClient) *http.ServeMux {
+func handler(core *coreClient, registry *registry) *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// The project page lives on the instance's own name and asks this module at the
+	// name this module published, so the two are different origins by construction.
+	// The answer to that is a narrow allowance: only reads and deletes, and only from
+	// an origin the operator wrote down.
+	mux.Handle("/packages", cors(registry.packages))
+	mux.Handle("/packages/delete", cors(registry.deletePackage))
 
 	mux.HandleFunc("/-/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -176,7 +187,7 @@ func handler(core *coreClient) *http.ServeMux {
 	// The manifest, so an operator can inspect the module without reading the core.
 	mux.HandleFunc("/module/manifest", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(manifest())
+		_ = json.NewEncoder(w).Encode(manifest(""))
 	})
 
 	// Which project an image name belongs to, and what a caller may do to it.
@@ -202,10 +213,50 @@ func handler(core *coreClient) *http.ServeMux {
 		writeJSON(w, answer)
 	})
 
+	// What this project has, and removing one of them.
+	//
+	// A browser on the instance's own page asks here directly, at the address this
+	// module published, with a short credential the core minted for it. The
+	// alternative — the core calling the module on the browser's behalf — would need
+	// the core to hold a credential the module believes, and it deliberately keeps
+	// only hashes of everything it has.
+
 	// Removing the module, as the core asks for it.
 	mux.HandleFunc("/uninstall", uninstall(core))
 
 	return mux
+}
+
+// corsHeaders names the origins the module will answer a browser from.
+//
+// Empty by default. An operator sets it to the instance's own address, and until
+// they do the project page cannot read images — which is a visible, fixable state
+// rather than a silent hole opened to every site on the internet.
+func corsHeaders(core *coreClient) string {
+	return strings.TrimSpace(envOr("DOGIT_MODULE_ALLOWED_ORIGINS", ""))
+}
+
+// cors wraps a handler so a browser on the instance's page may read its answer.
+func cors(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			allowed := corsHeaders(nil)
+			if allowed == "*" || containsString(strings.Split(allowed, ","), origin) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Max-Age", "600")
+				// The answer is per request, not per origin: a token is in it, and a
+				// cached one would be served to the wrong page.
+				w.Header().Add("Vary", "Origin")
+			}
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, body any) {

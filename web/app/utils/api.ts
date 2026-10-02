@@ -93,7 +93,12 @@ export const api = {
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  delete: <T>(path: string, query?: RequestOptions['query']) =>
+    request<T>(path, { method: 'DELETE', query }),
+  // Named for the settings reset rather than reusing delete, so a call site that
+  // deletes a thing and one that resets a setting are not to be confused.
+  del: <T>(path: string, query?: RequestOptions['query']) =>
+    request<T>(path, { method: 'DELETE', query }),
 }
 
 /** Absolute URL for endpoints consumed outside the JSON client, such as raw files. */

@@ -136,6 +136,8 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Get("/modules/{integrationID}/stats", s.handleGetModuleStats)
 		authenticated.Get("/modules/{integrationID}/settings", s.handleGetModuleSettings)
 		authenticated.Put("/modules/{integrationID}/settings", s.handleSetModuleSettings)
+		authenticated.Put("/modules/{integrationID}/settings/bulk", s.handleSetModuleSettingsBulk)
+		authenticated.Delete("/modules/{integrationID}/settings", s.handleResetModuleSetting)
 
 		authenticated.Get("/admin/overview", s.handleAdminOverview)
 
@@ -190,6 +192,11 @@ func (s *Server) projectRoutes() chi.Router {
 	projects.Patch(base, s.handleUpdateProject)
 	projects.Delete(base, s.handleDeleteProject)
 	projects.Get(base+"/members", s.handleListProjectMembers)
+
+	// Images. The core does not store them: it decides whether the caller may see
+	// them and hands out a short credential the registry module recognises, and the
+	// page then asks the module at the address it published.
+	projects.Get(base+"/packages", s.handleProjectImages)
 
 	projects.Get(base+"/repository/tree", s.handleTree)
 	projects.Get(base+"/repository/file", s.handleFile)

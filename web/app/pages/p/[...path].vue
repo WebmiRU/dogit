@@ -213,20 +213,29 @@ async function switchRef(next: string) {
 }
 
 const tabs = computed(() => {
-  if (!project.value || repositoryIsEmpty.value) return []
+  if (!project.value) return []
   const base = `/p/${project.value.path}`
 
   // Every tab carries the ref, so a chosen branch does not reset when moving
   // between Code and Commits.
   const path = project.value.path
 
-  return [
+  // With no code yet there is nothing for the repository tabs to show, but a
+  // project can still have settings to change and images to push.
+  const codeTabs = repositoryIsEmpty.value ? [] : [
     { label: 'Code', to: repoViewUrl(path, 'tree', activeRef.value), match: 'tree' },
     { label: 'Commits', to: repoViewUrl(path, 'commits', activeRef.value), match: 'commits' },
     { label: 'Branches', to: repoViewUrl(path, 'branches', activeRef.value), match: 'branches' },
     { label: 'Tags', to: repoViewUrl(path, 'tags', activeRef.value), match: 'tags' },
     { label: 'Compare', to: repoViewUrl(path, 'compare', activeRef.value), match: 'compare' },
     { label: 'Merge requests', to: repoViewUrl(path, 'merge_requests', activeRef.value), match: 'merge_requests' },
+  ]
+
+  return [
+    ...codeTabs,
+    // Images live outside the repository: a branch has nothing to do with an image,
+    // and a tag that was never built has no page to show. So this one carries no ref.
+    { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
     { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
   ]
 })
@@ -279,7 +288,7 @@ async function copyCloneUrl() {
         </div>
       </div>
 
-      <nav v-if="!repositoryIsEmpty" class="repo-tabs">
+      <nav v-if="tabs.length" class="repo-tabs">
         <NuxtLink
           v-for="tab in tabs"
           :key="tab.match"
@@ -390,6 +399,10 @@ async function copyCloneUrl() {
           :path="restPath"
           :can-push="canPush"
           @change-ref="switchRef"
+        />
+        <ProjectPackages
+          v-else-if="view.name === 'packages'"
+          :project-path="project.path"
         />
         <RepositorySettings
           v-else-if="view.name === 'settings'"

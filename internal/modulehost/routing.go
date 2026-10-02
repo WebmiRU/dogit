@@ -27,6 +27,24 @@ import (
 // its own address. That is a normal thing for a module to be — a helper nobody
 // visits — and it is why "no address" is not an error here.
 func BaseURL(publicHost string, routing models.RoutingSpec) (string, bool) {
+	return BaseURLAs(publicHost, routing, "")
+}
+
+// BaseURLAs is BaseURL with an operator's override.
+//
+// An installation whose module answers on an address nobody can guess — a
+// development one publishing a port, a name behind something that terminates TLS —
+// needs to say so somewhere. It says it in the module's own settings, because that
+// is a place an operator is already looking, and an override that cannot be set
+// from the interface is an override nobody sets.
+func BaseURLAs(publicHost string, routing models.RoutingSpec, override string) (string, bool) {
+	if address := strings.TrimSpace(override); address != "" {
+		return strings.TrimRight(address, "/"), true
+	}
+	return baseURL(publicHost, routing)
+}
+
+func baseURL(publicHost string, routing models.RoutingSpec) (string, bool) {
 	domains := routing.PublicDomains(publicHost)
 
 	// A module that asked only for a prefix is served under the instance's own

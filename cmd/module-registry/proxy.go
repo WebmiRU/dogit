@@ -60,6 +60,11 @@ func newHandler(core *coreClient, upstream, endpoint string) http.Handler {
 	// fail with "unsupported protocol scheme".
 	registry.realm = strings.TrimRight(registry.endpoint, "/") + tokenPath
 
+	// Where the registry itself lives, for the parts of the module that speak to it
+	// directly: listing what it holds, describing a tag, removing one. The reverse
+	// proxy below does not go through this, but everything else does.
+	upstreamURL = upstream
+
 	proxied := registry.logging(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == tokenPath:
@@ -84,7 +89,7 @@ func newHandler(core *coreClient, upstream, endpoint string) http.Handler {
 
 	// The module's own endpoints are registered first, so a path like /-/health can
 	// never be read as an image name.
-	mux := handler(core)
+	mux := handler(core, registry)
 	// A request for /v2 with no trailing slash is the client checking the API
 	// version, and must reach the same place either way.
 	mux.Handle("/v2", proxied)

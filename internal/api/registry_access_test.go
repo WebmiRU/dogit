@@ -35,14 +35,17 @@ func setupRegistry(t *testing.T, level int) *registryFixture {
 			},
 			// Declared the way the registry module declares it: as a rule about the
 			// value, with the reason in its own words.
-			Settings: []models.SettingSpec{{
-				Key:         "image_name_template",
-				Label:       "Image name template",
-				Type:        "string",
-				Default:     "{{group}}/{{project}}",
-				MustContain: []string{"{{project}}"},
-				WhyContains: "an image name that does not contain its project cannot be traced back to one",
-			}},
+			Settings: []models.SettingSpec{
+				{
+					Key:         "image_name_template",
+					Label:       "Image name template",
+					Type:        "string",
+					Default:     "{{group}}/{{project}}",
+					MustContain: []string{"{{project}}"},
+					WhyContains: "an image name that does not contain its project cannot be traced back to one",
+				},
+				{Key: "read_timeout", Label: "Request timeout", Type: "int", Default: 300},
+			},
 		}); err != nil {
 		t.Fatalf("register the registry module: %v", err)
 	}

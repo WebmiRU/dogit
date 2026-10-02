@@ -53,6 +53,11 @@ func main() {
 	flag.StringVar(&cfg.upstream, "registry", envOr("REGISTRY_URL", defaultUpstream),
 		"address of the registry that stores the images")
 	flag.DurationVar(&cfg.interval, "heartbeat", 30*time.Second, "heartbeat interval")
+	// Written into the manifest's default rather than into the settings store: a
+	// deployment knows at start-up where it publishes itself, and the administrator
+	// can still change it in the interface afterwards.
+	flag.StringVar(&cfg.publicAddress, "public-address", envOr("DOGIT_REGISTRY_PUBLIC_ADDRESS", ""),
+		"default public address of this registry")
 	flag.StringVar(&cfg.publicURL, "public-url", envOr("DOGIT_MODULE_PUBLIC_URL", ""),
 		"address clients use to reach this module; the token endpoint is named by it")
 	flag.Parse()
@@ -69,7 +74,7 @@ func main() {
 
 	core := &coreClient{baseURL: strings.TrimRight(cfg.coreURL, "/")}
 
-	token, err := core.register(ctx, cfg.registrationToken, cfg.name, cfg.endpoint, manifest())
+	token, err := core.register(ctx, cfg.registrationToken, cfg.name, cfg.endpoint, manifest(cfg.publicAddress))
 	if err != nil {
 		log.Fatalf("module-registry: registration failed: %v", err)
 	}
@@ -80,7 +85,7 @@ func main() {
 	// The same call on recovery: a module that restarts comes back with a new
 	// address and must not appear as a second module.
 	register := func() error {
-		token, err := core.register(ctx, cfg.registrationToken, cfg.name, cfg.endpoint, manifest())
+		token, err := core.register(ctx, cfg.registrationToken, cfg.name, cfg.endpoint, manifest(cfg.publicAddress))
 		if err != nil {
 			return err
 		}
@@ -126,7 +131,7 @@ func main() {
 //
 // The wording here is the operator's: "delete all images" comes from the registry,
 // and the core that renders it has never heard of a layer.
-func manifest() map[string]any {
+func manifest(publicAddress string) map[string]any {
 	return map[string]any{
 		"version":     "0.1.0",
 		"description": "Container image registry, served on its own name on the instance's ports",
@@ -155,6 +160,13 @@ func manifest() map[string]any {
 				// to. Without it, two projects could push to the same name.
 				"default":     defaultImageName,
 				"description": "How a project path becomes the image name. {{project}} is required; {{group}} and {{branch}} are optional.",
+			},
+			{
+				"key":         "public_address",
+				"label":       "Public address",
+				"type":        "url",
+				"description": "Where clients actually reach this registry, when it is not derived from the instance's name. Set it when the proxy serves the module somewhere else — a published port during development, for instance.",
+				"default":     publicAddress,
 			},
 			{
 				"key":         "read_timeout",
