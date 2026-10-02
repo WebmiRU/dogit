@@ -19,9 +19,9 @@ git clone/push          browser                     CI jobs
   │   sshd     │      │ nginx / caddy│            │  runner    │
   │ (system)   │      │  static SPA  │            │ (separate  │
   └─────┬──────┘      └──────┬───────┘            │  service)  │
-        │ AuthorizedKeysCommand                    └─────┬──────┘
-        │ force-exec                                      │
-        ▼                                                ▼
+        │ AuthorizedKeysCommand                   └─────┬──────┘
+        │ force-exec                                    │
+        ▼                                               ▼
   ┌─────────────────┐        ┌────────────────────┐   ┌──────────┐
   │  dogit serve    │        │  dogit runner      │   │ postgres │
   │  HTTP + API     │◀────▶│                    │   │  19 beta │
