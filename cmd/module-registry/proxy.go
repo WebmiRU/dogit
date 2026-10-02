@@ -29,7 +29,7 @@ const (
 //
 // One port and one process, so an installation has a module to deploy rather than
 // two, and so the proxy can never be run without the module's own bookkeeping.
-func newHandler(core *coreClient, upstream string) http.Handler {
+func newHandler(core *coreClient, upstream, endpoint string) http.Handler {
 	target, err := url.Parse(upstream)
 	if err != nil {
 		log.Fatalf("module-registry: the registry address %q is not a URL: %v", upstream, err)
@@ -37,6 +37,7 @@ func newHandler(core *coreClient, upstream string) http.Handler {
 
 	registry := &registry{
 		core:      core,
+		endpoint:  endpoint,
 		imageName: defaultImageName,
 	}
 
@@ -54,8 +55,16 @@ func newHandler(core *coreClient, upstream string) http.Handler {
 	}
 	proxy.FlushInterval = -1 // stream responses as they arrive
 
+	// The realm is where a client is told to get a token, and it has to be an
+	// address it can fetch: a name that is not a URL makes every docker client
+	// fail with "unsupported protocol scheme".
+	registry.realm = strings.TrimRight(registry.endpoint, "/") + tokenPath
+
 	proxied := registry.logging(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == tokenPath:
+			registry.serveToken(w, r)
+
 		case r.URL.Path == apiVersionPath || r.URL.Path == apiVersionRoot:
 			// The version check. A client does this first, before it has a repository
 			// and sometimes before it has credentials, so it is answered here
@@ -95,7 +104,7 @@ func (registry *registry) guard(next http.Handler) http.Handler {
 		if token == "" {
 			// No credential at all. The standard answer, with the challenge a client
 			// needs to go and get one.
-			w.Header().Set("WWW-Authenticate", `Bearer realm="dogit",service="dogit-registry"`)
+			w.Header().Set("WWW-Authenticate", registry.challenge())
 			registryError(w, http.StatusUnauthorized, "authentication_required",
 				"this registry requires a dogit account")
 			return
@@ -150,7 +159,7 @@ func (registry *registry) deny(w http.ResponseWriter, r *http.Request, answer re
 	log.Printf("module-registry: refused %s on %s (%s, level %d, needs %d)",
 		r.Method, owner, answer.Reason, answer.Level, answer.Minimum)
 
-	w.Header().Set("WWW-Authenticate", `Bearer realm="dogit",service="dogit-registry",error="insufficient_scope"`)
+	w.Header().Set("WWW-Authenticate", registry.challenge()+`,error="insufficient_scope"`)
 	registryError(w, http.StatusForbidden, answer.Reason, describeRefusal(answer, owner))
 }
 
@@ -160,6 +169,13 @@ func describeRefusal(answer registryAccess, owner string) string {
 		return "the account this login belongs to no longer exists"
 	case "not_permitted":
 		return fmt.Sprintf("you do not have rights on %s", owner)
+	case "no_such_project":
+		// The project is not named. Saying "you may not" would confirm it is there,
+		// and a registry is an unusually easy place to enumerate every project on
+		// the instance by asking whether you may pull from each.
+		return "no such repository"
+	case "module_forbidden":
+		return "this registry is not accepting requests"
 	default:
 		return fmt.Sprintf("not allowed to do that on %s", owner)
 	}
@@ -254,7 +270,7 @@ func (registry *registry) ownerOf(ctx context.Context, name string) (string, err
 func (registry *registry) serveCatalog(w http.ResponseWriter, r *http.Request, upstream http.Handler) {
 	token := bearerToken(r)
 	if token == "" {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="dogit",service="dogit-registry"`)
+		w.Header().Set("WWW-Authenticate", registry.challenge())
 		registryError(w, http.StatusUnauthorized, "authentication_required",
 			"this registry requires a dogit account")
 		return
@@ -275,9 +291,94 @@ func (registry *registry) serveCatalog(w http.ResponseWriter, r *http.Request, u
 	upstream.ServeHTTP(w, r)
 }
 
+// tokenPath is where a client fetches a credential from, as the challenge tells
+// it to.
+const tokenPath = "/v2/token"
+
+// challenge is the header that starts a login.
+//
+// It names the realm as an address rather than as a name: a client that cannot
+// parse it will not retry with credentials, and the user is left with a failure
+// where there was only an answer to give.
+func (registry *registry) challenge() string {
+	return fmt.Sprintf(`Bearer realm=%q,service="dogit-registry"`, registry.realm)
+}
+
+// serveToken signs a registry client in.
+//
+// The client sends the account's own credentials here, and they go straight to
+// the core: the core is where passwords are checked, and a module that checked
+// them would have to keep a copy of every hash to do it. What comes back is a
+// short-lived token scoped to the one repository the client asked about.
+func (registry *registry) serveToken(w http.ResponseWriter, r *http.Request) {
+	login, password, ok := r.BasicAuth()
+	if !ok {
+		registryError(w, http.StatusUnauthorized, "authentication_required", "an account is required")
+		return
+	}
+
+	project, scopes := parseScope(r.URL.Query().Get("scope"))
+	if project == "" {
+		registryError(w, http.StatusBadRequest, "no_such_project", "no repository was asked for")
+		return
+	}
+
+	token, username, err := registry.core.signIn(r.Context(), login, password, project, scopes)
+	if err != nil {
+		registryError(w, http.StatusUnauthorized, "authentication_required", "invalid login or password")
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"token":        token,
+		"access_token": token,
+		"expires_in":   900,
+		"username":     username,
+	})
+}
+
+// parseScope reads what a client asked for.
+//
+// A client asks in the form "repository:<name>:pull,push", once per repository.
+// Several are allowed and all are honoured: a login that pulls from one project
+// and pushes to another should not need a second round trip.
+func parseScope(raw string) (project string, scopes []string) {
+	seen := map[string]bool{}
+
+	for _, entry := range strings.Fields(raw) {
+		parts := strings.SplitN(entry, ":", 3)
+		if len(parts) != 3 || parts[0] != "repository" {
+			continue
+		}
+		if project == "" {
+			project = parts[1]
+		}
+		for _, action := range strings.Split(parts[2], ",") {
+			seen[action] = true
+		}
+	}
+
+	for _, action := range []string{"pull", "push", "delete"} {
+		if seen[action] {
+			scopes = append(scopes, action)
+		}
+	}
+	if len(scopes) == 0 {
+		scopes = []string{"pull"}
+	}
+	return project, scopes
+}
+
 // registry keeps what one instance of this module knows.
 type registry struct {
 	core *coreClient
+
+	// realm is where a client is sent to get a credential.
+	realm string
+
+	// endpoint is the address this module advertised to the core, which is also the
+	// one a client can reach: it is what a client is told to fetch tokens from.
+	endpoint string
 
 	mu        sync.RWMutex
 	imageName string

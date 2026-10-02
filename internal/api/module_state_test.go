@@ -83,7 +83,9 @@ func newModuleFixture(t *testing.T) *moduleFixture {
 
 	st := dbtest.Open(t)
 	admin := dbtest.NewUser(t, st, "module-admin", true)
-	plain := dbtest.NewUser(t, st, "module-user", false)
+	// The password is real because some tests sign in rather than holding a
+	// session: anything that goes through the API's own credential check.
+	plain := dbtest.NewUserWithPassword(t, st, "module-user", "secret123", false)
 
 	integration, rawModuleToken, _ := registerModule(t, st, "registry:docker")
 	userHash := mintToken(t, st, integration, plain, "user-token-value")

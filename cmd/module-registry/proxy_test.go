@@ -87,7 +87,7 @@ func TestProxyRefusesWithoutCredentials(t *testing.T) {
 	defer upstream.Close()
 
 	core := &coreClient{baseURL: "http://core.invalid"}
-	handler := newHandler(core, upstream.URL)
+	handler := newHandler(core, upstream.URL, "http://registry.test")
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/grp1/prj1/tags/list", nil)
 	recorder := httptest.NewRecorder()
@@ -96,7 +96,10 @@ func TestProxyRefusesWithoutCredentials(t *testing.T) {
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status %d, want 401", recorder.Code)
 	}
-	if challenge := recorder.Header().Get("WWW-Authenticate"); !strings.Contains(challenge, `realm="dogit"`) {
+	// The realm has to be an address the client can fetch from. A bare name reads
+	// as a relative path, and every docker client answers that with "unsupported
+	// protocol scheme" — a failure that looks like a network problem and is not.
+	if challenge := recorder.Header().Get("WWW-Authenticate"); !strings.Contains(challenge, `realm="http://`) {
 		t.Errorf("no challenge a client can act on: %q", challenge)
 	}
 }
@@ -109,7 +112,7 @@ func TestVersionCheckIsAnsweredWithoutCredentials(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler := newHandler(&coreClient{baseURL: "http://core.invalid"}, upstream.URL)
+	handler := newHandler(&coreClient{baseURL: "http://core.invalid"}, upstream.URL, "http://registry.test")
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/", nil)
 	recorder := httptest.NewRecorder()
@@ -177,7 +180,7 @@ func TestUserTokenIsStrippedBeforeTheRegistry(t *testing.T) {
 	})}
 	core.token = "module-token"
 
-	handler := newHandler(core, upstream.URL)
+	handler := newHandler(core, upstream.URL, "http://registry.test")
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/grp1/prj1/tags/list", nil)
 	request.Header.Set("Authorization", "Bearer user's-secret-token")
@@ -206,7 +209,7 @@ func TestAnUnknownImageNameBelongsToNobody(t *testing.T) {
 	})}
 	core.token = "module-token"
 
-	handler := newHandler(core, upstream.URL)
+	handler := newHandler(core, upstream.URL, "http://registry.test")
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/someone/elses-image/tags/list", nil)
 	request.Header.Set("Authorization", "Bearer a-token")
@@ -244,7 +247,7 @@ func TestTheCoreIsAskedWhichProjectAnImageBelongsTo(t *testing.T) {
 	})}
 	core.token = "module-token"
 
-	handler := newHandler(core, upstream.URL)
+	handler := newHandler(core, upstream.URL, "http://registry.test")
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/grp1/prj1/tags/list", nil)
 	request.Header.Set("Authorization", "Bearer a-token")

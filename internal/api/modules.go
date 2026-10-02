@@ -536,10 +536,31 @@ func (s *Server) handleMintModuleToken(w http.ResponseWriter, r *http.Request) {
 		ttl = moduleTokenTTL
 	}
 
-	plaintext, hash, err := auth.GenerateToken()
+	plaintext, _, err := s.mintModuleToken(r, user, integration, projectID, scopes, ttl)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+
+	s.writeJSON(w, r, http.StatusCreated, map[string]any{
+		"token":      plaintext,
+		"scopes":     scopes,
+		"expires_at": time.Now().Add(ttl).Format(time.RFC3339),
+		"kind":       integration.Kind,
+	})
+}
+
+// mintModuleToken creates a short-lived credential a module will accept.
+//
+// One place mints them, for every route that issues one, so a registry login and
+// an explicit token request cannot drift apart in how long a credential lasts or
+// what it carries.
+func (s *Server) mintModuleToken(r *http.Request, user *models.User, integration *models.Integration,
+	projectID *uuid.UUID, scopes []string, ttl time.Duration) (string, *models.IntegrationToken, error) {
+
+	plaintext, hash, err := auth.GenerateToken()
+	if err != nil {
+		return "", nil, err
 	}
 
 	token := &models.IntegrationToken{
@@ -550,16 +571,9 @@ func (s *Server) handleMintModuleToken(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:     time.Now().Add(ttl),
 	}
 	if err := s.store.IntegrationTokens().Create(r.Context(), token, hash); err != nil {
-		s.writeError(w, r, err)
-		return
+		return "", nil, err
 	}
-
-	s.writeJSON(w, r, http.StatusCreated, map[string]any{
-		"token":      plaintext,
-		"scopes":     scopes,
-		"expires_at": token.ExpiresAt.Format(time.RFC3339),
-		"kind":       integration.Kind,
-	})
+	return plaintext, token, nil
 }
 
 // handleIntrospect answers a module's question "who is presenting this token?".

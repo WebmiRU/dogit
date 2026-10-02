@@ -96,6 +96,7 @@ func (s *Server) Register(r chi.Router) {
 	moduleRoutes.Get("/settings", s.handleModuleSelfSettings)
 	moduleRoutes.Post("/registry/access", s.handleRegistryAccess)
 	moduleRoutes.Post("/registry/resolve", s.handleRegistryResolve)
+	moduleRoutes.Post("/registry/authenticate", s.handleRegistryAuthenticate)
 	moduleRoutes.Post("/database/drop", s.handleModuleDropDatabase)
 	r.Route("/module", func(m chi.Router) {
 		m.Mount("/", moduleRoutes)

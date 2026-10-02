@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/ewolf/dogit/internal/auth"
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/store"
 )
@@ -125,6 +127,156 @@ func (s *Server) handleRegistryAccess(w http.ResponseWriter, r *http.Request) {
 			"path": project.Path,
 		},
 	})
+}
+
+// handleRegistryAuthenticate signs a registry client in.
+//
+// A registry client is a program with its own idea of how to log in: it reads a
+// challenge, fetches a token from the realm the challenge names, and presents that
+// token afterwards. So the instance needs a realm it can be pointed at, and this
+// is it.
+//
+// The password arrives here rather than at the module, which is the only place it
+// could honestly be checked: the core owns identity, and a module that verified
+// passwords would have to keep a copy of every hash to do it.
+func (s *Server) handleRegistryAuthenticate(w http.ResponseWriter, r *http.Request) {
+	integration := integrationFrom(r.Context())
+
+	var req struct {
+		Login    string `json:"login"`
+		Password string `json:"password"`
+		// Project and Scopes come from the scope the client asked for, which is how
+		// a docker login becomes access to one repository rather than to everything.
+		Project string   `json:"project"`
+		Scopes  []string `json:"scopes"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	user, err := s.authenticateLogin(r, req.Login, req.Password)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// The same wording and roughly the same work for an account that does not
+			// exist, so the answer does not say which accounts are real.
+			auth.VerifyPassword(req.Password, dummyHash)
+		}
+		s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
+			"errors": []map[string]string{{
+				"code": "UNAUTHORIZED", "message": "invalid login or password",
+			}},
+		})
+		return
+	}
+
+	path := strings.Trim(req.Project, "/")
+	if path == "" {
+		s.writeError(w, r, errBadRequest("a project is required"))
+		return
+	}
+
+	project, err := s.store.Projects().ByPath(r.Context(), path)
+	if err != nil {
+		s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
+			"errors": []map[string]string{{
+				"code": "UNAUTHORIZED", "message": "invalid login or password",
+			}},
+		})
+		return
+	}
+
+	// No rights at all means no credential either. Minting one would leave a token
+	// lying around for a caller who can do nothing with it, and every later request
+	// with it would be a request the core has to refuse again.
+	level, err := s.store.Permissions().AccessLevel(r.Context(), user.ID, project.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if level < store.MinLevel[store.ActionRegistryPull] {
+		s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
+			"errors": []map[string]string{{
+				"code": "UNAUTHORIZED", "message": "invalid login or password",
+			}},
+		})
+		return
+	}
+
+	// A client may only ask for scopes this module declared and the caller holds.
+	scopes, err := filterScopes(integration, registryScopes(req.Scopes))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	// The token is short: it only has to survive the pull or push it was minted
+	// for, and a credential that outlives it would keep working after the rights
+	// behind it were taken away.
+	token, _, err := s.mintModuleToken(r, user, integration, &project.ID, scopes, moduleTokenTTL)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"token":        token,
+		"access_token": token,
+		"expires_in":   int(moduleTokenTTL.Seconds()),
+		"username":     user.Username,
+	})
+}
+
+// authenticateLogin checks a login and password the one way that is meaningful.
+func (s *Server) authenticateLogin(r *http.Request, login, password string) (*models.User, error) {
+	if login == "" || password == "" {
+		return nil, store.ErrNotFound
+	}
+
+	user, err := s.findUserByLogin(r, login)
+	if err != nil {
+		return nil, err
+	}
+	if !auth.VerifyPassword(password, user.PasswordHash) {
+		return nil, store.ErrNotFound
+	}
+	return user, nil
+}
+
+// registryScopes turns what a client asked for into scopes this module knows.
+//
+// A client sends "repository:name:pull,push"; anything it does not understand is
+// dropped rather than honoured, and a request for a scope the module never
+// declared cannot widen what it may do.
+func registryScopes(requested []string) []string {
+	if len(requested) == 0 {
+		return []string{models.ScopeRegistryPull, models.ScopeRegistryPush}
+	}
+
+	wanted := map[string]bool{}
+	for _, scope := range requested {
+		switch scope {
+		case "pull":
+			wanted[models.ScopeRegistryPull] = true
+		case "push":
+			wanted[models.ScopeRegistryPush] = true
+		case "delete":
+			wanted[models.ScopeRegistryDelete] = true
+		}
+	}
+
+	out := []string{}
+	for _, scope := range []string{
+		models.ScopeRegistryPull, models.ScopeRegistryPush, models.ScopeRegistryDelete,
+	} {
+		if wanted[scope] {
+			out = append(out, scope)
+		}
+	}
+	if len(out) == 0 {
+		return []string{models.ScopeRegistryPull}
+	}
+	return out
 }
 
 // handleRegistryResolve answers the other half of a registry's question: which

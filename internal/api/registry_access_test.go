@@ -230,3 +230,104 @@ func TestRegistryAccessStopsWhenTheModuleIsForbidden(t *testing.T) {
 		t.Fatalf("a forbidden module was answered: %s", recorder.Body.String())
 	}
 }
+
+// A registry login is a way of getting a credential, so somebody with no rights
+// on the project must not be able to walk out with one — every later request with
+// it would be a request the core has to refuse again.
+func TestRegistryLoginNeedsSomeRights(t *testing.T) {
+	rf := setupRegistry(t, 0)
+
+	body := `{"login":"` + rf.plain.Username + `","password":"irrelevant",` +
+		`"project":` + mustJSON(rf.project.Path) + `,"scopes":["pull"]}`
+	recorder := rf.asModule(t, rf.moduleToken, "/module/registry/authenticate", body)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401: a credential was minted for somebody with no rights", recorder.Code)
+	}
+	// The refusal must not confirm the project exists.
+	if strings.Contains(recorder.Body.String(), rf.project.Path) {
+		t.Errorf("the refusal names the project: %s", recorder.Body.String())
+	}
+
+	// With rights, the same request produces a credential.
+	dbtest.GrantRole(t, rf.store, rf.project.ID, rf.plain.ID, models.AccessLevelReporter, "reader")
+
+	body = `{"login":"` + rf.plain.Username + `","password":"secret123",` +
+		`"project":` + mustJSON(rf.project.Path) + `,"scopes":["pull"]}`
+	recorder = rf.asModule(t, rf.moduleToken, "/module/registry/authenticate", body)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", recorder.Code, recorder.Body.String())
+	}
+
+	var answer struct {
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+		Username    string `json:"username"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Both spellings are returned because registry clients read different ones, and
+	// a client that finds neither will fail with something unhelpful.
+	if answer.Token == "" || answer.AccessToken == "" {
+		t.Error("the credential is missing under one of the names clients read")
+	}
+	if answer.Token != answer.AccessToken {
+		t.Error("the two names are for different credentials")
+	}
+	if answer.ExpiresIn <= 0 {
+		t.Error("the credential has no lifetime")
+	}
+}
+
+// A wrong password is refused with the same wording as an account that does not
+// exist, and without confirming which of the two it was.
+func TestRegistryLoginRefusesWithoutSayingWhy(t *testing.T) {
+	rf := setupRegistry(t, models.AccessLevelDeveloper)
+
+	for _, body := range []string{
+		`{"login":"` + rf.plain.Username + `","password":"wrong","project":"/"}`,
+		`{"login":"nobody","password":"secret123","project":"/"}`,
+	} {
+		recorder := rf.asModule(t, rf.moduleToken, "/module/registry/authenticate", body)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("status %d, want 401 for %s", recorder.Code, body)
+		}
+		if !strings.Contains(recorder.Body.String(), "invalid login or password") {
+			t.Errorf("the refusal says more than it should: %s", recorder.Body.String())
+		}
+	}
+}
+
+// A client may only ask for what the module understands. An unrecognised scope is
+// dropped, never honoured.
+func TestRegistryScopesAreNarrowedToWhatTheModuleDeclared(t *testing.T) {
+	cases := []struct {
+		requested []string
+		want      []string
+	}{
+		{nil, []string{models.ScopeRegistryPull, models.ScopeRegistryPush}},
+		{[]string{"pull"}, []string{models.ScopeRegistryPull}},
+		{[]string{"pull", "push"}, []string{models.ScopeRegistryPull, models.ScopeRegistryPush}},
+		{[]string{"push", "delete"}, []string{models.ScopeRegistryPush, models.ScopeRegistryDelete}},
+		// Anything unrecognised is dropped; what is left is what the module declared.
+		{[]string{"admin", "root"}, []string{models.ScopeRegistryPull}},
+	}
+
+	for _, tc := range cases {
+		got := registryScopes(tc.requested)
+		if len(got) != len(tc.want) {
+			t.Errorf("%v gave %v, want %v", tc.requested, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%v gave %v, want %v", tc.requested, got, tc.want)
+				break
+			}
+		}
+	}
+}

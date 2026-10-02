@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ewolf/dogit/internal/auth"
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/store"
 )
@@ -76,6 +77,26 @@ func NewUser(t *testing.T, st *store.Store, prefix string, admin bool) *models.U
 	t.Cleanup(func() {
 		_, _ = st.Pool().Exec(context.Background(), `DELETE FROM users WHERE id = $1`, user.ID)
 	})
+	return user
+}
+
+// NewUserWithPassword creates a user whose password is actually set.
+//
+// Some tests need to log in rather than to hold a session: anything that goes
+// through the API's own credential check, such as a registry client signing in.
+func NewUserWithPassword(t *testing.T, st *store.Store, prefix, password string, admin bool) *models.User {
+	t.Helper()
+
+	user := NewUser(t, st, prefix, admin)
+
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatalf("hash the password: %v", err)
+	}
+	if _, err := st.Pool().Exec(context.Background(),
+		`UPDATE users SET password_hash = $2 WHERE id = $1`, user.ID, hash); err != nil {
+		t.Fatalf("set the password: %v", err)
+	}
 	return user
 }
 

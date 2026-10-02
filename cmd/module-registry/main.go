@@ -53,6 +53,8 @@ func main() {
 	flag.StringVar(&cfg.upstream, "registry", envOr("REGISTRY_URL", defaultUpstream),
 		"address of the registry that stores the images")
 	flag.DurationVar(&cfg.interval, "heartbeat", 30*time.Second, "heartbeat interval")
+	flag.StringVar(&cfg.publicURL, "public-url", envOr("DOGIT_MODULE_PUBLIC_URL", ""),
+		"address clients use to reach this module; the token endpoint is named by it")
 	flag.Parse()
 
 	if cfg.registrationToken == "" {
@@ -89,9 +91,17 @@ func main() {
 
 	go heartbeat(ctx, core, cfg.interval, register)
 
+	// The address a client is told to fetch tokens from has to be one the client can
+	// resolve. The address the core uses is the internal one, which a docker client
+	// on somebody's laptop cannot reach; an installation that has both sets both.
+	public := cfg.publicURL
+	if public == "" {
+		public = cfg.endpoint
+	}
+
 	server := &http.Server{
 		Addr:              cfg.listen,
-		Handler:           newHandler(core, cfg.upstream),
+		Handler:           newHandler(core, cfg.upstream, public),
 		ReadHeaderTimeout: 10 * time.Second,
 		// A layer is uploaded as one long request, and a manifest is read as a
 		// stream. The defaults are tuned for forms and time them both out.
@@ -360,6 +370,46 @@ func (c *coreClient) resolveImage(ctx context.Context, name string) (string, err
 		return "", err
 	}
 	return answer.Project, nil
+}
+
+// signIn exchanges an account's credentials for a token scoped to one repository.
+//
+// The password is checked by the core and kept nowhere: this module has no user
+// store, no hash to compare against and nothing to forget to purge.
+func (c *coreClient) signIn(ctx context.Context, login, password, project string, scopes []string) (string, string, error) {
+	body, err := json.Marshal(map[string]any{
+		"login": login, "password": password, "project": project, "scopes": scopes,
+	})
+	if err != nil {
+		return "", "", err
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/api/v1/module/registry/authenticate", strings.NewReader(string(body)))
+	if err != nil {
+		return "", "", err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+c.token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return "", "", err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("core refused the login with %d", response.StatusCode)
+	}
+
+	var answer struct {
+		Token    string `json:"token"`
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&answer); err != nil {
+		return "", "", err
+	}
+	return answer.Token, answer.Username, nil
 }
 
 // effectiveSettings asks what this module is configured to do for a project.

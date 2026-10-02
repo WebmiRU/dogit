@@ -22,7 +22,9 @@ type config struct {
 	name              string
 	listen            string
 	upstream          string
-	interval          time.Duration
+	// publicURL is the address clients use, which is not the address the core uses.
+	publicURL string
+	interval  time.Duration
 }
 
 var errUnauthorized = errors.New("unauthorized")

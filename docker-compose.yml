@@ -131,6 +131,49 @@ services:
     volumes:
       - dogit-routes:/etc/nginx/dogit-modules
 
+  # The registry: an authorisation proxy in front of registry:2.
+  #
+  # Two services because they are two things. The proxy decides who may push what,
+  # and needs nothing but the core; the registry stores bytes and knows nothing
+  # about anybody. Splitting them is what lets the proxy be restarted or replaced
+  # without touching the images, and the images survive the proxy being down.
+  registry:
+    image: registry:2
+    restart: unless-stopped
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - dogit-registry:/var/lib/registry
+
+  module-registry:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-registry"]
+    depends_on:
+      app:
+        condition: service_healthy
+      registry:
+        condition: service_started
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-registry:8091
+      # The address a docker client uses. During development it is the published
+      # host port; in production it is the module's own name on 443, which is what
+      # the shared web server routes here.
+      DOGIT_MODULE_PUBLIC_URL: ${DOGIT_REGISTRY_PUBLIC_URL:-http://127.0.0.1:8091}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      REGISTRY_URL: http://registry:5000
+      REGISTRY_STORAGE_DIR: /var/lib/registry
+      # Published to the host during development. In production the module is
+      # reached through the shared web server on 80/443, under a name of its own.
+      DOGIT_MODULE_LISTEN: ":8091"
+    ports:
+      - "127.0.0.1:8091:8091"
+    volumes:
+      - dogit-registry:/var/lib/registry:ro
+
   # Reference implementation of the module protocol. It has no product
   # behaviour: it exists to prove that registration, heartbeats and
   # introspection work before the real modules are built.
@@ -194,3 +237,6 @@ volumes:
   # The demo module's cache. A volume of its own so that what it reports about
   # disk usage is about something real.
   dogit-module-cache:
+  # The images themselves, shared between the registry that writes them and the
+  # module that reports how much of the disk they take.
+  dogit-registry:
