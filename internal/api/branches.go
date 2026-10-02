@@ -70,7 +70,11 @@ func (s *Server) handleDeleteBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimSpace(pathParam(r, "name"))
+	name, err := refParam(r, "name")
+	if err != nil {
+		s.writeError(w, r, errBadRequest(err.Error()))
+		return
+	}
 	if err := validateBranchName(name); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -153,7 +157,11 @@ func (s *Server) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimSpace(pathParam(r, "name"))
+	name, err := refParam(r, "name")
+	if err != nil {
+		s.writeError(w, r, errBadRequest(err.Error()))
+		return
+	}
 	if err := validateTagName(name); err != nil {
 		s.writeError(w, r, err)
 		return

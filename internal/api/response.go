@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -139,6 +141,25 @@ func decodeJSON(r *http.Request, dst any) error {
 // pathParam returns a URL path parameter.
 func pathParam(r *http.Request, name string) string {
 	return chi.URLParam(r, name)
+}
+
+// refParam returns a branch or tag name taken from the path, decoded.
+//
+// A slash is legal inside a branch name, so every client sends "feature/thing"
+// percent-encoded. chi hands the segment back exactly as it appeared on the wire,
+// so without decoding the handler sees "feature%2Fthing" and rejects a name that
+// was perfectly valid.
+func refParam(r *http.Request, name string) (string, error) {
+	raw := pathParam(r, name)
+	if raw == "" {
+		return "", nil
+	}
+
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("%s is not a valid reference name", name)
+	}
+	return strings.TrimSpace(decoded), nil
 }
 
 func queryInt(r *http.Request, name string, def, max int) int {
