@@ -12,6 +12,7 @@ import (
 	"github.com/ewolf/dogit/internal/gitserver"
 	"github.com/ewolf/dogit/internal/hooks"
 	"github.com/ewolf/dogit/internal/hooks/postreceive"
+	"github.com/ewolf/dogit/internal/logger"
 )
 
 // ExitCode lets a subcommand end the process with a specific status, which git
@@ -60,6 +61,12 @@ func HookEntry(ctx context.Context, args []string) error {
 	if len(rest) > 1 {
 		username = rest[1]
 	}
+	// Optional third argument: the fingerprint of the key that authenticated,
+	// appended by AuthorizedKeysCommand so that key usage can be recorded.
+	fingerprint := ""
+	if len(rest) > 2 {
+		fingerprint = rest[2]
+	}
 	if username == "" {
 		username = os.Getenv("USER")
 	}
@@ -74,6 +81,17 @@ func HookEntry(ctx context.Context, args []string) error {
 		return exitCode(1)
 	}
 	defer a.Close()
+
+	// stderr here is the client's "remote:" stream, so this process logs at its
+	// own, quieter level.
+	a.Log = logger.SetLevel(a.Log, a.Cfg.HookLogLevel)
+
+	if fingerprint != "" {
+		// Best effort: a failed bookkeeping write must never block a push.
+		if err := a.Store.SSHKeys().TouchUsed(ctx, fingerprint); err != nil {
+			a.Log.Debug("record key usage", "fingerprint", fingerprint, "error", err)
+		}
+	}
 
 	srv := gitserver.New(a.Store, a.Cfg.RepoDir, a.Cfg.GitBinary, a.Cfg.HookBinary)
 	return exitCode(srv.Handle(ctx, originalCommand(), username, os.Stdin, os.Stdout, os.Stderr))
@@ -107,7 +125,7 @@ func AuthorizedKeys(ctx context.Context, args []string) error {
 
 	for _, k := range keys {
 		fmt.Fprintln(os.Stdout,
-			gitserver.AuthorizedKeyLine(k.Username, k.Key.PublicKey, a.Cfg.HookBinary))
+			gitserver.AuthorizedKeyLine(k.Username, k.Key.Fingerprint, k.Key.PublicKey, a.Cfg.HookBinary))
 	}
 	return nil
 }
@@ -150,6 +168,9 @@ func runPostReceive(ctx context.Context, args []string) error {
 		return nil
 	}
 	defer a.Close()
+
+	// The push already succeeded; keep the client's output clean.
+	a.Log = logger.SetLevel(a.Log, a.Cfg.HookLogLevel)
 
 	// The installed hook script passes the path; the SSH server passes the id.
 	if *projectID == "" {

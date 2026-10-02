@@ -173,12 +173,14 @@ func (s *Server) Handle(ctx context.Context, rawCommand, username string, stdin 
 // AuthorizedKeyLine renders one authorized_keys entry: the key with the
 // "restrict" option (no pty, no forwarding, no agent, no X11) and a forced
 // command that routes the connection back into dogit, naming the account the key
-// belongs to.
+// belongs to and the key itself.
 //
-//	restrict,command="/usr/local/bin/dogit-hook git alice" ssh-ed25519 AAAA... alice
+//	restrict,command="/usr/local/bin/dogit-hook git alice SHA256:abc" ssh-ed25519 AAAA...
 //
 // Every client logs in as the shared "git" account, so the real identity travels
-// in the forced command rather than in the login name.
-func AuthorizedKeyLine(username, publicKey, hookBinary string) string {
-	return fmt.Sprintf("restrict,command=%q %s", hookBinary+" git "+username, publicKey)
+// in the forced command rather than in the login name. The fingerprint rides
+// along for the same reason: it is what lets the server record which key was used,
+// which sshd does not expose to the command it runs.
+func AuthorizedKeyLine(username, fingerprint, publicKey, hookBinary string) string {
+	return fmt.Sprintf("restrict,command=%q %s", hookBinary+" git "+username+" "+fingerprint, publicKey)
 }

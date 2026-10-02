@@ -77,6 +77,9 @@ func (r *UserRepo) UpdateProfile(ctx context.Context, id uuid.UUID, name, email 
 	_, err := r.s.pool.Exec(ctx,
 		`UPDATE users SET name = $2, email = lower($3), updated_at = now() WHERE id = $1`,
 		id, name, strings.ToLower(email))
+	if IsUniqueViolation(err) {
+		return fmt.Errorf("%w: email already taken", ErrConflict)
+	}
 	return err
 }
 

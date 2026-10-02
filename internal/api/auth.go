@@ -178,6 +178,62 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusNoContent, nil)
 }
 
+type updateProfileRequest struct {
+	Name  *string `json:"name"`
+	Email *string `json:"email"`
+}
+
+// handleUpdateProfile changes the display name and email.
+//
+// The username and the password are deliberately not editable here: the username
+// is an identity that appears in URLs and commit metadata, and a password change
+// needs its own confirmation flow.
+func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+
+	var req updateProfileRequest
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	name := user.Name
+	if req.Name != nil {
+		name = strings.TrimSpace(*req.Name)
+		if len([]rune(name)) > 128 {
+			s.writeError(w, r, errBadRequest("the display name is too long"))
+			return
+		}
+	}
+
+	email := user.Email
+	if req.Email != nil {
+		email = strings.ToLower(strings.TrimSpace(*req.Email))
+		if email == "" || !strings.Contains(email, "@") {
+			s.writeError(w, r, errBadRequest("a valid email address is required"))
+			return
+		}
+	}
+
+	if name != user.Name || email != user.Email {
+		if err := s.store.Users().UpdateProfile(r.Context(), user.ID, name, email); err != nil {
+			if errors.Is(err, store.ErrConflict) {
+				s.writeError(w, r, errConflict("this email address is already in use"))
+				return
+			}
+			s.writeError(w, r, err)
+			return
+		}
+	}
+
+	updated, err := s.store.Users().ByID(r.Context(), user.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"user": updated})
+}
+
 func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 	s.writeJSON(w, r, http.StatusOK, s.currentUserPayload(r, user))

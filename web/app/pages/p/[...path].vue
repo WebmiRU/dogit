@@ -112,7 +112,8 @@ const cloneUrl = computed(() => project.value?.ssh_url ?? '')
 const copyState = ref('')
 async function copyCloneUrl() {
   try {
-    await navigator.clipboard.writeText(cloneUrl.value)
+    // The whole command is copied, because that is what the user then pastes.
+    await navigator.clipboard.writeText(`git clone ${cloneUrl.value}`)
     copyState.value = 'copied'
     setTimeout(() => (copyState.value = ''), 1500)
   } catch {
@@ -137,7 +138,8 @@ async function copyCloneUrl() {
           <p v-if="project.description" class="page-subtitle">{{ project.description }}</p>
         </div>
         <div class="repo-clone">
-          <span>{{ cloneUrl }}</span>
+          <span class="muted">git clone</span>
+          <span class="clone-url">{{ cloneUrl }}</span>
           <button class="btn" type="button" @click="copyCloneUrl">
             {{ copyState || 'Copy' }}
           </button>

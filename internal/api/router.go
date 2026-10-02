@@ -69,12 +69,16 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Use(s.authenticate)
 
 		authenticated.Get("/user", s.handleCurrentUser)
+		authenticated.Patch("/user", s.handleUpdateProfile)
 		authenticated.Get("/user/keys", s.handleListSSHKeys)
 		authenticated.Post("/user/keys", s.handleCreateSSHKey)
 		authenticated.Delete("/user/keys/{keyID}", s.handleDeleteSSHKey)
 		authenticated.Get("/user/tokens", s.handleListTokens)
 		authenticated.Post("/user/tokens", s.handleCreateToken)
 		authenticated.Delete("/user/tokens/{tokenID}", s.handleRevokeToken)
+
+		authenticated.Get("/dashboard", s.handleDashboard)
+		authenticated.Get("/admin/overview", s.handleAdminOverview)
 
 		authenticated.Get("/groups", s.handleListGroups)
 		authenticated.Post("/groups", s.handleCreateGroup)

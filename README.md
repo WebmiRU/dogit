@@ -104,10 +104,20 @@ cat ~/.ssh/id_ed25519.pub | docker compose exec -T app \
 Then:
 
 ```sh
-git clone ssh://git@localhost:2222/hello.git     # port 2222 in development
+git clone ssh://git@localhost:2222/hello.git
 ```
 
-In production publish port 22 and the URL becomes `git@host:hello.git`.
+During development the host already runs its own sshd on port 22, so dogit is
+published on 2222. To use the portless form, add a host entry to `~/.ssh/config`:
+
+```
+Host dogit
+    HostName localhost
+    Port 2222
+```
+
+and clone from `git@dogit:hello.git`. In production, publishing `22:22` makes
+`git@host:group/project.git` work directly.
 
 Useful commands:
 

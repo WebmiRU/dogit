@@ -10,7 +10,24 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
 
   devServer: {
+    // The dev server takes the port the production container uses, so the URL in
+    // the browser does not change between development and production. Run
+    // `docker compose up -d postgres app runner` while developing: the compose
+    // "web" service is only needed for the built frontend.
     port: 3000,
+  },
+
+  // Hot reload needs the API to be reachable from the dev server: without this
+  // proxy the SPA would request /api from itself and get the HTML shell back.
+  vite: {
+    server: {
+      proxy: {
+        '/api': {
+          target: 'http://localhost:8080',
+          changeOrigin: false,
+        },
+      },
+    },
   },
 
   runtimeConfig: {

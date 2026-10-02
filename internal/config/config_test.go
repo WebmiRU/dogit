@@ -44,6 +44,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" {
 		t.Errorf("HTTPAddr = %q, want :8080", cfg.HTTPAddr)
 	}
+	if got := cfg.CloneURL("group/hello"); got != "git@localhost:group/hello.git" {
+		t.Errorf("CloneURL() = %q, want the portless form on port 22", got)
+	}
 
 	// Derived paths must be filled in when not set explicitly.
 	if cfg.RepoDir != cfg.DataDir+"/repos" {
@@ -62,6 +65,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("DOGIT_SSH_HOST", "git.example.com")
 	t.Setenv("DOGIT_ENV", "production")
 	t.Setenv("DOGIT_RUNNER_CONCURRENCY", "8")
+	t.Setenv("DOGIT_SSH_PORT", "2222")
 
 	cfg, err := Load()
 	if err != nil {
@@ -75,6 +79,11 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	if cfg.RunnerConcurrency != 8 {
 		t.Errorf("RunnerConcurrency = %d, want 8", cfg.RunnerConcurrency)
+	}
+	// A non-standard port forces the ssh:// form: the scp-like syntax has nowhere
+	// to put a port, and a malformed URL is worse than a verbose one.
+	if got := cfg.CloneURL("hello"); got != "ssh://git@git.example.com:2222/hello.git" {
+		t.Errorf("CloneURL() = %q, want the ssh:// form with the port", got)
 	}
 }
 
@@ -122,6 +131,7 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"unknown log level", map[string]string{"DOGIT_LOG_LEVEL": "verbose"}},
 		{"zero concurrency", map[string]string{"DOGIT_RUNNER_CONCURRENCY": "0"}},
 		{"empty database url", map[string]string{"DOGIT_DATABASE_URL": " "}},
+		{"port out of range", map[string]string{"DOGIT_SSH_PORT": "70000"}},
 	}
 
 	for _, tc := range tests {
@@ -134,6 +144,22 @@ func TestValidateRejectsBadValues(t *testing.T) {
 				t.Error("expected validation to fail")
 			}
 		})
+	}
+}
+
+func TestCloneURLHandlesEdgeCases(t *testing.T) {
+	clearEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := cfg.CloneURL("/group/hello/"); got != "git@localhost:group/hello.git" {
+		t.Errorf("leading and trailing slashes are not trimmed: %q", got)
+	}
+	if got := cfg.CloneURL(""); got != "" {
+		t.Errorf("an empty path must produce an empty URL, got %q", got)
 	}
 }
 

@@ -51,12 +51,19 @@ type Config struct {
 	// HookBinary is the dogit-hook executable that OpenSSH force-executes.
 	HookBinary string
 	// SSHHost is the hostname shown in clone URLs.
-	SSHHost       string
+	SSHHost string
+	// SSHPort is the port clients connect to. It only appears in clone URLs when
+	// it is not the standard 22, which is the case during development.
+	SSHPort       int
 	GitAuthorName string
 	GitAuthorMail string
 	AuthTokenTTL  time.Duration
 	LogLevel      string
-	Environment   string
+	// HookLogLevel applies to the git entry points. Their stderr is the client's
+	// "remote:" stream, so they default to warnings even when the server logs at
+	// debug level.
+	HookLogLevel string
+	Environment  string
 }
 
 func Load() (*Config, error) {
@@ -83,11 +90,13 @@ func Load() (*Config, error) {
 		GitBinary:          env("DOGIT_GIT_BINARY", "git"),
 		HookBinary:         env("DOGIT_HOOK_BINARY", "dogit-hook"),
 		SSHHost:            env("DOGIT_SSH_HOST", "localhost"),
+		SSHPort:            envInt("DOGIT_SSH_PORT", 22),
 		GitAuthorName:      env("DOGIT_GIT_AUTHOR_NAME", "dogit"),
 		GitAuthorMail:      env("DOGIT_GIT_AUTHOR_MAIL", "dogit@localhost"),
 		AuthTokenTTL:       envDuration("DOGIT_AUTH_TOKEN_TTL", 720*time.Hour),
 		AllowedOrigins:     envList("DOGIT_ALLOWED_ORIGINS", defaultOrigins(env("DOGIT_ENV", "development"))),
 		LogLevel:           env("DOGIT_LOG_LEVEL", "info"),
+		HookLogLevel:       env("DOGIT_HOOK_LOG_LEVEL", "warn"),
 		Environment:        env("DOGIT_ENV", "development"),
 	}
 
@@ -117,16 +126,24 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("DOGIT_ENV: unknown environment %q (want development, test or production)", c.Environment)
 	}
-	switch c.LogLevel {
-	case "debug", "info", "warn", "error":
-	default:
-		return fmt.Errorf("DOGIT_LOG_LEVEL: unknown level %q (want debug, info, warn or error)", c.LogLevel)
+	for name, level := range map[string]string{
+		"DOGIT_LOG_LEVEL":      c.LogLevel,
+		"DOGIT_HOOK_LOG_LEVEL": c.HookLogLevel,
+	} {
+		switch level {
+		case "debug", "info", "warn", "error":
+		default:
+			return fmt.Errorf("%s: unknown level %q (want debug, info, warn or error)", name, level)
+		}
 	}
 	if strings.TrimSpace(c.DatabaseURL) == "" {
 		return fmt.Errorf("DOGIT_DATABASE_URL must not be empty")
 	}
 	if strings.TrimSpace(c.SSHHost) == "" {
 		return fmt.Errorf("DOGIT_SSH_HOST must not be empty")
+	}
+	if c.SSHPort < 1 || c.SSHPort > 65535 {
+		return fmt.Errorf("DOGIT_SSH_PORT must be between 1 and 65535")
 	}
 	if strings.TrimSpace(c.HookBinary) == "" {
 		return fmt.Errorf("DOGIT_HOOK_BINARY must not be empty")
@@ -135,6 +152,22 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("DOGIT_RUNNER_CONCURRENCY must be >= 1")
 	}
 	return nil
+}
+
+// CloneURL returns a copy-pasteable git clone URL for a project path.
+//
+// The scp-like form has no place for a port, so a non-standard port forces the
+// ssh:// form. Both are accepted by every git client; only one of them can be
+// correct for a given port.
+func (c *Config) CloneURL(projectPath string) string {
+	path := strings.Trim(projectPath, "/")
+	if path == "" {
+		return ""
+	}
+	if c.SSHPort == 22 {
+		return fmt.Sprintf("git@%s:%s.git", c.SSHHost, path)
+	}
+	return fmt.Sprintf("ssh://git@%s:%d/%s.git", c.SSHHost, c.SSHPort, path)
 }
 
 // IsProduction reports whether production-only safeguards should apply.

@@ -183,7 +183,7 @@ func Project(ctx context.Context, args []string) error {
 	fmt.Fprintf(os.Stdout, "created project %s\n", project.Path)
 	// The canonical clone URL: no port and no ssh:// prefix, because the system
 	// sshd terminates the connection.
-	fmt.Fprintf(os.Stdout, "  clone: git@%s:%s.git\n", a.Cfg.SSHHost, project.Path)
+	fmt.Fprintf(os.Stdout, "  clone: %s\n", a.Cfg.CloneURL(project.Path))
 	fmt.Fprintf(os.Stdout, "  path:  %s\n", svc.PathFor(project))
 	return nil
 }

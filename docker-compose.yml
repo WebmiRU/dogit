@@ -7,8 +7,10 @@
 #   docker compose exec app dogit user create --username alice --password secret123
 #   docker compose exec app dogit project create --path hello --owner alice
 #
-# For development the SSH port stays on 2222 to avoid clashing with the host's
-# own sshd. In production change it to "22:22" and terminate TLS elsewhere.
+# Git over SSH is published on host port 2222 because the host already runs its own
+# sshd on 22 while developing. Clone URLs therefore carry a port; the
+# ~/.ssh/config snippet below removes the need to type it. In production, publish
+# 22 instead ("22:22") and the canonical URL is git@host:group/project.git.
 
 name: dogit
 
@@ -47,6 +49,9 @@ services:
     environment:
       DOGIT_ENV: ${DOGIT_ENV:-development}
       DOGIT_LOG_LEVEL: ${DOGIT_LOG_LEVEL:-debug}
+      # Git hooks log to the pusher's terminal as "remote:" lines, so they stay
+      # quiet even when the server logs verbosely.
+      DOGIT_HOOK_LOG_LEVEL: ${DOGIT_HOOK_LOG_LEVEL:-warn}
       DOGIT_DATABASE_URL: postgres://${POSTGRES_USER:-dogit}:${POSTGRES_PASSWORD:-dogit}@postgres:5432/${POSTGRES_DB:-dogit}?sslmode=disable
       DOGIT_DATA_DIR: /data
       DOGIT_REPO_DIR: /data/repos
@@ -54,14 +59,17 @@ services:
       DOGIT_HTTP_ADDR: ":8080"
       DOGIT_HOOK_BINARY: /usr/local/bin/dogit-hook
       DOGIT_SSH_HOST: ${DOGIT_SSH_HOST:-localhost}
+      # Client-facing SSH port. It shows up in clone URLs because it is not 22
+      # during development; production publishes 22 and omits it.
+      DOGIT_SSH_PORT: ${DOGIT_SSH_PORT:-2222}
       DOGIT_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
       DOGIT_GIT_BINARY: /usr/bin/git
     volumes:
       - dogit-data:/data
     ports:
       - "127.0.0.1:8080:8080"
-      # Git over SSH. Development keeps 2222; production publishes 22.
-      - "127.0.0.1:2222:22"
+      # Git over SSH. Host port 2222 during development, 22 in production.
+      - "2222:22"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/-/ready"]
       interval: 10s

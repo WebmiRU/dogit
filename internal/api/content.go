@@ -138,7 +138,7 @@ func (s *Server) seedReadme(r *http.Request, project *models.Project) error {
 	content := "# " + project.Name + "\n\n" +
 		"This repository is empty apart from this file.\n\n" +
 		"Clone it and push your first commit:\n\n" +
-		"```\ngit clone " + projectSSHURL(s.cfg.SSHHost, project.Path) + "\n```\n"
+		"```\ngit clone " + s.cfg.CloneURL(project.Path) + "\n```\n"
 
 	_, tree, err := s.git.WriteBlobAndTree(r.Context(), repoDir, "", "README.md", []byte(content))
 	if err != nil {
@@ -166,5 +166,3 @@ func (s *Server) seedReadme(r *http.Request, project *models.Project) error {
 	}
 	return s.git.UpdateServerInfo(r.Context(), repoDir)
 }
-
-func projectSSHURL(host, path string) string { return "git@" + host + ":" + path + ".git" }

@@ -101,9 +101,13 @@ func TestResolveRepoStaysInsideRoot(t *testing.T) {
 }
 
 func TestAuthorizedKeyLineCarriesUsernameAndRestriction(t *testing.T) {
-	line := AuthorizedKeyLine("alice", "ssh-ed25519 AAAA... alice@laptop", "/usr/local/bin/dogit-hook")
+	line := AuthorizedKeyLine(
+		"alice", "SHA256:abc", "ssh-ed25519 AAAA... alice@laptop", "/usr/local/bin/dogit-hook",
+	)
 
-	want := `restrict,command="/usr/local/bin/dogit-hook git alice" ssh-ed25519 AAAA... alice@laptop`
+	// The forced command carries the username and the key fingerprint: sshd hands
+	// the command no other way to learn which key authenticated.
+	want := `restrict,command="/usr/local/bin/dogit-hook git alice SHA256:abc" ssh-ed25519 AAAA... alice@laptop`
 	if line != want {
 		t.Errorf("got  %q\nwant %q", line, want)
 	}

@@ -61,8 +61,9 @@ func (s *Server) projectToView(p *models.Project, level int) projectView {
 		RemoveSourceBranch:   p.RemoveSourceBranch,
 		AllowPipelineTrigger: p.AllowPipelineTrigger,
 
-		// No port in the SSH URL: the system sshd terminates the connection.
-		SSHURL:  "git@" + host + ":" + p.Path + ".git",
+		// The SSH URL is the canonical one: the system sshd terminates the
+		// connection, and the port appears only when it is not the standard 22.
+		SSHURL:  s.cfg.CloneURL(p.Path),
 		HTTPURL: "http://" + host + "/" + p.Path + ".git",
 		WebURL:  "/" + p.Path,
 

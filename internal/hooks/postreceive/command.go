@@ -56,14 +56,16 @@ func Run(ctx context.Context, st *store.Store, git *gitx.Git, bus *events.Bus, r
 		return err
 	}
 
-	log.Info("post-receive", "project", opts.ProjectPath, "refs", len(updates))
+	// Debug, not Info: this hook's stderr is the client's "remote:" stream, so
+	// anything logged here is shown to whoever pushed.
+	log.Debug("post-receive", "project", opts.ProjectPath, "refs", len(updates))
 
 	ranges := make([]hooks.CommitRange, 0, len(updates))
 	commits := []models.Commit{}
 
 	for _, u := range updates {
 		if u.IsDelete() {
-			log.Info("ref deleted", "ref", u.Ref, "project", opts.ProjectPath)
+			log.Debug("ref deleted", "ref", u.Ref, "project", opts.ProjectPath)
 			continue
 		}
 
@@ -81,7 +83,7 @@ func Run(ctx context.Context, st *store.Store, git *gitx.Git, bus *events.Bus, r
 		}
 
 		if snaps, err := git.SnapshotCommits(ctx, opts.RepoPath, cr.Shas); err != nil {
-			log.Warn("snapshot commits", "ref", u.Ref, "error", err)
+			log.Warn("post-receive: could not read commit metadata", "ref", u.Ref, "error", err)
 		} else {
 			for _, s := range snaps {
 				commits = append(commits, models.Commit{
@@ -101,13 +103,14 @@ func Run(ctx context.Context, st *store.Store, git *gitx.Git, bus *events.Bus, r
 		ranges = append(ranges, cr)
 	}
 
-	log.Info("post-receive snapshots", "commits", len(commits), "ranges", len(ranges))
+	log.Debug("post-receive snapshots", "commits", len(commits), "ranges", len(ranges))
 
 	if len(commits) > 0 {
 		if err := st.Commits().Upsert(ctx, commits); err != nil {
 			// Log and continue: the events below still fire, and the next push
 			// re-snapshots with ON CONFLICT DO NOTHING.
-			log.Error("store commit snapshots", "error", err, "count", len(commits))
+			log.Error("post-receive: could not store commit snapshots",
+				"error", err, "count", len(commits))
 		}
 	}
 
@@ -123,7 +126,7 @@ func Run(ctx context.Context, st *store.Store, git *gitx.Git, bus *events.Bus, r
 	}
 	if err := bus.Publish(ctx, models.EventPush, &projectID, actorUUID(opts.ActorID), payload); err != nil {
 		// Never fail the push because the event bus is unavailable.
-		log.Error("publish push event", "error", err)
+		log.Error("post-receive: could not publish the push event", "error", err)
 	}
 	return nil
 }
@@ -163,7 +166,8 @@ func newCommits(ctx context.Context, git *gitx.Git, repoPath, newSHA, oldSHA str
 	if err != nil {
 		// Returning an empty list means "nothing new recorded", which the caller
 		// treats as a no-op; the error itself is logged by the caller.
-		slog.Warn("rev-list failed", "repo", repoPath, "new", newSHA, "old", oldSHA, "error", err)
+		slog.Warn("post-receive: rev-list failed",
+			"repo", repoPath, "new", newSHA, "old", oldSHA, "error", err)
 		return nil
 	}
 

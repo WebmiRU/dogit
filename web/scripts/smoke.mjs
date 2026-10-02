@@ -82,11 +82,28 @@ try {
   ])
   await new Promise((resolve) => setTimeout(resolve, 800))
 
-  const signedIn = (await page.$('.topbar .user')) !== null
+  const signedIn = (await page.$('.avatar-button')) !== null
   check('signed in and redirected', signedIn, page.url())
 
-  // --- project list ----------------------------------------------------
+  // --- shell: sidebar navigation and dashboard -------------------------
+  check('sidebar is present', (await page.$('.sidebar')) !== null)
+
+  const navLabels = await page.$$eval('.nav-item', (items) =>
+    items.map((item) => (item.textContent ?? '').replace(/[^\p{L}/]+/gu, ' ').trim()),
+  )
+  for (const wanted of ['Dashboard', 'Projects', 'Groups', 'Merge requests', 'CI/CD']) {
+    check(`sidebar has "${wanted}"`, navLabels.some((label) => label.includes(wanted)), navLabels.join(' | '))
+  }
+
   await page.goto(`${baseUrl}/`, { waitUntil: 'networkidle2' })
+  await page.waitForSelector('.stat-grid, .alert-error', { timeout: 15000 })
+  const tiles = await page.$$('.stat-tile')
+  check('dashboard shows counters', tiles.length > 0, `${tiles.length} tiles`)
+  check('dashboard shows an activity feed', (await page.$('.feed, .feed-empty')) !== null)
+
+  // --- project list ----------------------------------------------------
+  await page.goto(`${baseUrl}/projects`, { waitUntil: 'networkidle2' })
+  await page.waitForSelector('.project-card, .empty', { timeout: 15000 })
   const cards = await page.$$('.project-card')
   check('project list shows at least one project', cards.length > 0, `${cards.length} cards`)
 
@@ -101,8 +118,14 @@ try {
   await page.waitForSelector('.repo-tabs', { timeout: 15000 })
   await new Promise((resolve) => setTimeout(resolve, 700))
 
-  const cloneUrl = await textOf(page, '.repo-clone span')
-  check('clone URL is shown', /^git@.+:.+\.git$/.test(cloneUrl), cloneUrl)
+  // The clone box shows the command and the URL in separate elements; the URL
+  // has its own class so the assertion does not read the "git clone" label.
+  const cloneUrl = await textOf(page, '.repo-clone .clone-url')
+  check(
+    'clone URL is shown',
+    /^(git@[^\s:]+:.+\.git|ssh:\/\/git@[^\s]+:\d+\/.+\.git)$/.test(cloneUrl),
+    cloneUrl,
+  )
 
   const rows = await page.$$('.tree-list li')
   check('file tree lists entries', rows.length > 0, `${rows.length} rows`)
