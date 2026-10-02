@@ -115,6 +115,12 @@ type IntegrationToken struct {
 	ExpiresAt     time.Time  `json:"expires_at"`
 	CreatedAt     time.Time  `json:"created_at"`
 	LastUsedAt    *time.Time `json:"last_used_at,omitempty"`
+
+	// ModuleEnabled says whether the module the token was minted for is still
+	// allowed to act. A token outlives an administrator's decision to forbid the
+	// module, and the token itself is not something we can tell the module to
+	// forget — so the answer is given here instead.
+	ModuleEnabled bool `json:"-"`
 }
 
 // Introspection is the answer the core gives a module that asks "who is this?".
@@ -128,4 +134,47 @@ type Introspection struct {
 	Scopes      []string   `json:"scopes"`
 	AccessLevel int        `json:"access_level,omitempty"`
 	AccessName  string     `json:"access_name,omitempty"`
+}
+
+// ModuleStats is what a module reports about itself with its heartbeat.
+//
+// Every field is optional and absent means "not reported". The distinction
+// matters: a module inside a container is often not allowed to read the node's
+// memory, and a zero there would be a claim — this disk is empty — that is not
+// only untrue but reassuring in exactly the wrong direction.
+type ModuleStats struct {
+	At time.Time `json:"at"`
+
+	// The module's own storage.
+	StorageTotalBytes *int64 `json:"storage_total_bytes,omitempty"`
+	StorageUsedBytes  *int64 `json:"storage_used_bytes,omitempty"`
+
+	// The module process.
+	ProcessCPUPercent  *float64 `json:"process_cpu_percent,omitempty"`
+	ProcessMemoryBytes *int64   `json:"process_memory_bytes,omitempty"`
+
+	// The node the module runs on.
+	HostCPUPercent       *float64 `json:"host_cpu_percent,omitempty"`
+	HostMemoryTotalBytes *int64   `json:"host_memory_total_bytes,omitempty"`
+	HostMemoryUsedBytes  *int64   `json:"host_memory_used_bytes,omitempty"`
+	HostLoad1            *float64 `json:"host_load1,omitempty"`
+	UptimeSeconds        *int64   `json:"uptime_seconds,omitempty"`
+
+	// Extra carries the module's own facts, which the core renders as name/value
+	// pairs without knowing what they mean: image counts, cache hit rates, the
+	// size of a queue.
+	Extra map[string]string `json:"extra,omitempty"`
+}
+
+// StorageUsedFraction is how full the module's storage is, or false when it did
+// not say. A module that reports a total of zero is ignored rather than divided
+// by.
+func (s *ModuleStats) StorageUsedFraction() (float64, bool) {
+	if s == nil || s.StorageTotalBytes == nil || s.StorageUsedBytes == nil {
+		return 0, false
+	}
+	if *s.StorageTotalBytes <= 0 {
+		return 0, false
+	}
+	return float64(*s.StorageUsedBytes) / float64(*s.StorageTotalBytes), true
 }

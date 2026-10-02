@@ -424,10 +424,14 @@ func (r *IntegrationTokenRepo) Create(ctx context.Context, token *models.Integra
 func (r *IntegrationTokenRepo) Introspect(ctx context.Context, hash []byte) (*models.IntegrationToken, error) {
 	var token models.IntegrationToken
 	err := r.s.pool.QueryRow(ctx, `
-		SELECT id, integration_id, user_id, project_id, scopes, expires_at, created_at, last_used_at
-		FROM integration_tokens WHERE token_hash = $1`, hash,
+		SELECT t.id, t.integration_id, t.user_id, t.project_id, t.scopes,
+		       t.expires_at, t.created_at, t.last_used_at, i.enabled
+		FROM integration_tokens t
+		JOIN integrations i ON i.id = t.integration_id
+		WHERE t.token_hash = $1`, hash,
 	).Scan(&token.ID, &token.IntegrationID, &token.UserID, &token.ProjectID,
-		&token.Scopes, &token.ExpiresAt, &token.CreatedAt, &token.LastUsedAt)
+		&token.Scopes, &token.ExpiresAt, &token.CreatedAt, &token.LastUsedAt,
+		&token.ModuleEnabled)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}

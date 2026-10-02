@@ -113,13 +113,44 @@ func (s *Server) handleModuleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+
+	// Statistics ride along with the heartbeat rather than having their own
+	// endpoint: the module is already awake and already talking to us, and a
+	// separate endpoint would be a second thing to forget to call.
+	var body struct {
+		Stats *models.ModuleStats `json:"stats"`
+	}
+	// A module built before statistics existed sends an empty body, and that is
+	// not a malformed request: it is a module saying nothing. Refusing the
+	// heartbeat would take a working module offline for the sake of a feature it
+	// has never heard of.
+	if err := decodeOptionalJSON(r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if body.Stats != nil {
+		if err := s.store.ModuleStats().Record(r.Context(), integration.ID, body.Stats); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"heartbeat_interval": moduleHeartbeatInterval.String(),
 		"next_deadline":      time.Now().Add(maxHeartbeatWindow).Format(time.RFC3339),
 	})
 }
 
+// handleListModules is an administrator's overview of what is installed.
+//
+// It is admin-only rather than open to every signed-in user: it exposes every
+// module's endpoint and token age, which is not everyone's business.
 func (s *Server) handleListModules(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("administrator rights are required"))
+		return
+	}
+
 	integrations, err := s.store.Integrations().List(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
@@ -134,6 +165,11 @@ func (s *Server) handleListModules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetModule(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("administrator rights are required"))
+		return
+	}
+
 	integration, err := s.moduleFromPath(r)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -150,7 +186,105 @@ func (s *Server) handleGetModule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleSetModuleEnabled(w http.ResponseWriter, r *http.Request) {
+// handleSetModuleState enables or forbids a module.
+//
+// Forbidding is the switch an administrator reaches for when a module misbehaves:
+// the core stops introducing it to callers, and the module — which has nothing but
+// what it is told — closes itself. Nothing is deleted, and allowing it again
+// restores the previous state exactly.
+// handleGetModuleStats returns what a module last reported, and the readings
+// behind it when a range is asked for.
+//
+// "Last reported" is worded that way on purpose: a reading is only as fresh as
+// the module's last heartbeat, and the core is not going to keep reporting on a
+// module's behalf after the module stops talking.
+func (s *Server) handleGetModuleStats(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("administrator rights are required"))
+		return
+	}
+
+	integration, err := s.moduleFromPath(r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	ctx := r.Context()
+
+	// The range is validated before anything else, so a request that cannot be
+	// served is refused whether or not the module has ever reported.
+	query := r.URL.Query()
+	var from, to time.Time
+	wantsSeries := query.Get("series") != ""
+	if wantsSeries {
+		to = time.Now()
+		if raw := query.Get("to"); raw != "" {
+			parsed, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				s.writeError(w, r, errBadRequest("to is not a valid timestamp"))
+				return
+			}
+			to = parsed
+		}
+
+		from = to.Add(-24 * time.Hour)
+		if raw := query.Get("from"); raw != "" {
+			parsed, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				s.writeError(w, r, errBadRequest("from is not a valid timestamp"))
+				return
+			}
+			from = parsed
+		}
+		if to.Before(from) {
+			s.writeError(w, r, errBadRequest("from must not be after to"))
+			return
+		}
+	}
+
+	latest, err := s.store.ModuleStats().Latest(ctx, integration.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		// A module that has never reported is ordinary on the day it is installed.
+		s.writeJSON(w, r, http.StatusOK, map[string]any{
+			"module_id": integration.ID,
+			"latest":    nil,
+			"reason":    "never_reported",
+			"series":    []models.ModuleStats{},
+		})
+		return
+	case err != nil:
+		s.writeError(w, r, err)
+		return
+	}
+
+	if !wantsSeries {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"module_id": integration.ID, "latest": latest})
+		return
+	}
+
+	readings, err := s.store.ModuleStats().Series(ctx, integration.ID, from, to)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"module_id": integration.ID,
+		"latest":    latest,
+		"from":      from.UTC().Format(time.RFC3339),
+		"to":        to.UTC().Format(time.RFC3339),
+		"series":    readings,
+	})
+}
+
+func (s *Server) handleSetModuleState(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("administrator rights are required"))
+		return
+	}
+
 	integration, err := s.moduleFromPath(r)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -158,25 +292,35 @@ func (s *Server) handleSetModuleEnabled(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var body struct {
-		Enabled bool `json:"enabled"`
+		Enabled *bool `json:"enabled"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.store.Integrations().SetEnabled(r.Context(), integration.ID, body.Enabled); err != nil {
+	if body.Enabled == nil {
+		s.writeError(w, r, errBadRequest("enabled is required"))
+		return
+	}
+
+	if err := s.store.Integrations().SetEnabled(r.Context(), integration.ID, *body.Enabled); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 
-	s.log.Info("module toggled", "kind", integration.Kind, "name", integration.Name, "enabled", body.Enabled)
+	action := "forbidden"
+	if *body.Enabled {
+		action = "allowed"
+	}
+	s.log.Info("module state changed",
+		"kind", integration.Kind, "state", action, "user", userFrom(r.Context()).Username)
 
 	updated, err := s.store.Integrations().ByID(r.Context(), integration.ID)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, map[string]any{"module": s.integrationView(r, updated, nil, nil)})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"module": updated})
 }
 
 func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
@@ -410,6 +554,16 @@ func (s *Server) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if time.Now().After(token.ExpiresAt) {
+		s.writeJSON(w, r, http.StatusOK, models.Introspection{Active: false, Scopes: []string{}})
+		return
+	}
+	if !token.ModuleEnabled {
+		// Forbidding a module has to take effect at once, without asking the module
+		// to drop anything: the core stops saying who the caller is, and a module
+		// that cannot identify anyone has nothing to let through. That is what makes
+		// the button work on modules nobody has updated.
+		s.log.Info("module token presented by a forbidden module",
+			"module_id", token.IntegrationID)
 		s.writeJSON(w, r, http.StatusOK, models.Introspection{Active: false, Scopes: []string{}})
 		return
 	}

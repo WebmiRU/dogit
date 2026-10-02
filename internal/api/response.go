@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -132,6 +134,32 @@ func decodeJSON(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 
+	if err := dec.Decode(dst); err != nil {
+		return errBadRequest("request body is not valid JSON: " + err.Error())
+	}
+	return nil
+}
+
+// decodeOptionalJSON is decodeJSON for a body that is allowed to be absent.
+//
+// An empty body leaves dst untouched. Nothing else about it is relaxed: a body
+// that is present still has to parse, and unknown fields are still refused, so a
+// typo in an optional payload is reported rather than silently ignored.
+func decodeOptionalJSON(r *http.Request, dst any) error {
+	if r.Body == nil {
+		return nil
+	}
+	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return errBadRequest("request body could not be read")
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return errBadRequest("request body is not valid JSON: " + err.Error())
 	}

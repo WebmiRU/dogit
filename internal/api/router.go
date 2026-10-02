@@ -123,8 +123,9 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Post("/modules/{kind}/token", s.handleMintModuleToken)
 		authenticated.Get("/modules", s.handleListModules)
 		authenticated.Get("/modules/{integrationID}", s.handleGetModule)
-		authenticated.Patch("/modules/{integrationID}", s.handleSetModuleEnabled)
+		authenticated.Put("/modules/{integrationID}/state", s.handleSetModuleState)
 		authenticated.Delete("/modules/{integrationID}", s.handleDeleteModule)
+		authenticated.Get("/modules/{integrationID}/stats", s.handleGetModuleStats)
 		authenticated.Get("/modules/{integrationID}/settings", s.handleGetModuleSettings)
 		authenticated.Put("/modules/{integrationID}/settings", s.handleSetModuleSettings)
 
