@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ewolf/dogit/internal/auth"
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/modulehost"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -635,7 +637,64 @@ func (s *Server) integrationView(r *http.Request, integration *models.Integratio
 	// "registry:delete" that nothing mints is a hint that the core is missing a
 	// rule.
 	view["scopes"] = integration.Capabilities.Scopes
+
+	// Where the module is reachable from the outside, worked out here rather than
+	// in the interface: the answer is needed by the push instructions, by the
+	// proxy configuration and by an operator reading this page, and three places
+	// answering it separately is how they end up disagreeing.
+	if address, published := modulehost.BaseURL(s.cfg.PublicHost, integration.Capabilities.Routing); published {
+		view["public_url"] = address
+		view["dedicated_host"] = modulehost.IsDedicatedHost(s.cfg.PublicHost, integration.Capabilities.Routing)
+	} else {
+		view["public_url"] = nil
+	}
 	return view
+}
+
+// handleModuleRoutes reports where every module is published.
+//
+// The answer is JSON as well as nginx configuration because the question has two
+// audiences: an operator who wants to know which names to point DNS at, and a
+// deployment that wants the proxy configuration itself.
+func (s *Server) handleModuleRoutes(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("administrator rights are required"))
+		return
+	}
+
+	modules, err := s.store.Integrations().List(r.Context())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	routes := modulehost.Describe(s.cfg.PublicHost, modules)
+
+	if r.URL.Query().Get("nginx") != "" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, modulehost.NginxServerBlocks(routes, s.cfg.TLSServerName))
+		return
+	}
+
+	views := make([]map[string]any, 0, len(routes))
+	for _, route := range routes {
+		views = append(views, map[string]any{
+			"module_id": route.ModuleID,
+			"kind":      route.Kind,
+			"name":      route.Name,
+			"upstream":  route.Upstream,
+			"domains":   route.Domains,
+			"path":      route.Path,
+			"websocket": route.Websocket,
+			"url":       route.URL(),
+		})
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"public_host": s.cfg.PublicHost,
+		"routes":      views,
+	})
 }
 
 func redactSettings(settings map[string]json.RawMessage, secret map[string]bool) map[string]any {

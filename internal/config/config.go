@@ -59,6 +59,17 @@ type Config struct {
 	// served from a single hostname.
 	AllowedOrigins []string
 
+	// PublicHost is the name the instance is reached by from outside, without a
+	// port. Modules that need their own address are given this to build one from,
+	// so the rule for what a registry is called lives in the manifest and not in
+	// every deployment's configuration.
+	PublicHost string
+
+	// TLSServerName is the directory a certificate lives in under the proxy, when
+	// certificates are managed on the host. It is what lets the core generate the
+	// configuration that serves a module on a name of its own over HTTPS.
+	TLSServerName string
+
 	// Misc
 	GitBinary string
 	// HookBinary is the dogit-hook executable that OpenSSH force-executes.
@@ -116,6 +127,8 @@ func Load() (*Config, error) {
 		GitAuthorName:      env("DOGIT_GIT_AUTHOR_NAME", "dogit"),
 		GitAuthorMail:      env("DOGIT_GIT_AUTHOR_MAIL", "dogit@localhost"),
 		AuthTokenTTL:       envDuration("DOGIT_AUTH_TOKEN_TTL", 720*time.Hour),
+		PublicHost:         env("DOGIT_PUBLIC_HOST", ""),
+		TLSServerName:      env("DOGIT_TLS_SERVER_NAME", ""),
 		AllowedOrigins:     envList("DOGIT_ALLOWED_ORIGINS", defaultOrigins(env("DOGIT_ENV", "development"))),
 		LogLevel:           env("DOGIT_LOG_LEVEL", "info"),
 		HookLogLevel:       env("DOGIT_HOOK_LOG_LEVEL", "warn"),

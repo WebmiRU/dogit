@@ -122,9 +122,13 @@ func (s *Server) Register(r chi.Router) {
 		// and a user mints the tokens they present to them.
 		authenticated.Post("/modules/{kind}/token", s.handleMintModuleToken)
 		authenticated.Get("/modules", s.handleListModules)
+		authenticated.Get("/modules/routes", s.handleModuleRoutes)
 		authenticated.Get("/modules/{integrationID}", s.handleGetModule)
 		authenticated.Put("/modules/{integrationID}/state", s.handleSetModuleState)
 		authenticated.Delete("/modules/{integrationID}", s.handleDeleteModule)
+		authenticated.Post("/modules/{integrationID}/uninstall", s.handleStartModuleUninstall)
+		authenticated.Get("/modules/{integrationID}/uninstall", s.handleGetModuleUninstall)
+		authenticated.Get("/modules/{integrationID}/uninstall/log", s.handleModuleUninstallLog)
 		authenticated.Get("/modules/{integrationID}/stats", s.handleGetModuleStats)
 		authenticated.Get("/modules/{integrationID}/settings", s.handleGetModuleSettings)
 		authenticated.Put("/modules/{integrationID}/settings", s.handleSetModuleSettings)

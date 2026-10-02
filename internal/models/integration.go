@@ -1,6 +1,8 @@
 package models
 
 import (
+	"strings"
+
 	"encoding/json"
 	"time"
 
@@ -42,6 +44,82 @@ type Manifest struct {
 	// Database asks the core to provision a database in the shared cluster when the
 	// module registers. The credentials arrive once, in the registration response.
 	Database bool `json:"database,omitempty"`
+
+	// Uninstall describes what this module needs to be told before it removes
+	// itself. The core renders these and passes the chosen keys back, and knows
+	// nothing about what any of them mean: a registry offers to delete its
+	// images, a build cache offers to delete its layers, and the core is not in
+	// the business of knowing either.
+	Uninstall UninstallSpec `json:"uninstall,omitempty"`
+
+	// Routing says what address the module needs to be reachable at.
+	Routing RoutingSpec `json:"routing,omitempty"`
+}
+
+// RoutingSpec is a module's request to be served on an address of its own.
+//
+// A module that speaks a protocol the browser does not — a registry, a package
+// feed — cannot live under a path on the main site: the client treats everything
+// before the first slash as a hostname and nothing after it as a path. So it gets
+// its own name on the same ports, and the module says what that name should look
+// like rather than being handed a fixed one.
+type RoutingSpec struct {
+	// Domains are the names to serve this module on. The literal {host} is replaced
+	// with the instance's public host, which is what makes "registry.{host}" mean
+	// registry on this instance and not on some other one.
+	Domains []string `json:"domains,omitempty"`
+
+	// Path is a prefix under those domains, for a module that wants one. Empty means
+	// the whole name belongs to the module.
+	Path string `json:"path,omitempty"`
+
+	// Websocket asks the proxy to pass connection upgrades through, which a module
+	// serving a live view needs and one serving a registry must not.
+	Websocket bool `json:"websocket,omitempty"`
+}
+
+// PublicDomains expands a routing spec into the names it actually means on this
+// instance.
+//
+// A template naming nothing known is passed through untouched rather than turned
+// into a broken name: an administrator who wrote a literal host meant it.
+func (r RoutingSpec) PublicDomains(publicHost string) []string {
+	if len(r.Domains) == 0 {
+		return nil
+	}
+
+	domains := make([]string, 0, len(r.Domains))
+	for _, domain := range r.Domains {
+		if publicHost != "" && strings.Contains(domain, "{host}") {
+			domains = append(domains, strings.ReplaceAll(domain, "{host}", publicHost))
+			continue
+		}
+		domains = append(domains, domain)
+	}
+	return domains
+}
+
+// UninstallSpec is a module's own description of its removal.
+type UninstallSpec struct {
+	// Options are the switches the administrator is offered.
+	Options []UninstallOption `json:"options,omitempty"`
+}
+
+// UninstallOption is one switch in the removal dialog.
+type UninstallOption struct {
+	Key string `json:"key"`
+	// Label and Description are the module's own words, so an operator reading
+	// them learns what this module will delete rather than what the core guesses.
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Default     bool   `json:"default,omitempty"`
+	// Dangerous marks an option whose consequence cannot be undone. The interface
+	// says so, and asks for a second confirmation.
+	Dangerous bool `json:"dangerous,omitempty"`
+	// Required makes removal impossible without this option: a module that has
+	// stored something an administrator would lose data by leaving behind says
+	// so here rather than letting a careless deletion look tidy.
+	Required bool `json:"required,omitempty"`
 }
 
 // SettingSpec is one configurable setting of a module.
