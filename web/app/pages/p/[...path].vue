@@ -96,13 +96,54 @@ const activeRef = computed(() => {
   return project.value?.default_branch || 'main'
 })
 
+/**
+ * Switching a branch keeps the user where they are.
+ *
+ * The ref lives in a different place depending on the view: in the path for the
+ * file views, in the query for the ones that list things. Rewriting only the ref
+ * and leaving the rest of the route alone is what stops "switch to dev" from
+ * throwing someone off the commits page and onto the code page.
+ */
+async function switchRef(next: string) {
+  if (!project.value || next === activeRef.value) return
+
+  const base = `/p/${project.value.path}`
+  const encode = encodeURIComponent(next)
+
+  switch (view.value.name) {
+    case 'tree': {
+      const path = view.value.rest.slice(1).join('/')
+      await navigateTo(`${base}/-/tree/${encode}/${path}`)
+      return
+    }
+    case 'blob': {
+      // The file may not exist on the new branch; the page reports that itself
+      // rather than silently falling back.
+      const path = view.value.rest.slice(1).join('/')
+      await navigateTo(`${base}/-/blob/${encode}/${path}`)
+      return
+    }
+    case 'commits':
+    case 'branches':
+      await navigateTo({ path: `${base}/-/${view.value.name}`, query: { ref: next } })
+      return
+    default:
+      await navigateTo(`${base}/-/tree/${encode}`)
+  }
+}
+
 const tabs = computed(() => {
   if (!project.value) return []
   const base = `/p/${project.value.path}`
+  const ref = encodeURIComponent(activeRef.value)
+
+  // The ref travels differently per view: in the path for the file views, as a
+  // query parameter for the listings. Carrying it into every tab is what keeps a
+  // chosen branch from resetting when the user clicks between Code and Commits.
   return [
-    { label: 'Code', to: `${base}/-/tree/${encodeURIComponent(activeRef.value)}`, match: 'tree' },
-    { label: 'Commits', to: `${base}/-/commits`, match: 'commits' },
-    { label: 'Branches', to: `${base}/-/branches`, match: 'branches' },
+    { label: 'Code', to: `${base}/-/tree/${ref}`, match: 'tree' },
+    { label: 'Commits', to: `${base}/-/commits?ref=${ref}`, match: 'commits' },
+    { label: 'Branches', to: `${base}/-/branches?ref=${ref}`, match: 'branches' },
   ]
 })
 
@@ -165,6 +206,7 @@ async function copyCloneUrl() {
           :refs="refs"
           :ref-name="activeRef"
           :path="restPath"
+          @change-ref="switchRef"
         />
         <RepositoryBlob
           v-else-if="view.name === 'blob'"
@@ -173,6 +215,7 @@ async function copyCloneUrl() {
           :refs="refs"
           :ref-name="activeRef"
           :path="restPath"
+          @change-ref="switchRef"
         />
         <RepositoryCommits
           v-else-if="view.name === 'commits'"
@@ -180,6 +223,7 @@ async function copyCloneUrl() {
           :project-path="project.path"
           :refs="refs"
           :ref-name="activeRef"
+          @change-ref="switchRef"
         />
         <RepositoryCommitView
           v-else-if="view.name === 'commit'"
@@ -193,6 +237,7 @@ async function copyCloneUrl() {
           :project-path="project.path"
           :refs="refs"
           :ref-name="activeRef"
+          @change-ref="switchRef"
         />
         <div v-else class="card empty">Unknown view “{{ view.name }}”.</div>
       </div>

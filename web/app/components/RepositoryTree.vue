@@ -2,6 +2,8 @@
 /** Directory listing of a repository at a ref. */
 import type { RefsResponse, TreeEntry, TreeResponse } from '~/types/repository'
 
+const emit = defineEmits<{ (event: 'change-ref', ref: string): void }>()
+
 const props = defineProps<{
   projectId: string
   projectPath: string
@@ -70,7 +72,7 @@ function icon(entry: TreeEntry) {
 <template>
   <div class="card">
     <div class="toolbar">
-      <BranchSelector :refs="refs" :project-path="projectPath" :ref-name="refName" />
+      <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
 
       <div class="breadcrumbs" v-if="tree">
         <NuxtLink :to="treeUrl('', refName)">{{ tree.breadcrumbs[0]?.name ?? projectPath }}</NuxtLink>

@@ -3,6 +3,8 @@
 import type { BlameLine, FileResponse, RefsResponse } from '~/types/repository'
 import hljs from 'highlight.js/lib/common'
 
+const emit = defineEmits<{ (event: 'change-ref', ref: string): void }>()
+
 const props = defineProps<{
   projectId: string
   projectPath: string
@@ -82,7 +84,7 @@ const rawUrl = computed(() =>
 <template>
   <div class="card">
     <div class="toolbar">
-      <BranchSelector :refs="refs" :project-path="projectPath" :ref-name="refName" />
+      <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
 
       <div class="breadcrumbs">
         <NuxtLink :to="`/p/${projectPath}/-/tree/${encodeURIComponent(refName)}`">{{ projectPath }}</NuxtLink>

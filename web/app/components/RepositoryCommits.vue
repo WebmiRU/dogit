@@ -2,6 +2,8 @@
 /** Commit list for a ref. */
 import type { CommitInfo, CommitsResponse, RefsResponse } from '~/types/repository'
 
+const emit = defineEmits<{ (event: 'change-ref', ref: string): void }>()
+
 const props = defineProps<{
   projectId: string
   projectPath: string
@@ -38,7 +40,7 @@ const commits = computed<CommitInfo[]>(() => response.value?.commits ?? [])
 <template>
   <div class="card">
     <div class="toolbar">
-      <BranchSelector :refs="refs" :project-path="projectPath" :ref-name="refName" />
+      <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
       <div class="spacer" />
       <span v-if="response" class="muted">{{ response.total }} commits</span>
     </div>

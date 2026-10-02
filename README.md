@@ -233,6 +233,20 @@ PUT  /api/v1/modules/{id}/settings     administrator, ?scope=instance|group|proj
 It has no product behaviour on purpose: it exists so the contract has a second
 implementation before real modules are built.
 
+## Database
+
+PostgreSQL 19, one cluster for everything. Modules that declare `"database": true`
+in their manifest get their own database and their own role inside that cluster:
+
+```sh
+docker compose exec app dogit module database provision cache:demo
+```
+
+The password is printed once and never stored: the module keeps it in its own
+secret, and the core records only the database and role names. A module therefore
+cannot read or damage the application's tables, while there is still exactly one
+cluster to back up and operate.
+
 ## Not implemented yet
 
 - Editing files from the browser, merge requests and conflict resolution

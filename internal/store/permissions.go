@@ -65,9 +65,14 @@ func (r *PermissionRepo) AccessLevel(ctx context.Context, userID, projectID uuid
 // levelQuery is the single source of truth for access levels. It is also
 // reused in bulk by LevelsForProjects.
 //
-//	project_roles — roles attached directly to the project, granted either to a
-//	                user or to a group the user belongs to
-//	group_roles   — roles on the parent group, same grant sources
+// Two independent sources are combined and the higher wins:
+//
+//	project roles — attached to the project, granted to a user or to a group
+//	group roles   — attached to the project's group, granted to a user or to a
+//	                group they belong to
+//
+// A group role alone is enough to reach a project: a group whose members are all
+// developers must not require a role to be duplicated onto every project.
 //
 // The project's creator receives an explicit "Owner" project role at creation
 // time, so no special case is needed here.
@@ -83,10 +88,10 @@ const levelQuery = `
 			  )
 		), 0),
 		COALESCE((
-			SELECT max(greatest(least(r.max_access_level, pr.min_access_level), pr.min_access_level))
+			SELECT max(r.max_access_level)
 			FROM group_roles r
-			JOIN project_roles pr ON pr.project_id = $2
 			WHERE r.group_id = (SELECT group_id FROM projects WHERE id = $2)
+			  AND r.group_id IS NOT NULL
 			  AND (
 			      r.source_user_id = $1
 			      OR r.source_group_id IN (SELECT group_id FROM group_members WHERE user_id = $1)
@@ -116,10 +121,10 @@ func (r *PermissionRepo) LevelsForProjects(ctx context.Context, userID uuid.UUID
 				  )
 			), 0),
 			COALESCE((
-				SELECT max(greatest(least(r.max_access_level, pr.min_access_level), pr.min_access_level))
+				SELECT max(r.max_access_level)
 				FROM group_roles r
-				JOIN project_roles pr ON pr.project_id = p.id
 				WHERE r.group_id = p.group_id
+				  AND p.group_id IS NOT NULL
 				  AND (
 				      r.source_user_id = $1
 				      OR r.source_group_id IN (SELECT group_id FROM group_members WHERE user_id = $1)
@@ -145,11 +150,15 @@ func (r *PermissionRepo) LevelsForProjects(ctx context.Context, userID uuid.UUID
 }
 
 // GroupAccessLevel returns the effective level of user on a group.
+//
+// Unlike a project's level, a group's level is not clamped: the clamp exists so a
+// group role cannot grant more than the project allows, and a group has no project
+// to clamp against. A user who is not a member and holds no role has no access.
 func (r *PermissionRepo) GroupAccessLevel(ctx context.Context, userID, groupID uuid.UUID) (int, error) {
 	var level int
 	err := r.s.pool.QueryRow(ctx, `
 		SELECT COALESCE((
-			SELECT max(greatest(least(r.max_access_level, pr.min_access_level), pr.min_access_level))
+			SELECT max(r.max_access_level)
 			FROM group_roles r
 			WHERE r.group_id = $2
 			  AND (

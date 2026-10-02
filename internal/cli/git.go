@@ -12,7 +12,6 @@ import (
 	"github.com/ewolf/dogit/internal/gitserver"
 	"github.com/ewolf/dogit/internal/hooks"
 	"github.com/ewolf/dogit/internal/hooks/postreceive"
-	"github.com/ewolf/dogit/internal/logger"
 )
 
 // ExitCode lets a subcommand end the process with a specific status, which git
@@ -75,16 +74,12 @@ func HookEntry(ctx context.Context, args []string) error {
 		return exitCode(1)
 	}
 
-	a, err := app.New(ctx)
+	a, err := app.NewWithLogLevel(ctx, hookLogLevel())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return exitCode(1)
 	}
 	defer a.Close()
-
-	// stderr here is the client's "remote:" stream, so this process logs at its
-	// own, quieter level.
-	a.Log = logger.SetLevel(a.Log, a.Cfg.HookLogLevel)
 
 	if fingerprint != "" {
 		// Best effort: a failed bookkeeping write must never block a push.
@@ -130,6 +125,17 @@ func AuthorizedKeys(ctx context.Context, args []string) error {
 	return nil
 }
 
+// hookLogLevel reads the level the git entry points log at.
+//
+// It is read from the environment directly because the configuration has not been
+// loaded yet at the point where the level has to be applied.
+func hookLogLevel() string {
+	if level := os.Getenv("DOGIT_HOOK_LOG_LEVEL"); level != "" {
+		return level
+	}
+	return "warn"
+}
+
 // Hook dispatches the git hook entry points.
 func Hook(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -160,7 +166,7 @@ func runPostReceive(ctx context.Context, args []string) error {
 		return fmt.Errorf("--project-path or --project-id is required")
 	}
 
-	a, err := app.New(ctx)
+	a, err := app.NewWithLogLevel(ctx, hookLogLevel())
 	if err != nil {
 		// A failing post-receive hook cannot undo the push: report and let the
 		// commit stand. The next ref update catches up.
@@ -168,9 +174,6 @@ func runPostReceive(ctx context.Context, args []string) error {
 		return nil
 	}
 	defer a.Close()
-
-	// The push already succeeded; keep the client's output clean.
-	a.Log = logger.SetLevel(a.Log, a.Cfg.HookLogLevel)
 
 	// The installed hook script passes the path; the SSH server passes the id.
 	if *projectID == "" {

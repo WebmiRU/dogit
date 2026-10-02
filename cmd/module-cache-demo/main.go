@@ -82,7 +82,18 @@ func main() {
 	client.token = moduleToken
 	log.Printf("module: registered, heartbeat every %s", cfg.interval)
 
-	go heartbeat(ctx, client, cfg.interval)
+	// The same registration call is reused on recovery, so it is kept as a closure.
+	register := func() error {
+		token, err := client.register(ctx, cfg.registrationToken, cfg.name, cfg.endpoint, manifest())
+		if err != nil {
+			return err
+		}
+		client.token = token
+		log.Printf("module: re-registered")
+		return nil
+	}
+
+	go heartbeat(ctx, client, cfg.interval, register)
 
 	server := &http.Server{
 		Addr:              cfg.listen,
@@ -183,7 +194,14 @@ func routes(client *coreClient) http.Handler {
 	return mux
 }
 
-func heartbeat(ctx context.Context, client *coreClient, interval time.Duration) {
+// heartbeat keeps the core informed that this module is alive.
+//
+// A rejected heartbeat means the core no longer recognises the module token: the
+// database was restored, the module was removed and reinstalled, or the token was
+// rotated. Retrying with a dead token would never recover, so the module
+// re-registers with the instance token it still holds. That is what a real module
+// has to do too, and it is why the instance token is kept in its secret.
+func heartbeat(ctx context.Context, client *coreClient, interval time.Duration, register func() error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -192,12 +210,25 @@ func heartbeat(ctx context.Context, client *coreClient, interval time.Duration) 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := client.beat(ctx); err != nil {
+			err := client.beat(ctx)
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, errUnauthorized) {
 				log.Printf("module: heartbeat failed: %v", err)
+				continue
+			}
+
+			log.Printf("module: token rejected (%v), re-registering", err)
+			if registerErr := register(); registerErr != nil {
+				log.Printf("module: re-registration failed: %v", registerErr)
 			}
 		}
 	}
 }
+
+// errUnauthorized marks a 401 from the core.
+var errUnauthorized = errors.New("module authentication is required")
 
 // coreClient talks to the dogit core. Every call except registration carries the
 // module token the core issued.
@@ -232,6 +263,9 @@ func (c *coreClient) post(ctx context.Context, path string, body any, token stri
 		return err
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("%s: %w", path, errUnauthorized)
+		}
 		return fmt.Errorf("%s: %s", path, strings.TrimSpace(string(raw)))
 	}
 	if out != nil {

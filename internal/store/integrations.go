@@ -21,7 +21,8 @@ type IntegrationRepo struct{ s *Store }
 func (s *Store) Integrations() *IntegrationRepo { return &IntegrationRepo{s: s} }
 
 const integrationColumns = `id, kind, name, endpoint, module_version, capabilities,
-	settings_schema, status, enabled, last_seen_at, registered_at, created_at, updated_at`
+	settings_schema, status, enabled, last_seen_at, registered_at, created_at, updated_at,
+	database_name, database_role`
 
 func scanIntegration(row interface{ Scan(...any) error }) (*models.Integration, error) {
 	var (
@@ -31,7 +32,7 @@ func scanIntegration(row interface{ Scan(...any) error }) (*models.Integration, 
 	)
 	err := row.Scan(&m.ID, &m.Kind, &m.Name, &m.Endpoint, &m.ModuleVersion,
 		&capsRaw, &schema, &m.Status, &m.Enabled, &m.LastSeenAt, &m.RegisteredAt,
-		&m.CreatedAt, &m.UpdatedAt)
+		&m.CreatedAt, &m.UpdatedAt, &m.DatabaseName, &m.DatabaseRole)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}
@@ -93,7 +94,8 @@ func (r *IntegrationRepo) Register(ctx context.Context, kind, name, endpoint str
 	).Scan(&integration.ID, &integration.Kind, &integration.Name, &integration.Endpoint,
 		&integration.ModuleVersion, &capsRaw, &settings, &integration.Status,
 		&integration.Enabled, &integration.LastSeenAt, &integration.RegisteredAt,
-		&integration.CreatedAt, &integration.UpdatedAt)
+		&integration.CreatedAt, &integration.UpdatedAt,
+		&integration.DatabaseName, &integration.DatabaseRole)
 	if err != nil {
 		return nil, fmt.Errorf("register module: %w", err)
 	}
@@ -370,6 +372,35 @@ const (
 	ScopeGroup    = models.ScopeGroup
 	ScopeProject  = models.ScopeProject
 )
+
+// SetModuleDatabase records which database and role belong to a module.
+//
+// Only the names are stored. The password is returned once at provisioning and
+// kept by the module in its own secret, so a leaked database dump cannot hand a
+// module access to anything.
+func (r *IntegrationRepo) SetModuleDatabase(ctx context.Context, id uuid.UUID, database, role string) error {
+	tag, err := r.s.pool.Exec(ctx,
+		`UPDATE integrations SET database_name = $2, database_role = $3, updated_at = now()
+		 WHERE id = $1`, id, database, role)
+	if err != nil {
+		return fmt.Errorf("record the module database: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ClearModuleDatabase forgets the module's database, used after it is dropped.
+func (r *IntegrationRepo) ClearModuleDatabase(ctx context.Context, id uuid.UUID) error {
+	_, err := r.s.pool.Exec(ctx,
+		`UPDATE integrations SET database_name = '', database_role = '', updated_at = now()
+		 WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("clear the module database: %w", err)
+	}
+	return nil
+}
 
 // --- user tokens for modules --------------------------------------------
 

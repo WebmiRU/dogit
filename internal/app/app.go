@@ -28,12 +28,22 @@ type App struct {
 
 // New loads configuration, initialises the logger, applies migrations and
 // prepares the data directories.
-func New(ctx context.Context) (*App, error) {
+func New(ctx context.Context) (*App, error) { return NewWithLogLevel(ctx, "") }
+
+// NewWithLogLevel is New with the log level forced.
+//
+// The git entry points need it: their stderr is the pusher's terminal, so the
+// level has to be right before anything is constructed, not patched afterwards.
+// Anything logged while starting up would otherwise reach the user's terminal.
+func NewWithLogLevel(ctx context.Context, level string) (*App, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
+	if level != "" {
+		cfg.LogLevel = level
+	}
 	log := logger.New(cfg.LogLevel, cfg.Environment)
 
 	if err := ensureDirs(cfg); err != nil {

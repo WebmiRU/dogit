@@ -39,6 +39,9 @@ type Manifest struct {
 	DependsOn []string `json:"depends_on,omitempty"`
 	// Description is free text for the module list.
 	Description string `json:"description,omitempty"`
+	// Database asks the core to provision a database in the shared cluster when the
+	// module registers. The credentials arrive once, in the registration response.
+	Database bool `json:"database,omitempty"`
 }
 
 // SettingSpec is one configurable setting of a module.
@@ -55,19 +58,24 @@ type SettingSpec struct {
 
 // Integration is a registered module.
 type Integration struct {
-	ID            uuid.UUID      `json:"id"`
-	Kind          string         `json:"kind"`
-	Name          string         `json:"name"`
-	Endpoint      string         `json:"endpoint"`
-	ModuleVersion string         `json:"module_version"`
-	Capabilities  Manifest       `json:"capabilities"`
-	Status        string         `json:"status"`
-	Enabled       bool           `json:"enabled"`
-	LastSeenAt    *time.Time     `json:"last_seen_at,omitempty"`
-	RegisteredAt  time.Time      `json:"registered_at"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	Settings      map[string]any `json:"settings,omitempty"`
+	ID            uuid.UUID  `json:"id"`
+	Kind          string     `json:"kind"`
+	Name          string     `json:"name"`
+	Endpoint      string     `json:"endpoint"`
+	ModuleVersion string     `json:"module_version"`
+	Capabilities  Manifest   `json:"capabilities"`
+	Status        string     `json:"status"`
+	Enabled       bool       `json:"enabled"`
+	LastSeenAt    *time.Time `json:"last_seen_at,omitempty"`
+	// DatabaseName and DatabaseRole are the non-secret half of a provisioned
+	// database. The password is not stored anywhere in the core.
+	DatabaseName string `json:"database_name,omitempty"`
+	DatabaseRole string `json:"database_role,omitempty"`
+
+	RegisteredAt time.Time      `json:"registered_at"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	Settings     map[string]any `json:"settings,omitempty"`
 }
 
 // ScopeType identifies how widely a setting applies.
