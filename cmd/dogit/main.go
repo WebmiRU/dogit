@@ -54,6 +54,8 @@ func run() error {
 		return cli.Hook(ctx, args)
 	case "user":
 		return cli.User(ctx, args)
+	case "module":
+		return cli.Module(ctx, args)
 	case "key":
 		return cli.Key(ctx, args)
 	case "project":

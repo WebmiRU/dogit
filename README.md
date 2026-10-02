@@ -184,8 +184,57 @@ matter most:
 commands with a deliberately minimal environment: a container's variables never
 reach dogit on a git connection, so the entrypoint writes them to that file.
 
+## Modules
+
+Modules are separate services that extend dogit without being part of it: a
+container image registry, a package registry, an npm or Composer cache, a build
+service. Each one runs on its own, registers with the core, and asks the core who
+its callers are instead of keeping a user directory of its own.
+
+```sh
+# 1. mint an instance token (printed once)
+docker compose exec app dogit module token create --name registry-docker
+
+# 2. give it to the module and start it
+docker compose up -d module-demo
+
+# 3. look at what registered
+docker compose exec app dogit module list
+docker compose exec app dogit module status cache:demo
+```
+
+How a module works with the core:
+
+| Step | What happens |
+|---|---|
+| register | the module posts its kind, name, endpoint and manifest with an instance token, and receives a module token |
+| heartbeat | it calls back every 30s; the core marks it offline after three missed beats |
+| settings | the module declares a settings schema; the core stores values per instance, group or project and cascades them |
+| token minting | a user asks the core for a short-lived token scoped to a project; the core decides the scopes from the access level |
+| introspection | the module posts that token to the core and gets back who the caller is and what they may do |
+
+Because the core owns identity, deleting a user or changing a permission takes
+effect in every module on the next request, with no synchronisation step.
+
+Endpoints, for reference:
+
+```
+POST /api/v1/modules/register          module token required
+POST /api/v1/module/heartbeat          module token required
+GET  /api/v1/module/me                 module token required
+GET  /api/v1/module/settings           module token required
+POST /api/v1/auth/introspect           presents a user token, answers who it is
+GET  /api/v1/modules                   administrator
+POST /api/v1/modules/{kind}/token      user, mints a scoped token
+PUT  /api/v1/modules/{id}/settings     administrator, ?scope=instance|group|project
+```
+
+`cmd/module-cache-demo` is a working reference implementation of the protocol.
+It has no product behaviour on purpose: it exists so the contract has a second
+implementation before real modules are built.
+
 ## Not implemented yet
 
-- REST API and the web UI
-- Branches, tags, merge requests and conflict resolution in the browser
+- Editing files from the browser, merge requests and conflict resolution
 - CI job execution, artifacts and deployments
+- Real modules; `cache:demo` is a reference implementation only

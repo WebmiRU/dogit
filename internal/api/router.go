@@ -35,9 +35,13 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, git *gitx.Git, r
 	return &Server{cfg: cfg, log: log, store: st, git: git, repos: repoSvc}
 }
 
-// contextUserKey is where the authenticated user is stored on the request
-// context.
-type contextUserKey struct{}
+// contextUserKey and contextIntegrationKey hold the authenticated caller on the
+// request context: a user for browser and API requests, a module for requests a
+// module makes about itself.
+type (
+	contextUserKey        struct{}
+	contextIntegrationKey struct{}
+)
 
 // Routes registers every API route on a new router. It is mounted at /api/v1 by
 // the web server.
@@ -61,6 +65,32 @@ func (s *Server) Register(r chi.Router) {
 		auth.Post("/login", s.handleLogin)
 		auth.Post("/logout", s.handleAuthenticated(s.handleLogout))
 		auth.Get("/me", s.handleAuthenticated(s.handleCurrentUser))
+
+		// Introspection is how a module asks who a caller is. It carries no
+		// credentials of its own: the bearer token in the request is the user's
+		// token, and the answer decides whether the request is allowed.
+		auth.Post("/introspect", s.handleIntrospect)
+	})
+
+	// Registration is the way in, so it authenticates with an instance token
+	// rather than a module token, and validates it inside the handler.
+	r.Post("/modules/register", s.handleModuleRegister)
+
+	// Everything else a module calls authenticates as a module, not as a user: it
+	// sits outside the session-protected group on purpose, because no module has
+	// a browser session and none of them may act as a user.
+	//
+	// The prefix is singular on purpose. "/modules/{id}" is an administrator's
+	// resource, while "/module/..." is what the module itself calls, and mixing
+	// the two in one namespace makes a literal path such as /modules/me
+	// indistinguishable from a module id.
+	moduleRoutes := chi.NewRouter()
+	moduleRoutes.Use(s.authenticateModule)
+	moduleRoutes.Post("/heartbeat", s.handleModuleHeartbeat)
+	moduleRoutes.Get("/me", s.handleModuleSelf)
+	moduleRoutes.Get("/settings", s.handleModuleSelfSettings)
+	r.Route("/module", func(m chi.Router) {
+		m.Mount("/", moduleRoutes)
 	})
 
 	// Personal access tokens let the CLI and other clients authenticate with
@@ -78,6 +108,17 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Delete("/user/tokens/{tokenID}", s.handleRevokeToken)
 
 		authenticated.Get("/dashboard", s.handleDashboard)
+
+		// Module administration: an administrator sees and configures modules,
+		// and a user mints the tokens they present to them.
+		authenticated.Post("/modules/{kind}/token", s.handleMintModuleToken)
+		authenticated.Get("/modules", s.handleListModules)
+		authenticated.Get("/modules/{integrationID}", s.handleGetModule)
+		authenticated.Patch("/modules/{integrationID}", s.handleSetModuleEnabled)
+		authenticated.Delete("/modules/{integrationID}", s.handleDeleteModule)
+		authenticated.Get("/modules/{integrationID}/settings", s.handleGetModuleSettings)
+		authenticated.Put("/modules/{integrationID}/settings", s.handleSetModuleSettings)
+
 		authenticated.Get("/admin/overview", s.handleAdminOverview)
 
 		authenticated.Get("/groups", s.handleListGroups)
@@ -145,6 +186,30 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), contextUserKey{}, user)))
 	})
+}
+
+// authenticateModule authenticates a request coming from a module rather than a
+// user: the module presents the token it received at registration.
+func (s *Server) authenticateModule(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		integration, err := s.integrationFromRequest(r)
+		if err != nil {
+			s.writeError(w, r, errUnauthorized("module authentication is required"))
+			return
+		}
+		if !integration.Enabled {
+			s.writeError(w, r, errForbiddenf("module %q is disabled", integration.Kind))
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(
+			context.WithValue(r.Context(), contextIntegrationKey{}, integration)))
+	})
+}
+
+// integrationFrom returns the module that made the request.
+func integrationFrom(ctx context.Context) *models.Integration {
+	integration, _ := ctx.Value(contextIntegrationKey{}).(*models.Integration)
+	return integration
 }
 
 // identify reads the credentials from a request. A cookie session is only

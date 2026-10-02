@@ -18,7 +18,10 @@ RUN CGO_ENABLED=0 go build -trimpath \
         -o /out/dogit      ./cmd/dogit \
  && CGO_ENABLED=0 go build -trimpath \
         -ldflags "-s -w" \
-        -o /out/dogit-hook ./cmd/dogit-hook
+        -o /out/dogit-hook ./cmd/dogit-hook \
+ && CGO_ENABLED=0 go build -trimpath \
+        -ldflags "-s -w" \
+        -o /out/module-cache-demo ./cmd/module-cache-demo
 
 # Runtime stage.
 FROM alpine:3.21
@@ -52,6 +55,7 @@ RUN addgroup -g 2000 -S git \
 
 COPY --from=build /out/dogit      /usr/local/bin/dogit
 COPY --from=build /out/dogit-hook /usr/local/bin/dogit-hook
+COPY --from=build /out/module-cache-demo /usr/local/bin/module-cache-demo
 COPY deploy/sshd_config          /etc/ssh/sshd_config.d/dogit.conf
 COPY deploy/sshd_entrypoint.sh   /usr/local/bin/dogit-sshd-entrypoint
 

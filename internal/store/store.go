@@ -107,6 +107,9 @@ func (s *Store) Tx(ctx context.Context, fn func(pgx.Tx) error) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error { return fn(tx) })
 }
 
+// pgxNoRows is aliased so repository files compare against one symbol.
+var pgxNoRows = pgx.ErrNoRows
+
 // Querier is satisfied by both *pgxpool.Pool and pgx.Tx, so repository helpers
 // can run either standalone or inside a transaction.
 type Querier interface {

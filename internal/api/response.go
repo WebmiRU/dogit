@@ -43,6 +43,16 @@ func errNotFoundf(format string, args ...any) *apiError {
 	return newError(http.StatusNotFound, "not_found", fmt.Sprintf(format, args...))
 }
 
+// Formatted variants keep user-facing messages close to where the failure is
+// understood.
+func errBadRequestf(format string, args ...any) *apiError {
+	return newError(http.StatusBadRequest, "bad_request", fmt.Sprintf(format, args...))
+}
+
+func errForbiddenf(format string, args ...any) *apiError {
+	return newError(http.StatusForbidden, "forbidden", fmt.Sprintf(format, args...))
+}
+
 func errConflictf(format string, args ...any) *apiError {
 	return newError(http.StatusConflict, "conflict", fmt.Sprintf(format, args...))
 }

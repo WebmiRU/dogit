@@ -10,23 +10,30 @@ set -eu
 SSH_HOST_KEY_DIR=/etc/ssh
 DATA_SSH_DIR="${DOGIT_DATA_DIR:-/data}/ssh"
 
-# Generate host keys on first start. Without them sshd refuses to start, and a
-# changing host key makes every client report a fingerprint mismatch.
+# Host keys are generated into the data volume and then installed into /etc/ssh.
+#
+# They must survive a container rebuild: a changing host key makes every client
+# report "REMOTE HOST IDENTIFICATION HAS CHANGED" and refuse to authenticate,
+# which looks exactly like a broken SSH key on the user side. Keeping the
+# originals on the volume and copying them in means /etc/ssh stays disposable.
+mkdir -p "${DATA_SSH_DIR}"
 for key_type in ed25519 rsa; do
-    key_file="${SSH_HOST_KEY_DIR}/ssh_host_${key_type}_key"
-    if [ ! -f "${key_file}" ]; then
+    data_key="${DATA_SSH_DIR}/ssh_host_${key_type}_key"
+
+    if [ ! -f "${data_key}" ]; then
         echo "sshd: generating ${key_type} host key"
-        ssh-keygen -q -t "${key_type}" -N "" -f "${key_file}"
+        ssh-keygen -q -t "${key_type}" -N "" -f "${data_key}"
     fi
-    chmod 600 "${key_file}"
+
+    cp "${data_key}" "${SSH_HOST_KEY_DIR}/ssh_host_${key_type}_key"
+    cp "${data_key}.pub" "${SSH_HOST_KEY_DIR}/ssh_host_${key_type}_key.pub"
+    chmod 600 "${SSH_HOST_KEY_DIR}/ssh_host_${key_type}_key"
+    chmod 644 "${SSH_HOST_KEY_DIR}/ssh_host_${key_type}_key.pub"
 done
 
-# The host key lives on a volume so it survives container rebuilds.
-if [ -f "${DATA_SSH_DIR}/ssh_host_ed25519_key" ]; then
-    cp "${DATA_SSH_DIR}/ssh_host_ed25519_key" "${SSH_HOST_KEY_DIR}/ssh_host_ed25519_key"
-    cp "${DATA_SSH_DIR}/ssh_host_ed25519_key.pub" "${SSH_HOST_KEY_DIR}/ssh_host_ed25519_key.pub" 2>/dev/null || true
-    chmod 600 "${SSH_HOST_KEY_DIR}/ssh_host_ed25519_key"
-fi
+# The public half is what users verify: printing it on start-up saves them a round
+# trip through ssh-keyscan when the fingerprint changes on purpose.
+echo "sshd: host key fingerprint $(ssh-keygen -lf "${DATA_SSH_DIR}/ssh_host_ed25519_key.pub" | awk '{print $2}')"
 
 # Wait for Postgres. dogit retries on its own, but failing fast here gives a
 # clearer log when the database service is misconfigured.

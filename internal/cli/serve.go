@@ -33,8 +33,10 @@ func Serve(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// Consume the durable event log so subscribers see hook-published events.
+	// Consume the durable event log so subscribers see hook-published events, and
+	// run the periodic housekeeping (expired tokens, stale modules, sessions).
 	go a.Events.RunTail(ctx, 0)
+	startJanitor(ctx, a)
 
 	a.Log.Info("dogit starting",
 		"version", Version,

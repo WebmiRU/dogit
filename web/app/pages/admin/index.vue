@@ -31,6 +31,7 @@ const counts = computed(() => {
 })
 
 const features = computed(() => Object.entries(overview.value?.features ?? {}) as [string, boolean][])
+
 </script>
 
 <template>
@@ -56,7 +57,12 @@ const features = computed(() => Object.entries(overview.value?.features ?? {}) a
       </div>
 
       <section class="card">
-        <div class="card-header"><strong>Feature status</strong></div>
+        <div class="card-header">
+          <strong>Feature status</strong>
+          <NuxtLink to="/admin/modules" class="muted" style="margin-left: auto; font-size: 12px">
+            manage modules
+          </NuxtLink>
+        </div>
         <ul class="tree-list">
           <li v-for="[name, available] in features" :key="name">
             <span class="icon">{{ available ? '✓' : '·' }}</span>

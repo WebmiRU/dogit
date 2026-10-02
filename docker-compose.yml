@@ -91,6 +91,27 @@ services:
       # The SPA calls the API through the same origin, so no CORS is involved.
       NUXT_PUBLIC_API_BASE: /api/v1
 
+  # Reference implementation of the module protocol. It has no product
+  # behaviour: it exists to prove that registration, heartbeats and
+  # introspection work before the real modules are built.
+  module-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-cache-demo"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-demo:8090
+      DOGIT_MODULE_NAME: ${DOGIT_MODULE_DEMO_NAME:-demo}
+      # Instance token: created with "dogit module token create" and stored here.
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+    ports:
+      - "127.0.0.1:8090:8090"
+
   runner:
     build:
       context: .
