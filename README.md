@@ -85,6 +85,10 @@ cp .env.example .env      # optional; defaults work
 docker compose up -d --build
 ```
 
+`.env.example` holds placeholders and is committed; `.env` holds the real values
+and is git-ignored. Object storage credentials belong in `.env`, never in the
+template.
+
 Then create the first account and a project:
 
 ```sh
