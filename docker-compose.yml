@@ -63,6 +63,11 @@ services:
       # during development; production publishes 22 and omits it.
       DOGIT_SSH_PORT: ${DOGIT_SSH_PORT:-2222}
       DOGIT_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      # The name this instance is reached by. Modules that need an address of
+      # their own build it from this, so the rule for what the registry is called
+      # lives in one place instead of in every deployment file.
+      DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
+      DOGIT_TLS_SERVER_NAME: ${DOGIT_TLS_SERVER_NAME:-}
       DOGIT_GIT_BINARY: /usr/bin/git
       # Artifacts and build caches live in S3-compatible object storage, so a
       # runner on another machine sees the same files and nothing is lost when a
@@ -94,11 +99,37 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      routes:
+        condition: service_started
     ports:
       - "127.0.0.1:3000:80"
+    volumes:
+      - dogit-routes:/etc/nginx/dogit-modules:ro
     environment:
       # The SPA calls the API through the same origin, so no CORS is involved.
       NUXT_PUBLIC_API_BASE: /api/v1
+
+  # Keeps the proxy's module configuration in step with what is installed.
+  #
+  # This is the same command Kubernetes would run to fill a ConfigMap, and neither
+  # knows which it is in: installing a module never means editing the web image or
+  # hand-writing nginx configuration.
+  routes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["dogit", "module", "routes", "--nginx", "--watch", "--output", "/etc/nginx/dogit-modules/modules.conf"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_DATABASE_URL: postgres://${POSTGRES_USER:-dogit}:${POSTGRES_PASSWORD:-dogit}@postgres:5432/${POSTGRES_DB:-dogit}?sslmode=disable
+      DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
+      DOGIT_TLS_SERVER_NAME: ${DOGIT_TLS_SERVER_NAME:-}
+      DOGIT_LOG_LEVEL: ${DOGIT_LOG_LEVEL:-info}
+    volumes:
+      - dogit-routes:/etc/nginx/dogit-modules
 
   # Reference implementation of the module protocol. It has no product
   # behaviour: it exists to prove that registration, heartbeats and
@@ -153,3 +184,5 @@ services:
 volumes:
   postgres-data:
   dogit-data:
+  # The generated proxy configuration, shared between the writer and the reader.
+  dogit-routes:

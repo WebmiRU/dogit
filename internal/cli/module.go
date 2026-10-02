@@ -20,7 +20,7 @@ import (
 // register, and the list of what is currently registered.
 func Module(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dogit module <token|list|status>")
+		return fmt.Errorf("usage: dogit module <token|list|status|routes>")
 	}
 
 	switch args[0] {
@@ -30,6 +30,8 @@ func Module(ctx context.Context, args []string) error {
 		return moduleList(ctx)
 	case "status":
 		return moduleStatus(ctx, args[1:])
+	case "routes":
+		return moduleRoutes(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown subcommand %q", args[0])
 	}
