@@ -1,12 +1,54 @@
 package pipeline
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
-// The file name is the one everybody already knows. Inventing a new one would be a
-// novelty nobody asked for.
-func TestTheConfigurationIsCalledWhatPeopleExpect(t *testing.T) {
-	if ConfigFileName != ".gitlab-ci.yml" {
-		t.Errorf("configuration file = %q, want .gitlab-ci.yml", ConfigFileName)
+func TestTheConfigurationIsCalledWhatItIs(t *testing.T) {
+	if ConfigFileName != ".dogit-ci.yml" {
+		t.Errorf("configuration file = %q, want .dogit-ci.yml", ConfigFileName)
+	}
+}
+
+// A file that is not ours is not a pipeline, whatever it is called.
+//
+// In particular a configuration from another forge is an ordinary file in the
+// repository: it is shown in the tree like anything else, and it does nothing.
+// Reading it would mean implementing a different format and calling it support for
+// this one, and every surprise that follows from that belongs to somebody who was
+// told it worked.
+func TestAConfigurationFromAnotherForgeIsJustAFile(t *testing.T) {
+	dir := t.TempDir()
+
+	for _, name := range []string{ConfigFileName, ".gitlab-ci.yml", "somefile-ci.yml", "ci.yml"} {
+		body := "job:\n  script:\n    - true\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	config, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, present := config.Jobs["job"]; !present {
+		t.Fatalf("the project's own configuration was not read: %+v", config.Jobs)
+	}
+
+	// And with only the foreign file there, there is no configuration at all —
+	// said plainly rather than half-read.
+	only := t.TempDir()
+	if err := os.WriteFile(filepath.Join(only, ".gitlab-ci.yml"),
+		[]byte("job:\n  script:\n    - true\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(only); err == nil {
+		t.Error("a file from another forge was read as a pipeline configuration")
+	}
+	if Exists(only) {
+		t.Error("a project with only a foreign file reports having a configuration")
 	}
 }
 

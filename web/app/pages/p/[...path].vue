@@ -235,6 +235,7 @@ const tabs = computed(() => {
     ...codeTabs,
     // Images live outside the repository: a branch has nothing to do with an image,
     // and a tag that was never built has no page to show. So this one carries no ref.
+    { label: 'Pipelines', to: `${base}/-/pipelines`, match: 'pipelines' },
     { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
     { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
   ]
@@ -399,6 +400,11 @@ async function copyCloneUrl() {
           :path="restPath"
           :can-push="canPush"
           @change-ref="switchRef"
+        />
+        <ProjectPipelines
+          v-else-if="view.name === 'pipelines'"
+          :project-path="project.path"
+          :default-branch="project.default_branch"
         />
         <ProjectPackages
           v-else-if="view.name === 'packages'"

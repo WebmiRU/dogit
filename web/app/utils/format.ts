@@ -50,6 +50,28 @@ export function formatBytes(size: number | undefined | null): string {
 }
 
 /** Shortens a commit message to its first line. */
+/**
+ * A duration in the words somebody would say out loud.
+ *
+ * A job that took ninety seconds is "1m 30s", not "90000 ms": a number in
+ * milliseconds has to be divided in the head, and the whole point of showing a
+ * duration is to save that.
+ */
+export function formatDuration(ms: number | undefined | null): string {
+  if (!ms || ms < 0) return ''
+
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  if (minutes < 60) return rest ? `${minutes}m ${rest}s` : `${minutes}m`
+
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return restMinutes ? `${hours}h ${restMinutes}m` : `${hours}h`
+}
+
 export function firstLine(message: string | undefined | null): string {
   if (!message) return ''
   const index = message.indexOf('\n')

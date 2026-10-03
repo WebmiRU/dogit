@@ -11,9 +11,14 @@ import (
 
 // ConfigFileName is where a project's pipeline configuration lives.
 //
-// The name is the one everybody already knows from GitLab. Changing it would be a
-// novelty, and a self-hosted forge is the last place that should invent file names.
-const ConfigFileName = ".gitlab-ci.yml"
+// Called what it is: this is dogit's own configuration, in a dogit installation,
+// and borrowing another forge's name for it would be a small lie that everybody
+// has to remember to un-learn.
+const ConfigFileName = ".dogit-ci.yml"
+
+// The format is dogit's own. It is small on purpose: what it does not understand
+// is refused rather than ignored, so a file always does what it appears to do, and
+// it will grow with the product rather than with anybody else's.
 
 // Config is a parsed pipeline configuration.
 //
@@ -68,7 +73,8 @@ type Rule struct {
 }
 
 // RuleChange is one entry of a `changes` rule, written either as a path or as a
-// mapping with options.
+// mapping with options. Both spellings are read because both are natural and
+// neither is a mistake.
 type RuleChange struct {
 	Paths []string `yaml:"paths"`
 }
@@ -92,17 +98,17 @@ func (c *RuleChange) UnmarshalYAML(node *yaml.Node) error {
 
 // Parse reads a configuration.
 //
-// Anything this does not understand is reported rather than ignored: a file
-// somebody wrote to do something, silently doing nothing but part of it is the
-// failure mode that costs an afternoon.
+// The format is dogit's own and deliberately small. What it does not understand is
+// reported rather than ignored: a file somebody wrote to do something, silently
+// doing something else or nothing, is the failure mode that costs an afternoon.
 func Parse(data []byte) (*Config, error) {
 	config := &Config{
 		Variables: map[string]any{},
 		Jobs:      map[string]JobSpec{},
 	}
 
-	// The top level is read twice: once as the known keys, and once as a map of
-	// everything else, which is where the jobs are.
+	// Read twice: once as the keys this format defines, and once as the document,
+	// because the document knows what order things were written in.
 	if err := yaml.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("parse pipeline configuration: %w", err)
 	}
@@ -165,9 +171,7 @@ func Parse(data []byte) (*Config, error) {
 
 // Load reads a project's configuration from a checkout.
 func Load(checkout string) (*Config, error) {
-	path := filepath.Join(checkout, ConfigFileName)
-
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Join(checkout, ConfigFileName))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", ConfigFileName, err)
 	}
@@ -206,11 +210,13 @@ func Exists(checkout string) bool {
 
 // RunsOn says whether a job should run for a branch.
 //
-// A job with a `rules` list runs only when one of its rules says so — which is the
-// opposite of the obvious reading, and the mistake that has a deploy job running
-// on every push. A rule whose condition this build cannot read matches nothing:
-// a pipeline that guesses at what it does not understand is a pipeline that
-// publishes something somebody told it not to.
+// A job with a `rules` list runs only when one of its rules says so. That is the
+// opposite of the obvious reading, and getting it wrong is how a deployment ends up
+// running on every push.
+//
+// A rule whose condition this build cannot read matches nothing. Refusing is the
+// whole point: a pipeline that guesses at what it does not understand is a pipeline
+// that publishes something somebody told it not to.
 func RunsOn(job JobSpec, branch string, changes bool) bool {
 	if len(job.Rules) > 0 {
 		for _, rule := range job.Rules {
@@ -244,7 +250,7 @@ func ruleRuns(rule Rule, branch string, changes bool) bool {
 	return false
 }
 
-// RuleCondition is the `only` and `except` shorthand.
+// RuleCondition narrows a job by branch, written as `only` or `except`.
 type RuleCondition struct {
 	Refs []string `yaml:"refs"`
 }
