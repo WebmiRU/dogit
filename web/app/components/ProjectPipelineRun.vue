@@ -23,7 +23,6 @@ const lines = ref<Record<number, LogLine[]>>({})
 const loading = ref(true)
 const error = ref('')
 const starting = ref(false)
-const scroller = ref<HTMLElement | null>(null)
 
 /** How often a running job is asked for its log. */
 const pollInterval = 2000
@@ -86,18 +85,21 @@ async function fetchLog(job: PipelineJob) {
 
     const existing = lines.value[job.iid] ?? []
     // Only the tail is kept in the browser. A long build has thousands of lines and
-    // nobody scrolls back through them; the file on the server has all of them.
+    // the file on the server holds all of them; the reader is watching the end.
     const merged = [...existing, ...added]
-    lines.value = { ...lines.value, [job.iid]: merged.length > 800 ? merged.slice(-800) : merged }
-
-    scrollToEnd()
+    lines.value = { ...lines.value, [job.iid]: merged.length > 2000 ? merged.slice(-2000) : merged }
   } catch {
     // A log that could not be read this time is not worth interrupting a build for;
     // the next poll tries again.
   }
 }
 
-/** Follows the log until nothing is running any more. */
+/**
+ * Follows a run until nothing is running any more.
+ *
+ * A run that lasts an hour is watched for the last minute of it, and the only
+ * thing that has to stay true meanwhile is that the log grows.
+ */
 async function follow() {
   while (true) {
     await new Promise((resolve) => setTimeout(resolve, pollInterval))
@@ -107,6 +109,8 @@ async function follow() {
         `/projects/${encodeURIComponent(props.projectPath)}/pipelines/${props.runIid}`,
       )
       .catch(() => null)
+    // A request that failed is not a reason to stop watching: the page is over a
+    // network that blips, and the run is not over.
     if (!answer) continue
 
     pipeline.value = answer.pipeline
@@ -116,25 +120,18 @@ async function follow() {
       await fetchLog(job)
     }
 
-    if (!jobs.value.some((job) => job.status === 'running')) {
-      await load()
-      if (pipeline.value?.status === 'success') {
-        notify(`Pipeline #${props.runIid} passed`, { type: 'success' })
-      } else if (pipeline.value?.status === 'failed') {
-        notify(`Pipeline #${props.runIid} failed`, { type: 'error' })
-      }
-      return
+    if (jobs.value.some((job) => job.status === 'running')) continue
+
+    // Nothing more will be written; one last read so the final lines are shown.
+    await load()
+
+    if (pipeline.value?.status === 'success') {
+      notify(`Pipeline #${props.runIid} passed`, { type: 'success' })
+    } else if (pipeline.value?.status === 'failed') {
+      notify(`Pipeline #${props.runIid} failed`, { type: 'error' })
     }
+    return
   }
-}
-
-/** Follows the bottom of the log — but only when the reader is already there. */
-function scrollToEnd() {
-  const element = scroller.value
-  if (!element) return
-
-  const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 40
-  if (atBottom) element.scrollTop = element.scrollHeight
 }
 
 /**
@@ -257,7 +254,7 @@ const statusClass: Record<string, string> = {
             <pre class="plain">{{ job.script.join('\n') }}</pre>
           </details>
 
-          <div v-if="lines[job.iid]?.length" ref="scroller" class="log">
+          <div v-if="lines[job.iid]?.length" class="log">
             <div
               v-for="(line, index) in lines[job.iid]"
               :key="index"
@@ -310,14 +307,17 @@ const statusClass: Record<string, string> = {
   font-size: 13px;
 }
 
+/* As tall as the log is.
+   A capped window with its own scrollbar is worse in both directions: the page
+   has to be scrolled twice to get anywhere, and every line that arrives pushes
+   the one being read out of sight. Growing the page instead puts one scrollbar
+   where there already was one, and leaves it to the reader. */
 .log {
   margin: 0;
   padding: 12px;
   background: var(--bg-subtle, rgba(0, 0, 0, 0.03));
   border: 1px solid var(--border);
   border-radius: 6px;
-  max-height: 460px;
-  overflow: auto;
   font-size: 13px;
   line-height: 1.5;
 }
