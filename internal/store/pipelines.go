@@ -43,18 +43,53 @@ const (
 
 // Pipeline is one run of a pipeline configuration.
 type Pipeline struct {
-	ID         int64             `json:"id"`
-	IID        int               `json:"iid"`
-	ProjectID  uuid.UUID         `json:"project_id"`
-	Ref        string            `json:"ref"`
-	SHA        string            `json:"sha"`
-	Source     string            `json:"source"`
-	Status     string            `json:"status"`
-	Variables  map[string]string `json:"variables,omitempty"`
-	CreatedBy  *uuid.UUID        `json:"created_by_id,omitempty"`
-	CreatedAt  time.Time         `json:"created_at"`
-	StartedAt  *time.Time        `json:"started_at,omitempty"`
-	FinishedAt *time.Time        `json:"finished_at,omitempty"`
+	ID        int64     `json:"id"`
+	IID       int       `json:"iid"`
+	ProjectID uuid.UUID `json:"project_id"`
+	Ref       string    `json:"ref"`
+	SHA       string    `json:"sha"`
+	Source    string    `json:"source"`
+	Status    string    `json:"status"`
+	// CommitTitle and CommitAuthor describe the commit this run was made against,
+	// copied at creation rather than read from the repository later: the branch
+	// moves on, and a list of old runs that re-reads it would show whatever is at
+	// the tip now for every one of them.
+	CommitTitle       string            `json:"commit_title"`
+	CommitAuthorName  string            `json:"commit_author_name"`
+	CommitAuthorEmail string            `json:"commit_author_email"`
+	Variables         map[string]string `json:"variables,omitempty"`
+	CreatedBy         *uuid.UUID        `json:"created_by_id,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	StartedAt         *time.Time        `json:"started_at,omitempty"`
+	FinishedAt        *time.Time        `json:"finished_at,omitempty"`
+}
+
+// Commit is what a pipeline was run against: enough to say which change it was
+// for, without going back to git to find out.
+type Commit struct {
+	Title       string `json:"title"`
+	AuthorName  string `json:"author_name"`
+	AuthorEmail string `json:"author_email"`
+}
+
+// DurationMs is how long the pipeline took, or nil while it has not finished.
+//
+// Measured from when the first job started rather than when the run was created:
+// the seconds between asking for a build and a runner picking it up belong to
+// nobody, and adding them would make every queued pipeline look slow.
+func (p *Pipeline) DurationMs() *int64 {
+	if p.StartedAt == nil {
+		return nil
+	}
+	end := time.Now()
+	if p.FinishedAt != nil {
+		end = *p.FinishedAt
+	}
+	ms := end.Sub(*p.StartedAt).Milliseconds()
+	if ms < 0 {
+		return nil
+	}
+	return &ms
 }
 
 // Job is one unit of work inside a pipeline.
@@ -88,7 +123,7 @@ type Job struct {
 // CreatePipeline records a pipeline and its jobs, taking the next number for the
 // project.
 func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, ref, sha, source string,
-	variables map[string]string, createdBy *uuid.UUID, jobs []Job) (*Pipeline, error) {
+	variables map[string]string, createdBy *uuid.UUID, commit Commit, jobs []Job) (*Pipeline, error) {
 
 	tx, err := r.s.pool.Begin(ctx)
 	if err != nil {
@@ -120,20 +155,26 @@ func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, 
 	}
 
 	pipeline := &Pipeline{
-		IID:       iid,
-		ProjectID: projectID,
-		Ref:       ref,
-		SHA:       sha,
-		Source:    source,
-		Status:    PipelinePending,
-		Variables: variables,
-		CreatedBy: createdBy,
+		IID:               iid,
+		ProjectID:         projectID,
+		Ref:               ref,
+		SHA:               sha,
+		Source:            source,
+		Status:            PipelinePending,
+		Variables:         variables,
+		CreatedBy:         createdBy,
+		CommitTitle:       commit.Title,
+		CommitAuthorName:  commit.AuthorName,
+		CommitAuthorEmail: commit.AuthorEmail,
 	}
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO pipelines (iid, project_id, ref, sha, source, status, variables, created_by_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at`,
+		INSERT INTO pipelines (iid, project_id, ref, sha, source, status, variables, created_by_id,
+		                       commit_title, commit_author_name, commit_author_email)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, created_at`,
 		pipeline.IID, projectID, ref, sha, source, pipeline.Status, variables, createdBy,
+		pipeline.CommitTitle, pipeline.CommitAuthorName, pipeline.CommitAuthorEmail,
 	).Scan(&pipeline.ID, &pipeline.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create pipeline: %w", err)
@@ -190,10 +231,12 @@ func (r *PipelineRepo) PipelineByIID(ctx context.Context, projectID uuid.UUID, i
 	var pipeline Pipeline
 	err := r.s.pool.QueryRow(ctx, `
 		SELECT id, iid, project_id, ref, sha, source, status, variables, created_by_id,
+		       commit_title, commit_author_name, commit_author_email,
 		       created_at, started_at, finished_at
 		FROM pipelines WHERE project_id = $1 AND iid = $2`, projectID, iid,
 	).Scan(&pipeline.ID, &pipeline.IID, &pipeline.ProjectID, &pipeline.Ref, &pipeline.SHA,
 		&pipeline.Source, &pipeline.Status, &pipeline.Variables, &pipeline.CreatedBy,
+		&pipeline.CommitTitle, &pipeline.CommitAuthorName, &pipeline.CommitAuthorEmail,
 		&pipeline.CreatedAt, &pipeline.StartedAt, &pipeline.FinishedAt)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
@@ -212,6 +255,7 @@ func (r *PipelineRepo) ListPipelines(ctx context.Context, projectID uuid.UUID, l
 
 	rows, err := r.s.pool.Query(ctx, `
 		SELECT id, iid, project_id, ref, sha, source, status, variables, created_by_id,
+		       commit_title, commit_author_name, commit_author_email,
 		       created_at, started_at, finished_at
 		FROM pipelines WHERE project_id = $1 ORDER BY iid DESC LIMIT $2`, projectID, limit)
 	if err != nil {
@@ -224,7 +268,9 @@ func (r *PipelineRepo) ListPipelines(ctx context.Context, projectID uuid.UUID, l
 		var pipeline Pipeline
 		if err := rows.Scan(&pipeline.ID, &pipeline.IID, &pipeline.ProjectID, &pipeline.Ref,
 			&pipeline.SHA, &pipeline.Source, &pipeline.Status, &pipeline.Variables,
-			&pipeline.CreatedBy, &pipeline.CreatedAt, &pipeline.StartedAt, &pipeline.FinishedAt); err != nil {
+			&pipeline.CreatedBy, &pipeline.CommitTitle, &pipeline.CommitAuthorName,
+			&pipeline.CommitAuthorEmail, &pipeline.CreatedAt, &pipeline.StartedAt,
+			&pipeline.FinishedAt); err != nil {
 			return nil, fmt.Errorf("scan pipeline: %w", err)
 		}
 		pipelines = append(pipelines, pipeline)
@@ -435,6 +481,43 @@ func pipelineStatusOf(status string, jobs []Job) string {
 		return PipelinePending
 	default:
 		return PipelineSuccess
+	}
+}
+
+// StageStatus is what one stage's jobs add up to.
+//
+// A stage is finished only when all of its jobs are, and a stage with a failed
+// job that was allowed to fail is a stage that passed: that is the whole point of
+// allowing a failure.
+func StageStatus(jobs []Job) string {
+	if len(jobs) == 0 {
+		return JobPending
+	}
+
+	failed, pending, running := 0, 0, 0
+	for _, job := range jobs {
+		switch job.Status {
+		case JobFailed:
+			if !job.AllowFailure {
+				failed++
+			}
+		case JobSkipped:
+		case JobRunning:
+			running++
+		case JobPending:
+			pending++
+		}
+	}
+
+	switch {
+	case failed > 0:
+		return JobFailed
+	case running > 0:
+		return JobRunning
+	case pending > 0:
+		return JobPending
+	default:
+		return JobSuccess
 	}
 }
 

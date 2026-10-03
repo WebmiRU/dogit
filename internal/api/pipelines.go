@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/modulehost"
 	"github.com/ewolf/dogit/internal/pipeline"
@@ -86,8 +89,20 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Who wrote the change and what it says. Read once here so the run remembers it:
+	// later the branch will have moved, and the list has to keep describing the
+	// commit it was actually made against.
+	commit := store.Commit{}
+	if head := s.commitInfo(r.Context(), rc.RepoDir, sha); head != nil {
+		commit = store.Commit{
+			Title:       head.Subject,
+			AuthorName:  head.AuthorName,
+			AuthorEmail: head.AuthorEmail,
+		}
+	}
+
 	created, err := s.store.Pipelines().CreatePipeline(r.Context(), project.ID, ref, sha,
-		"manual", config.VariablesAsStrings(), &user.ID, jobs)
+		"manual", config.VariablesAsStrings(), &user.ID, commit, jobs)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -106,7 +121,7 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		"Pipeline #%d started on %s in %s", pipeline.IID, ref, project.Path),
 		fmt.Sprintf("/p/%s/-/pipelines/%d", project.Path, pipeline.IID), nil)
 
-	s.writeJSON(w, r, http.StatusCreated, map[string]any{"pipeline": pipelineView(r, pipeline, nil)})
+	s.writeJSON(w, r, http.StatusCreated, map[string]any{"pipeline": s.pipelineView(r, pipeline, nil)})
 }
 
 // pipelineConfig reads a project's configuration from a commit.
@@ -194,7 +209,7 @@ func (s *Server) handleListPipelines(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, r, err)
 			return
 		}
-		views = append(views, pipelineView(r, pipeline, jobs))
+		views = append(views, s.pipelineView(r, pipeline, jobs))
 	}
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"pipelines": views})
@@ -232,7 +247,7 @@ func (s *Server) handleGetPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"pipeline": pipelineView(r, pipeline, jobs),
+		"pipeline": s.pipelineView(r, pipeline, jobs),
 		"jobs":     views,
 	})
 }
@@ -690,7 +705,7 @@ func (s *Server) jobLogKey(job *store.Job) string {
 
 // pipelineView is one pipeline as the interface sees it, with the state its jobs
 // actually add up to.
-func pipelineView(r *http.Request, pipeline *store.Pipeline, jobs []store.Job) map[string]any {
+func (s *Server) pipelineView(r *http.Request, pipeline *store.Pipeline, jobs []store.Job) map[string]any {
 	view := map[string]any{
 		"id":         pipeline.ID,
 		"iid":        pipeline.IID,
@@ -710,7 +725,105 @@ func pipelineView(r *http.Request, pipeline *store.Pipeline, jobs []store.Job) m
 	if len(jobs) > 0 {
 		view["jobs"] = len(jobs)
 	}
+
+	// The commit's message and author, as they were when this run was made. A list
+	// of pipelines is read precisely to answer "what was this for and who sent it",
+	// and neither question is about the repository now.
+	if pipeline.CommitTitle != "" {
+		view["title"] = pipeline.CommitTitle
+	}
+	if pipeline.CommitAuthorName != "" {
+		view["author_name"] = pipeline.CommitAuthorName
+		view["avatar_url"] = avatarURL(pipeline.CommitAuthorEmail, pipeline.CommitAuthorName)
+	}
+	if ms := pipeline.DurationMs(); ms != nil {
+		view["duration_ms"] = *ms
+	}
+
+	if pipeline.CreatedBy != nil {
+		if who, err := s.store.Users().ByID(r.Context(), *pipeline.CreatedBy); err == nil {
+			name := who.Name
+			if name == "" {
+				name = who.Username
+			}
+			view["triggered_by"] = map[string]any{
+				"username":   who.Username,
+				"name":       name,
+				"avatar_url": avatarURL(who.Email, name),
+			}
+		}
+	}
+
+	if len(jobs) > 0 {
+		view["stages"] = stageViews(jobs)
+	}
 	return view
+}
+
+// stageViews groups jobs by stage, keeping the order the stages first appear in.
+//
+// The order is the configuration's, not the alphabetical one: stages are a
+// sequence people read as a sequence, and sorting them by name would put "test"
+// before "build" often enough to be actively misleading.
+func stageViews(jobs []store.Job) []map[string]any {
+	var order []string
+	grouped := map[string][]store.Job{}
+
+	for _, job := range jobs {
+		stage := job.Stage
+		if stage == "" {
+			stage = "test"
+		}
+		if _, seen := grouped[stage]; !seen {
+			order = append(order, stage)
+		}
+		grouped[stage] = append(grouped[stage], job)
+	}
+
+	stages := make([]map[string]any, 0, len(order))
+	for _, name := range order {
+		inside := grouped[name]
+		stageJobs := make([]map[string]any, 0, len(inside))
+		for _, job := range inside {
+			stageJobs = append(stageJobs, map[string]any{
+				"iid":         job.IID,
+				"name":        job.Name,
+				"status":      job.Status,
+				"duration_ms": job.DurationMS,
+			})
+		}
+		stages = append(stages, map[string]any{
+			"name":      name,
+			"status":    store.StageStatus(inside),
+			"jobs":      stageJobs,
+			"job_count": len(inside),
+		})
+	}
+	return stages
+}
+
+// commitInfo reads one commit's subject and author, or nil when it cannot be
+// read. A pipeline whose message is unknown is still a pipeline, so this never
+// refuses anything: it only fills in what it can.
+func (s *Server) commitInfo(ctx context.Context, repoDir, sha string) *gitx.CommitInfo {
+	commits, err := s.git.Log(ctx, repoDir, sha, 1, 0)
+	if err != nil || len(commits) == 0 {
+		return nil
+	}
+	return &commits[0]
+}
+
+// avatarURL is where a person's picture is looked up.
+//
+// Gravatar hashes the address rather than taking it, so the address itself never
+// leaves the installation and there is no question of what was sent anywhere.
+func avatarURL(email, name string) string {
+	address := strings.ToLower(strings.TrimSpace(email))
+	if address == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(address))
+	return "https://secure.gravatar.com/avatar/" + hex.EncodeToString(sum[:])
 }
 
 // jobView is one job as the interface sees it.

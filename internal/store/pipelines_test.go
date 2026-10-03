@@ -25,7 +25,7 @@ func TestAJobIsClaimedByExactlyOneRunner(t *testing.T) {
 	project := dbtest.NewProject(t, st, "claimdemo", nil)
 	runners := []uuid.UUID{uuid.New(), uuid.New()}
 
-	_, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", "abc123", "manual", nil, nil,
+	_, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", "abc123", "manual", nil, nil, store.Commit{},
 		[]store.Job{{Name: "build", Stage: "build", Image: "alpine", Script: []string{"true"}}})
 	if err != nil {
 		t.Fatalf("create pipeline: %v", err)
@@ -134,7 +134,7 @@ func TestFinishingTheLastJobClosesThePipeline(t *testing.T) {
 	ctx := context.Background()
 
 	project := dbtest.NewProject(t, st, "finishdemo", nil)
-	pipeline, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", "abc", "manual", nil, nil,
+	pipeline, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", "abc", "manual", nil, nil, store.Commit{},
 		[]store.Job{{Name: "one"}, {Name: "two"}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -184,7 +184,7 @@ func TestJobsCarryWhatARunnerNeeds(t *testing.T) {
 	ctx := context.Background()
 
 	project := dbtest.NewProject(t, st, "jobdemo", nil)
-	pipeline, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", "def456", "push", nil, nil,
+	pipeline, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", "def456", "push", nil, nil, store.Commit{},
 		[]store.Job{
 			{Name: "lint", Image: "golang:1.25", Script: []string{"go vet ./..."}},
 			{Name: "build", Stage: "build", Build: map[string]any{"tag": "dev"}},
