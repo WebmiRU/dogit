@@ -16,15 +16,36 @@ const error = ref('')
 const busy = ref(false)
 
 /** Tabs live in the URL so a link to "the settings" is a link somebody can send. */
-const tab = computed(() => (['overview', 'settings', 'removal'] as const)
-  .includes(String(route.query.tab)) ? String(route.query.tab) : 'overview')
+/**
+ * The tabs on this module's page.
+ *
+ * A registry also shows what it holds, which is its own data: the core keeps
+ * digests of images in passing and knows nothing about tags or sizes, so this is
+ * asked of the module and every other module simply has one tab fewer.
+ */
+const moduleKind = ref('')
+
+const tabNames = computed(() =>
+  ['overview', ...(moduleKind.value === 'registry:docker' ? ['images'] : []), 'settings', 'removal'],
+)
+
+const tabTitles: Record<string, string> = {
+  overview: 'Overview',
+  images: 'Images',
+  settings: 'Settings',
+  removal: 'Removal',
+}
+
+const tab = computed(() =>
+  (tabNames.value as string[]).includes(String(route.query.tab)) ? String(route.query.tab) : 'overview',
+)
 
 function setTab(name: string) {
   navigateTo({ path: route.path, query: name === 'overview' ? {} : { tab: name } }, { replace: true })
 }
 
-async function load() {
-  loading.value = true
+async function load(quiet = false) {
+  if (!quiet) loading.value = true
   error.value = ''
   try {
     const [answer, statsAnswer] = await Promise.all([
@@ -35,6 +56,9 @@ async function load() {
         .catch(() => ({ latest: null })),
     ])
     module.value = answer.module
+    // Which tabs this module gets is its own kind's business: only a registry has
+    // images, and the page says so rather than offering an empty tab to everything.
+    moduleKind.value = answer.module.kind
     stats.value = statsAnswer.latest ?? null
     series.value = statsAnswer.series ?? []
   } catch (caught) {
@@ -44,7 +68,19 @@ async function load() {
   }
 }
 
-onMounted(load)
+let stopWatching: (() => void) | undefined
+
+onMounted(() => {
+  void load()
+  // The page follows the same feed as the list it was opened from, so a module that
+  // goes offline while this is open says so here without anybody pressing anything.
+  stopWatching = watchEvents({
+    kinds: ['module.registered', 'module.updated', 'module.removed'],
+    onChange: () => void load(true),
+  })
+})
+
+onBeforeUnmount(() => stopWatching?.())
 
 async function setEnabled(enabled: boolean) {
   busy.value = true
@@ -196,7 +232,6 @@ const storageFraction = computed(() => {
         >
           {{ module.enabled ? 'Forbid' : 'Allow' }}
         </button>
-        <button class="btn" type="button" :disabled="loading" @click="load">Refresh</button>
       </div>
 
       <div v-if="error" class="alert alert-error">{{ error }}</div>
@@ -208,14 +243,14 @@ const storageFraction = computed(() => {
 
       <nav class="tabs">
         <button
-          v-for="name in ['overview', 'settings', 'removal']"
+          v-for="name in tabNames"
           :key="name"
           class="tab"
           :class="{ active: tab === name }"
           type="button"
           @click="setTab(name)"
         >
-          {{ name === 'removal' ? 'Removal' : name.charAt(0).toUpperCase() + name.slice(1) }}
+          {{ tabTitles[name] ?? name }}
         </button>
       </nav>
 
@@ -271,6 +306,10 @@ const storageFraction = computed(() => {
         <h2 class="section-title">Reported</h2>
         <ModuleStats :stats="stats" :series="series" />
       </section>
+
+      <!-- What the module holds. Only a registry has images, and it knows what they
+           are: the core stores digests in passing and nothing else. -->
+      <ModuleRegistryImages v-else-if="tab === 'images'" />
 
       <section v-else-if="tab === 'settings'">
         <div v-if="!module.manifest?.settings?.length" class="card empty">

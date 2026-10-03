@@ -390,7 +390,10 @@ func (c *coreClient) resolveImage(ctx context.Context, name string) (string, err
 // store, no hash to compare against and nothing to forget to purge.
 func (c *coreClient) signIn(ctx context.Context, login, password, project string, scopes []string) (string, string, error) {
 	body, err := json.Marshal(map[string]any{
-		"login": login, "password": password, "project": project, "scopes": scopes,
+		// Sent as a credential, not as a password: what a registry client types here
+		// is sometimes an account's password and sometimes a token the core issued
+		// for this project. The core decides which it is.
+		"login": login, "credential": password, "project": project, "scopes": scopes,
 	})
 	if err != nil {
 		return "", "", err

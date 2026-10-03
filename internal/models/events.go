@@ -18,6 +18,13 @@ const (
 	EventJobUpdated          EventKind = "job.updated"
 	EventMergeRequestChanged EventKind = "merge_request.changed"
 	EventProjectUpdated      EventKind = "project.updated"
+
+	// Module events carry no project: a module belongs to the instance rather than
+	// to anything inside it, and the only page that watches them is the
+	// administrator's.
+	EventModuleRegistered EventKind = "module.registered"
+	EventModuleUpdated    EventKind = "module.updated"
+	EventModuleRemoved    EventKind = "module.removed"
 )
 
 // Event is a row in the durable event log. The post-receive hook writes events

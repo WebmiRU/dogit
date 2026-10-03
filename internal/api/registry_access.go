@@ -93,6 +93,35 @@ func (s *Server) handleRegistryAccess(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, errBadRequest("unknown action"))
 		return
 	}
+
+	// A credential the core itself minted for this project stands on its own.
+	//
+	// This is how a machine pushes: the core issues the builder a token scoped to
+	// one project, and the builder is deliberately not a member of it — it is a
+	// system account that must not hold rights on anything but the one thing it was
+	// created to do. Judging that token by the membership table would mean granting
+	// the builder real access to every project it builds, which is the opposite of
+	// what the scope is for.
+	//
+	// The scope has to match this project as well as this action. A token minted for
+	// another project carries no rights here at all, and falls through to the
+	// membership check below like any other credential.
+	if who.ProjectID != nil && *who.ProjectID == project.ID && who.HasScope(scopeOf(action)) {
+		s.writeJSON(w, r, http.StatusOK, models.RegistryAccess{
+			Allowed:  true,
+			Action:   req.Action,
+			Level:    level,
+			Minimum:  minimum,
+			Username: who.Username,
+			UserID:   who.UserID,
+			Project: map[string]any{
+				"id":   project.ID,
+				"path": project.Path,
+			},
+		})
+		return
+	}
+
 	if level < minimum {
 		// Somebody with no access at all is told the project does not exist. "You
 		// may not" would confirm it does, and the registry is the one place a
@@ -143,8 +172,14 @@ func (s *Server) handleRegistryAuthenticate(w http.ResponseWriter, r *http.Reque
 	integration := integrationFrom(r.Context())
 
 	var req struct {
-		Login    string `json:"login"`
-		Password string `json:"password"`
+		Login string `json:"login"`
+		// Credential is what the client presented as its password. It is usually a
+		// password, and it is sometimes something the core itself issued: a runner
+		// has no password to type, only the token it was handed for this project's
+		// images. Both are credentials and both are checked here, where identity
+		// lives — the module forwards what it was given and never looks inside.
+		Credential string `json:"credential"`
+		Password   string `json:"password"`
 		// Project and Scopes come from the scope the client asked for, which is how
 		// a docker login becomes access to one repository rather than to everything.
 		Project string   `json:"project"`
@@ -155,7 +190,15 @@ func (s *Server) handleRegistryAuthenticate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	user, err := s.authenticateLogin(r, req.Login, req.Password)
+	credential := req.Credential
+	if credential == "" {
+		credential = req.Password
+	}
+
+	// A credential the core issued is honoured for what it is: a token, not a
+	// password. It carries its own rights, so the membership check below is not
+	// applied to it — a machine account is deliberately a member of nothing.
+	user, fromToken, err := s.authenticateCredential(r, req.Login, credential)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// The same wording and roughly the same work for an account that does not
@@ -186,28 +229,55 @@ func (s *Server) handleRegistryAuthenticate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// No rights at all means no credential either. Minting one would leave a token
-	// lying around for a caller who can do nothing with it, and every later request
-	// with it would be a request the core has to refuse again.
-	level, err := s.store.Permissions().AccessLevel(r.Context(), user.ID, project.ID)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	if level < store.MinLevel[store.ActionRegistryPull] {
-		s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
-			"errors": []map[string]string{{
-				"code": "UNAUTHORIZED", "message": "invalid login or password",
-			}},
-		})
-		return
-	}
+	wanted := registryScopes(req.Scopes)
 
-	// A client may only ask for scopes this module declared and the caller holds.
-	scopes, err := filterScopes(integration, registryScopes(req.Scopes))
-	if err != nil {
-		s.writeError(w, r, err)
-		return
+	var scopes []string
+	if fromToken != nil {
+		// The token's own scope is the whole of what may be minted from it. A token
+		// for one repository cannot be traded at the token endpoint for one that
+		// reaches further than it does.
+		if fromToken.ProjectID == nil || *fromToken.ProjectID != project.ID {
+			s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
+				"errors": []map[string]string{{
+					"code": "UNAUTHORIZED", "message": "invalid login or password",
+				}},
+			})
+			return
+		}
+		for _, scope := range wanted {
+			if !fromToken.HasScope(scope) {
+				s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
+					"errors": []map[string]string{{
+						"code": "UNAUTHORIZED", "message": "invalid login or password",
+					}},
+				})
+				return
+			}
+		}
+		scopes = wanted
+	} else {
+		// No rights at all means no credential either. Minting one would leave a
+		// token lying around for a caller who can do nothing with it, and every later
+		// request with it would be a request the core has to refuse again.
+		level, err := s.store.Permissions().AccessLevel(r.Context(), user.ID, project.ID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if level < store.MinLevel[store.ActionRegistryPull] {
+			s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
+				"errors": []map[string]string{{
+					"code": "UNAUTHORIZED", "message": "invalid login or password",
+				}},
+			})
+			return
+		}
+
+		scopes, err = filterScopes(integration, wanted)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
 	}
 
 	// The token is short: it only has to survive the pull or push it was minted
@@ -229,18 +299,44 @@ func (s *Server) handleRegistryAuthenticate(w http.ResponseWriter, r *http.Reque
 
 // authenticateLogin checks a login and password the one way that is meaningful.
 func (s *Server) authenticateLogin(r *http.Request, login, password string) (*models.User, error) {
-	if login == "" || password == "" {
-		return nil, store.ErrNotFound
+	user, _, err := s.authenticateCredential(r, login, password)
+	return user, err
+}
+
+// authenticateCredential accepts either kind of credential a registry client can
+// present, and says which kind it was.
+//
+// A password is checked against the account's hash. A token is looked up as one,
+// and the answer about it is returned so the caller can honour its scope rather
+// than the account's rights: those are different things, and a machine's token
+// being narrow is the point of it.
+//
+// Which one was presented is decided by whether the core recognises the string as
+// a token, not by anything the caller says: a client that calls itself an account
+// gets nothing it has not proved.
+func (s *Server) authenticateCredential(r *http.Request, login, credential string) (*models.User, *models.Introspection, error) {
+	if login == "" || credential == "" {
+		return nil, nil, store.ErrNotFound
+	}
+
+	if presented, err := s.tokenFromHeaderValue(credential); err == nil {
+		who := s.introspect(r, presented)
+		if who.Active && who.UserID != nil {
+			user, err := s.store.Users().ByID(r.Context(), *who.UserID)
+			if err == nil {
+				return user, &who, nil
+			}
+		}
 	}
 
 	user, err := s.findUserByLogin(r, login)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if !auth.VerifyPassword(password, user.PasswordHash) {
-		return nil, store.ErrNotFound
+	if !auth.VerifyPassword(credential, user.PasswordHash) {
+		return nil, nil, store.ErrNotFound
 	}
-	return user, nil
+	return user, nil, nil
 }
 
 // registryScopes turns what a client asked for into scopes this module knows.
@@ -375,6 +471,22 @@ func imageNameFor(template, projectPath, branch string) string {
 		"{{branch}}", branch,
 		"{{path}}", projectPath,
 	).Replace(template), "/")
+}
+
+// scopeOf is the permission a token must carry to do an action here.
+//
+// The same naming as everywhere else scopes are written: registry:pull and so on.
+// A token with no scopes carries none, which is what an old token issued before
+// scopes existed should be taken to mean.
+func scopeOf(action store.Action) string {
+	switch action {
+	case store.ActionRegistryPush:
+		return models.ScopeRegistryPush
+	case store.ActionRegistryDelete:
+		return models.ScopeRegistryDelete
+	default:
+		return models.ScopeRegistryPull
+	}
 }
 
 func registryAction(action string) (store.Action, error) {

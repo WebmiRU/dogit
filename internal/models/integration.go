@@ -249,6 +249,20 @@ type Introspection struct {
 	AccessName  string     `json:"access_name,omitempty"`
 }
 
+// HasScope says whether a credential carries a permission.
+//
+// The empty scope is not "everything": a credential that carries nothing carries
+// nothing, and reading it as a wildcard would make every old token as powerful as
+// a new one, which is the wrong way round.
+func (i Introspection) HasScope(scope string) bool {
+	for _, have := range i.Scopes {
+		if have == scope {
+			return true
+		}
+	}
+	return false
+}
+
 // ModuleStats is what a module reports about itself with its heartbeat.
 //
 // Every field is optional and absent means "not reported". The distinction

@@ -55,8 +55,17 @@ const visible = computed(() => {
   )
 })
 
-async function load() {
-  loading.value = true
+/**
+ * Reads the list.
+ *
+ * The list is fetched again rather than patched when something changes: an event
+ * says a pipeline moved, not what it now looks like, and re-reading one small
+ * endpoint is cheaper than being wrong.
+ */
+async function load(quiet = false) {
+  // A reload that follows an event leaves the rows alone. Refreshing the whole list
+  // every few seconds would move the row somebody is reading out from under them.
+  if (!quiet) loading.value = true
   error.value = ''
   try {
     const answer = await api.get<{ pipelines: ModulePipeline[] }>(
@@ -178,8 +187,30 @@ function isLive(pipeline: ModulePipeline) {
   return pipeline.status === 'running' || pipeline.status === 'pending'
 }
 
-onMounted(load)
-watch(() => props.projectPath, load)
+let stopWatching: (() => void) | undefined
+
+/**
+ * Reloads when this project's pipelines move.
+ *
+ * A page that shows the state of builds and needs a button to be told they have
+ * finished is a page nobody leaves open. The feed carries only the fact that
+ * something happened, so this re-reads the list it already knows how to read.
+ */
+function onChanged() {
+  void load(true)
+}
+
+onMounted(() => {
+  stopWatching = watchEvents({
+    kinds: ['pipeline.created', 'pipeline.updated'],
+    project: () => props.projectPath,
+    onChange: onChanged,
+  })
+})
+
+onBeforeUnmount(() => stopWatching?.())
+
+watch(() => props.projectPath, () => load())
 </script>
 
 <template>
@@ -227,6 +258,7 @@ watch(() => props.projectPath, load)
           <th class="col-pipeline">Pipeline</th>
           <th class="col-by">Created by</th>
           <th class="col-stages">Stages</th>
+          <th class="col-actions">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -305,31 +337,43 @@ watch(() => props.projectPath, load)
                 :aria-expanded="openStage === stageKey(run, stage.name)"
                 @click="toggleStage(run, stage.name)"
               />
-            </div>
 
-            <!-- The stage's jobs. Kept out of the row because a pipeline of thirty
-                 jobs would make the table unreadable; what a mark opens is the
-                 names, and a way to run the failed one again. -->
-            <div v-if="openedStage(run)" class="stage-pop">
-              <div class="stage-pop-head">Stage: {{ openedStage(run)!.name }}</div>
-              <div v-for="entry in openedStage(run)!.jobs" :key="entry.iid" class="stage-pop-job">
-                <span class="pop-dot" :class="statusClass[entry.status] ?? 'badge-neutral'" />
-                <NuxtLink
-                  :to="`/p/${projectPath}/-/pipelines/${run.iid}/jobs/${entry.iid}`"
-                  class="pop-name"
-                >
-                  {{ entry.name }}
-                </NuxtLink>
-                <button
-                  type="button"
-                  class="pop-retry"
-                  :title="`Retry ${entry.name}`"
-                  :aria-label="`Retry ${entry.name}`"
-                  :disabled="entry.status === 'running' || entry.status === 'pending'"
-                  @click="retry(run, entry)"
-                >↻</button>
+              <!-- The stage's jobs. Kept out of the row because a pipeline of thirty
+                   jobs would make the table unreadable; what a mark opens is the
+                   names, and a way to run the failed one again. -->
+              <div v-if="openedStage(run)" class="stage-pop">
+                <div class="stage-pop-head">Stage: {{ openedStage(run)!.name }}</div>
+                <div v-for="entry in openedStage(run)!.jobs" :key="entry.iid" class="stage-pop-job">
+                  <span class="pop-dot" :class="statusClass[entry.status] ?? 'badge-neutral'" />
+                  <NuxtLink
+                    :to="`/p/${projectPath}/-/pipelines/${run.iid}/jobs/${entry.iid}`"
+                    class="pop-name"
+                  >
+                    {{ entry.name }}
+                  </NuxtLink>
+                  <button
+                    type="button"
+                    class="pop-retry"
+                    :title="`Retry ${entry.name}`"
+                    :aria-label="`Retry ${entry.name}`"
+                    :disabled="entry.status === 'running' || entry.status === 'pending'"
+                    @click="retry(run, entry)"
+                  >↻</button>
+                </div>
               </div>
             </div>
+          </td>
+
+          <!-- Artifacts. Nothing has been declared yet, so this is here as the
+               place they will appear rather than as a promise of a download: a
+               button that cannot download anything is worse than no button. -->
+          <td class="col-actions">
+            <button
+              type="button"
+              class="download"
+              disabled
+              title="No artifacts have been declared yet"
+            >⬇ <span class="download-label">Download artifacts</span> <span class="chev">▾</span></button>
           </td>
         </tr>
       </tbody>
@@ -388,8 +432,32 @@ watch(() => props.projectPath, load)
   vertical-align: top;
 }
 
-/* The stage column holds the only thing on a row that opens over it, so it is
-   the only one allowed out of the cell to do so. */
+/* Artifacts, not yet implemented. Disabled rather than hidden so that the
+   column's position is already where the button will be. */
+.download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.download .chev {
+  opacity: 0.6;
+}
+
+/* The rows are positioned so that a popover opened from one is not painted over
+   by the rows below it. */
+.pipeline-table tbody tr {
+  position: relative;
+}
 .pipeline-table td.col-stages {
   position: relative;
 }
@@ -401,6 +469,7 @@ watch(() => props.projectPath, load)
 .col-status { width: 132px; }
 .col-by { width: 190px; }
 .col-stages { width: 150px; }
+.col-actions { width: 140px; }
 
 /* One column holds one fact, and the fact is the whole cell — no underlines
    under text that is a link, no hover affordance pretending to be a button. */
@@ -482,10 +551,15 @@ td a:hover {
 
 /* Stages as marks in a row, no names: how far it got, read at a glance. The
    names are one click away, where there is room for them. */
+/* The marks, and the anchor for what they open. A row is three lines tall, so
+   positioning the popover against the cell would drop it below the whole row —
+   a long way from the dot that was clicked, and further down with every row that
+   had more stages. */
 .stages {
   display: flex;
   align-items: center;
   gap: 2px;
+  position: relative;
 }
 
 /* The mark itself is small — it is a dot in a column of dots — but what takes the
@@ -530,11 +604,11 @@ td a:hover {
 .stage-pop {
   position: absolute;
   z-index: 20;
-  /* Right-aligned to the cell so that a mark near the edge of the table opens
-     its list inwards rather than off the screen: the last stage of a pipeline is
-     the rightmost mark, and its jobs are the ones people look for. */
-  right: 12px;
-  top: 100%;
+  /* Under the marks themselves, and to their left so that the last stage of a
+     pipeline — the rightmost mark, and the one people look for — opens its list
+     inwards rather than off the edge of the table. */
+  right: 0;
+  top: calc(100% + 2px);
   width: 260px;
   max-height: 320px;
   overflow: auto;

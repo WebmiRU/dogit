@@ -9,8 +9,18 @@ const modules = ref<ModuleRow[]>([])
 const loading = ref(true)
 const error = ref('')
 
-async function load() {
-  loading.value = true
+/**
+ * Reads the list again.
+ *
+ * Modules change on their own: a runner starts, a heartbeat lapses and one goes
+ * offline. Those moments happen with nobody in front of the browser, so this page
+ * follows the instance's event feed rather than waiting to be asked.
+ */
+async function load(quiet = false) {
+  // A reload that follows an event leaves the rows where they are. Rebuilding the
+  // list every few seconds would move the row somebody is reading out from under
+  // them, which is worse than a row a second out of date.
+  if (!quiet) loading.value = true
   error.value = ''
   try {
     const answer = await api.get<{ modules: ModuleRow[] }>('/modules')
@@ -22,7 +32,17 @@ async function load() {
   }
 }
 
-onMounted(load)
+let stopWatching: (() => void) | undefined
+
+onMounted(() => {
+  void load()
+  stopWatching = watchEvents({
+    kinds: ['module.registered', 'module.updated', 'module.removed'],
+    onChange: () => void load(true),
+  })
+})
+
+onBeforeUnmount(() => stopWatching?.())
 
 /** Storage as a fraction, or null when the module reported none of it. */
 function storageFraction(module: ModuleRow): number | null {
@@ -57,7 +77,6 @@ const statusClass: Record<string, string> = {
           about itself.
         </p>
       </div>
-      <button class="btn" type="button" :disabled="loading" @click="load">Refresh</button>
     </div>
 
     <div v-if="error" class="alert alert-error">{{ error }}</div>

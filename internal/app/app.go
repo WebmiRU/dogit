@@ -12,6 +12,7 @@ import (
 	"github.com/ewolf/dogit/internal/events"
 	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/logger"
+	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/objects"
 	"github.com/ewolf/dogit/internal/store"
 )
@@ -116,6 +117,20 @@ func newObjectStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+// PublishInstanceEvent records something that happened to a module.
+//
+// The janitor lives below the API and still has to be heard: a module going quiet
+// is the one change an administrator most needs to see promptly, and it happens
+// with nobody in front of the browser to cause it.
+func (a *App) PublishInstanceEvent(ctx context.Context, kind models.EventKind, payload map[string]any) {
+	if a.Events == nil {
+		return
+	}
+	if err := a.Events.Publish(ctx, kind, nil, nil, payload); err != nil {
+		a.Log.Debug("publish an instance event", "kind", kind, "error", err)
+	}
+}
 
 // Close releases the database pool.
 func (a *App) Close() {

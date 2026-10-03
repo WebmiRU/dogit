@@ -184,19 +184,40 @@ func (r *IntegrationRepo) Delete(ctx context.Context, id uuid.UUID) error {
 //
 // It runs on a timer in the web tier: the UI should not have to compute liveness,
 // and Kubernetes readiness should reflect the same state.
-func (r *IntegrationRepo) MarkStaleOffline(ctx context.Context, window time.Duration) (int64, error) {
+func (r *IntegrationRepo) MarkStaleOffline(ctx context.Context, window time.Duration) ([]StaleModule, error) {
 	if window <= 0 {
 		window = heartbeatWindow
 	}
-	tag, err := r.s.pool.Exec(ctx, `
+	// Which modules went quiet is returned rather than just how many: the caller has
+	// to say so, and a count would leave an administrator looking at a page that
+	// changed without being told why.
+	rows, err := r.s.pool.Query(ctx, `
 		UPDATE integrations SET status = 'offline', updated_at = now()
 		WHERE enabled
 		  AND status = 'online'
-		  AND (last_seen_at IS NULL OR last_seen_at < now() - $1::interval)`, window)
+		  AND (last_seen_at IS NULL OR last_seen_at < now() - $1::interval)
+		RETURNING id, kind, name`, window)
 	if err != nil {
-		return 0, fmt.Errorf("mark stale modules: %w", err)
+		return nil, fmt.Errorf("mark stale modules: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	defer rows.Close()
+
+	var stale []StaleModule
+	for rows.Next() {
+		var one StaleModule
+		if err := rows.Scan(&one.ID, &one.Kind, &one.Name); err != nil {
+			return nil, fmt.Errorf("scan a stale module: %w", err)
+		}
+		stale = append(stale, one)
+	}
+	return stale, rows.Err()
+}
+
+// StaleModule is a module that stopped sending heartbeats.
+type StaleModule struct {
+	ID   uuid.UUID
+	Kind string
+	Name string
 }
 
 // --- module tokens ------------------------------------------------------

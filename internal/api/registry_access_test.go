@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ewolf/dogit/internal/dbtest"
 	"github.com/ewolf/dogit/internal/models"
@@ -283,6 +284,67 @@ func TestRegistryLoginNeedsSomeRights(t *testing.T) {
 	}
 	if answer.ExpiresIn <= 0 {
 		t.Error("the credential has no lifetime")
+	}
+}
+
+// buildTokenHash is how a raw token is stored: hashed, never in the clear.
+func buildTokenHash(raw string) []byte {
+	sum := sha256.Sum256([]byte(raw))
+	return sum[:]
+}
+
+// A build pushes with a token the core issued, not with a password, and the token
+// endpoint has to accept it as the credential it is.
+//
+// This is how an image reaches the registry: the runner is given a token scoped to
+// one project, types it where a registry client asks for a password, and gets a
+// short one back. Judged as a password it can only ever fail, because the builder
+// account has no password — and a machine that cannot push is a pipeline that runs
+// and then does nothing.
+func TestRegistryLoginAcceptsATokenAsACredential(t *testing.T) {
+	rf := setupRegistry(t, models.AccessLevelDeveloper)
+
+	// A token for this project, issued to an account that is not a member of it:
+	// that is what a build credential is.
+	builder := dbtest.NewUser(t, rf.store, "builder", false)
+	scoped := &models.IntegrationToken{
+		IntegrationID: rf.module.ID,
+		UserID:        &builder.ID,
+		ProjectID:     &rf.project.ID,
+		Scopes: []string{
+			models.ScopeRegistryPull, models.ScopeRegistryPush,
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := rf.store.IntegrationTokens().Create(t.Context(), scoped, buildTokenHash("build-token")); err != nil {
+		t.Fatalf("mint a build token: %v", err)
+	}
+
+	body := `{"login":"builder","credential":"build-token","project":` +
+		mustJSON(rf.project.Path) + `,"scopes":["pull","push"]}`
+	recorder := rf.asModule(t, rf.moduleToken, "/module/registry/authenticate", body)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", recorder.Code, recorder.Body.String())
+	}
+
+	// What it was exchanged for must not be able to do more than the token it came
+	// from: a credential that could be traded for a wider one would make the scope
+	// it was issued with meaningless.
+	wider := `{"login":"builder","credential":"build-token","project":` +
+		mustJSON(rf.project.Path) + `,"scopes":["pull","push","delete"]}`
+	recorder = rf.asModule(t, rf.moduleToken, "/module/registry/authenticate", wider)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Errorf("status %d, want 401: a narrow token was traded for a wider one", recorder.Code)
+	}
+
+	// And not for another project's images either.
+	other := dbtest.NewProject(t, rf.store, "elsewhere", nil)
+	across := `{"login":"builder","credential":"build-token","project":` +
+		mustJSON(other.Path) + `,"scopes":["pull"]}`
+	recorder = rf.asModule(t, rf.moduleToken, "/module/registry/authenticate", across)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Errorf("status %d, want 401: a token reached outside its own project", recorder.Code)
 	}
 }
 

@@ -95,6 +95,9 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("module registered",
 		"kind", integration.Kind, "name", integration.Name,
 		"version", integration.ModuleVersion, "endpoint", integration.Endpoint)
+	s.publishInstanceEvent(r, models.EventModuleRegistered, integration, map[string]any{
+		"enabled": integration.Enabled,
+	})
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"integration":        s.integrationView(r, integration, nil, nil),
@@ -322,7 +325,38 @@ func (s *Server) handleSetModuleState(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.publishInstanceEvent(r, models.EventModuleUpdated, updated, map[string]any{
+		"enabled": updated.Enabled,
+	})
+
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"module": updated})
+}
+
+// publishInstanceEvent records something that happened to a module.
+//
+// Module events carry no project: a module belongs to the instance rather than to
+// anything inside it, and the only page that watches them is the administrator's.
+func (s *Server) publishInstanceEvent(r *http.Request, kind models.EventKind,
+	integration *models.Integration, payload map[string]any) {
+
+	if s.events == nil {
+		return
+	}
+	body := payload
+	if body == nil {
+		body = map[string]any{}
+	}
+	body["kind"] = integration.Kind
+	body["name"] = integration.Name
+
+	var actorID *uuid.UUID
+	if user := userFrom(r.Context()); user.ID != uuid.Nil {
+		id := user.ID
+		actorID = &id
+	}
+	if err := s.events.Publish(r.Context(), kind, nil, actorID, body); err != nil {
+		s.log.Debug("publish a module event", "kind", kind, "error", err)
+	}
 }
 
 func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +370,7 @@ func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("module removed", "kind", integration.Kind, "name", integration.Name)
+	s.publishInstanceEvent(r, models.EventModuleRemoved, integration, nil)
 	s.writeJSON(w, r, http.StatusNoContent, nil)
 }
 

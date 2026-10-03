@@ -67,6 +67,9 @@ interface LogLine {
  */
 const consumed = ref<Record<number, number>>({})
 
+/** True while the following loop is in flight, so a second one is not started. */
+const followLoopRunning = ref(false)
+
 const running = computed(() => jobs.value.some((job) => job.status === 'running'))
 const pending = computed(() => jobs.value.some((job) => job.status === 'pending'))
 
@@ -178,6 +181,16 @@ async function fetchLog(job: PipelineJob) {
  * thing that has to stay true meanwhile is that the log grows.
  */
 async function follow() {
+  if (followLoopRunning.value) return
+  followLoopRunning.value = true
+  try {
+    await followLoop()
+  } finally {
+    followLoopRunning.value = false
+  }
+}
+
+async function followLoop() {
   while (true) {
     await new Promise((resolve) => setTimeout(resolve, pollInterval))
 
@@ -285,10 +298,25 @@ async function rerun() {
   }
 }
 
+let stopWatching: (() => void) | undefined
+
 onMounted(async () => {
   await load()
   if (running.value) await follow()
+
+  // The poll above only runs while something is running here. Once it is over this
+  // keeps listening, so a job retried from another page — or a run started from the
+  // list — is picked up without a reload.
+  stopWatching = watchEvents({
+    kinds: ['pipeline.created', 'pipeline.updated'],
+    project: () => props.projectPath,
+    onChange: () => {
+      if (!followLoopRunning.value && (running.value || pending.value)) void follow()
+    },
+  })
 })
+
+onBeforeUnmount(() => stopWatching?.())
 
 watch(() => props.jobIid, async (asked) => {
   const iid = asked ?? 0

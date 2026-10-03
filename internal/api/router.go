@@ -149,6 +149,10 @@ func (s *Server) Register(r chi.Router) {
 		// Asks for one message to be sent, so settings can be checked before anything
 		// is relied on.
 		authenticated.Post("/modules/{integrationID}/notify-test", s.handleTestNotification)
+		// Every image on the instance, for the registry module's own page. Only an
+		// administrator may ask: the answer spans every project, and a member of one
+		// project has no business knowing what another project's images are called.
+		authenticated.Get("/registry/catalog", s.handleRegistryCatalog)
 		authenticated.Get("/modules/{integrationID}", s.handleGetModule)
 		authenticated.Put("/modules/{integrationID}/state", s.handleSetModuleState)
 		authenticated.Delete("/modules/{integrationID}", s.handleDeleteModule)

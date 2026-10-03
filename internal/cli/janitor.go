@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ewolf/dogit/internal/app"
+	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -19,7 +20,9 @@ const janitorInterval = time.Minute
 //   - modules that stopped sending heartbeats, which would otherwise stay
 //     "online" forever and be handed out tokens;
 //   - short-lived module tokens, which are worthless once expired;
-//   - expired sessions, which would otherwise accumulate indefinitely.
+//   - expired sessions, which would otherwise accumulate indefinitely;
+//   - jobs whose runner stopped answering, which would otherwise leave their
+//     pipelines running for ever.
 //
 // Running this in the web tier means any instance can do it, and several
 // instances doing it at once is harmless because every statement is idempotent.
@@ -41,14 +44,33 @@ func runJanitor(ctx context.Context, a *app.App) {
 	stale, err := a.Store.Integrations().MarkStaleOffline(ctx, 90*time.Second)
 	if err != nil {
 		a.Log.Warn("mark modules offline", "error", err)
-	} else if stale > 0 {
-		a.Log.Info("modules marked offline", "count", stale)
+	} else if len(stale) > 0 {
+		a.Log.Info("modules marked offline", "count", len(stale))
+		// Said aloud as well as written: an administrator's page follows the event
+		// feed, and without this the page would show a module as online long after
+		// its machine stopped answering.
+		for _, one := range stale {
+			a.PublishInstanceEvent(ctx, models.EventModuleUpdated,
+				map[string]any{"kind": one.Kind, "name": one.Name, "status": "offline"})
+		}
 	}
 
 	// A removal whose module has gone quiet is marked stalled rather than left
 	// running forever. It is not failed: the log keeps whatever the module managed
 	// to write, which is usually the line explaining where it stopped, and the
 	// administrator decides what to do about it.
+	// A job marked running is a claim that some machine is working on it. When the
+	// machine is gone the claim is still there, and the pipeline waits on it for
+	// ever — the one state a pipeline must never be in, because an operator who
+	// restarts a runner should not have to go and repair the queue by hand.
+	staleJobs, err := a.Store.Pipelines().ReapStaleJobs(ctx, store.JobStaleAfter)
+	if err != nil {
+		a.Log.Warn("reclaim jobs whose runner went quiet", "error", err)
+	} else if len(staleJobs) > 0 {
+		a.Log.Warn("jobs interrupted: their runners stopped reporting",
+			"jobs", len(staleJobs), "after", store.JobStaleAfter.String())
+	}
+
 	stalled, err := a.Store.ModuleUninstall().Stale(ctx, store.StalledAfter)
 	if err != nil {
 		a.Log.Warn("stall module removals", "error", err)

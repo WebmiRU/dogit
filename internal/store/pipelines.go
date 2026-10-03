@@ -24,11 +24,15 @@ func (s *Store) Pipelines() *PipelineRepo { return &PipelineRepo{s: s} }
 // read rather than stored, so a job's state can change without anything having to
 // remember to fix its parent.
 const (
-	PipelinePending  = "pending"
-	PipelineRunning  = "running"
-	PipelineSuccess  = "success"
-	PipelineFailed   = "failed"
-	PipelineCanceled = "canceled"
+	PipelinePending = "pending"
+	PipelineRunning = "running"
+	// PipelineInterrupted is a pipeline whose runner stopped reporting while its
+	// jobs were running. It is neither a failure nor a success: the machine went
+	// away mid-build, and either verdict would be a claim nobody can support.
+	PipelineInterrupted = "interrupted"
+	PipelineSuccess     = "success"
+	PipelineFailed      = "failed"
+	PipelineCanceled    = "canceled"
 )
 
 // Job statuses.
@@ -39,6 +43,11 @@ const (
 	JobFailed   = "failed"
 	JobCanceled = "canceled"
 	JobSkipped  = "skipped"
+	// JobInterrupted is a job whose runner stopped answering while it was running.
+	// It is neither a failure nor a success, because neither is known: the machine
+	// went away mid-build, and saying the build failed would be a claim nobody can
+	// support.
+	JobInterrupted = "interrupted"
 )
 
 // Pipeline is one run of a pipeline configuration.
@@ -431,6 +440,88 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 	return nil
 }
 
+// JobStaleAfter is how long a running job may go without finishing before the core
+// stops believing the machine is still working on it.
+//
+// Long enough for a slow build on a loaded runner: a job that takes ten minutes is
+// ordinary, and cutting it off early would leave a container running with nobody
+// watching it. Short enough that a pipeline does not hang for a day over a runner
+// that was switched off.
+const JobStaleAfter = 30 * time.Minute
+
+// ReapStaleJobs puts back the jobs whose runner stopped reporting.
+//
+// A job marked running is a claim that some machine is working on it. When that
+// machine is gone the claim is still there, and the pipeline waits on it for ever,
+// which is the one state a pipeline must never be in: an operator who restarts a
+// runner should not have to go and repair the queue by hand.
+//
+// The status is "interrupted" rather than a failure, because nothing is known about
+// how far it got. Failing it would say the build broke; it did not, its machine
+// stopped. Either way it is no longer running, and that is the part anybody needs
+// to know.
+func (r *PipelineRepo) ReapStaleJobs(ctx context.Context, olderThan time.Duration) ([]string, error) {
+	// One statement, so two janitors cannot finish the same job twice: the second
+	// UPDATE matches nothing, because the first has already changed the status.
+	rows, err := r.s.pool.Query(ctx, `
+		UPDATE jobs
+		SET status = $1, finished_at = now(),
+		    duration_ms = GREATEST(0, (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::bigint)
+		WHERE status = $2 AND started_at IS NOT NULL AND started_at < now() - $3::interval
+		RETURNING name`, JobInterrupted, JobRunning, fmt.Sprintf("%d seconds", int(olderThan.Seconds())))
+	if err != nil {
+		return nil, fmt.Errorf("reclaim stale jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var stale []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan a reclaimed job: %w", err)
+		}
+		stale = append(stale, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(stale) == 0 {
+		return nil, nil
+	}
+
+	// The pipelines those jobs belonged to are finished for the same reason, by the
+	// same rule that finishes one when a job completes: a pipeline whose last job
+	// was reclaimed has to end, or it waits for ever.
+	if _, err := r.s.pool.Exec(ctx, `
+		UPDATE pipelines p
+		SET finished_at = now(), status = $1
+		WHERE p.status = $2
+		  AND NOT EXISTS (
+		      SELECT 1 FROM jobs j
+		      WHERE j.pipeline_id = p.id AND j.status IN ($3, $4))`,
+		pipelineStatusFor(JobInterrupted), PipelineRunning, JobPending, JobRunning); err != nil {
+		return stale, fmt.Errorf("finish the pipelines of reclaimed jobs: %w", err)
+	}
+	return stale, nil
+}
+
+// ReleaseJob puts a claimed job back without having run it.
+//
+// For the moment between "a runner took this" and "the core finished answering".
+// A job in that state is owned by nobody as far as the rest of the system is
+// concerned: the runner was told nothing, so it will never report on it, and a
+// pipeline waiting for it waits for ever.
+func (r *PipelineRepo) ReleaseJob(ctx context.Context, id int64) error {
+	_, err := r.s.pool.Exec(ctx, `
+		UPDATE jobs
+		SET status = $2, runner_id = NULL, started_at = NULL
+		WHERE id = $1 AND status = $3`, id, JobPending, JobRunning)
+	if err != nil {
+		return fmt.Errorf("release job: %w", err)
+	}
+	return nil
+}
+
 // RetryJob puts one job back in the queue.
 //
 // The same row, not a copy: a job that is being run again is the same job, and a
@@ -482,6 +573,11 @@ func (r *PipelineRepo) JobByIID(ctx context.Context, pipelineID int64, iid int) 
 // allowed to fail does not drag it down — which is the whole point of allowing it.
 func pipelineStatusFor(jobStatus string) string {
 	switch jobStatus {
+	case JobInterrupted:
+		// Nothing is known about how far it got, so the pipeline is not called
+		// failed: what is known is that it is no longer running, and that is the
+		// part anybody waiting needs.
+		return PipelineInterrupted
 	case JobSuccess, JobSkipped:
 		return PipelineSuccess
 	case JobCanceled:
@@ -500,9 +596,14 @@ func pipelineStatusOf(status string, jobs []Job) string {
 		return PipelineCanceled
 	}
 
-	pending, running, failed := 0, 0, 0
+	pending, running, failed, interrupted := 0, 0, 0, 0
 	for _, job := range jobs {
 		switch job.Status {
+		case JobInterrupted:
+			// Counted, and not counted as a failure: the job did not break, the
+			// machine running it did. It still decides the pipeline, because a
+			// pipeline with a job that will never finish is not a successful one.
+			interrupted++
 		// A skipped job is one that will never run, and a pipeline waiting for
 		// something that will never happen is a pipeline that never finishes.
 		case JobSkipped:
@@ -524,6 +625,8 @@ func pipelineStatusOf(status string, jobs []Job) string {
 		return PipelineRunning
 	case pending > 0:
 		return PipelinePending
+	case interrupted > 0:
+		return PipelineInterrupted
 	default:
 		return PipelineSuccess
 	}

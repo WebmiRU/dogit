@@ -174,6 +174,8 @@ func handler(core *coreClient, registry *registry) *http.ServeMux {
 	// an origin the operator wrote down.
 	mux.Handle("/packages", cors(registry.packages))
 	mux.Handle("/packages/delete", cors(registry.deletePackage))
+	// Everything the registry holds, for an administrator's page on the module.
+	mux.Handle("/catalog", cors(registry.catalog))
 
 	mux.HandleFunc("/-/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

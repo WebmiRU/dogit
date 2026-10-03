@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -180,6 +181,13 @@ func jobsFrom(config *pipeline.Config, ref, only string) []store.Job {
 	return jobs
 }
 
+// registryHost is the address a docker client is given as the registry host:
+// no scheme, no trailing slash.
+func registryHost(address string) string {
+	trimmed := strings.TrimPrefix(strings.TrimPrefix(address, "https://"), "http://")
+	return strings.TrimSuffix(trimmed, "/")
+}
+
 func shortSHA(sha string) string {
 	if len(sha) > 8 {
 		return sha[:8]
@@ -298,6 +306,11 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.log.Info("job retried", "project", project.Path, "pipeline", pipeline.IID, "job", job.Name)
+	s.publishPipeline(r, project.ID, userFrom(r.Context()), models.EventPipelineUpdated, map[string]any{
+		"pipeline_id": pipeline.IID,
+		"job_name":    job.Name,
+		"status":      store.JobPending,
+	})
 	s.notify(r, project.Path, "pipeline.started", fmt.Sprintf(
 		"Retrying %s in pipeline #%d (%s)", job.Name, pipeline.IID, project.Path),
 		fmt.Sprintf("/p/%s/-/pipelines/%d", project.Path, pipeline.IID), nil)
@@ -352,6 +365,14 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	if len(job.Build) > 0 {
 		credentials, err := s.registryCredentialsFor(r, job)
 		if err != nil {
+			// The job is already marked as this runner's, and the runner never heard
+			// about it: nothing will ever report on it. It goes back into the queue
+			// rather than staying "running" on a machine that is not running it,
+			// which is a pipeline that hangs for ever over a problem another attempt
+			// may not even have.
+			if releaseErr := s.store.Pipelines().ReleaseJob(r.Context(), job.ID); releaseErr != nil {
+				s.log.Error("could not put a claimed job back", "job", job.ID, "error", releaseErr)
+			}
 			s.writeError(w, r, err)
 			return
 		}
@@ -390,7 +411,12 @@ func (s *Server) registryCredentialsFor(r *http.Request, job *store.Job) (map[st
 	// The credential belongs to the project, not to the person who pressed the
 	// button: a job runs at three in the morning, and it runs the project's work,
 	// not somebody's session.
-	token, _, err := s.mintModuleToken(r, serviceUser(), registry, &project.ID,
+	builder, err := s.serviceUser(r.Context())
+	if err != nil {
+		return nil, err
+	}
+
+	token, _, err := s.mintModuleToken(r, builder, registry, &project.ID,
 		[]string{models.ScopeRegistryPush, models.ScopeRegistryPull}, 2*time.Hour)
 	if err != nil {
 		return nil, err
@@ -430,11 +456,18 @@ func (s *Server) registryCredentialsFor(r *http.Request, job *store.Job) (map[st
 	return map[string]any{
 		"url":          strings.TrimRight(address, "/"),
 		"internal_url": strings.TrimRight(registry.Endpoint, "/"),
-		"image":        imageNameFor(template, project.Path, jobRef(job)),
-		"token":        token,
-		"expires_in":   int((2 * time.Hour).Seconds()),
+		// With the address in front, because that is what the client is told to
+		// push to. A bare name is Docker Hub's: docker reads everything before the
+		// first slash as a registry, and an unqualified name means the public one,
+		// whatever the client happens to be logged in to.
+		"image":      registryHost(address) + "/" + imageNameFor(template, project.Path, jobRef(job)),
+		"token":      token,
+		"expires_in": int((2 * time.Hour).Seconds()),
 	}, nil
 }
+
+// builderName is the account machines act as.
+const builderName = "builder"
 
 // serviceUser is the account a machine acts as.
 //
@@ -442,9 +475,42 @@ func (s *Server) registryCredentialsFor(r *http.Request, job *store.Job) (map[st
 // belongs to a system account rather than to whoever pressed the button. Naming
 // it keeps the audit trail honest: an image pushed at three in the morning is
 // attributed to the builder, not to the person who started the pipeline.
-func serviceUser() *models.User {
-	return &models.User{Username: "builder"}
+//
+// The account is created the first time a build asks for one. It is a real row in
+// the users table rather than a name in a log line, because a credential has to
+// point at something: the token table's foreign key would otherwise refuse every
+// build on this instance, and the reason would be an integrity error instead of a
+// missing account.
+func (s *Server) serviceUser(ctx context.Context) (*models.User, error) {
+	user, err := s.store.Users().ByUsername(ctx, builderName)
+	if err == nil {
+		return user, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+
+	user = &models.User{
+		Username: builderName,
+		Email:    builderName + "@" + serviceEmailDomain,
+		Name:     "Build service",
+		// Nothing can sign in as it: the hash is of nothing anybody has, and the
+		// account exists to be named in an audit trail rather than to be used.
+		PasswordHash: []byte("!"),
+	}
+	if err := s.store.Users().Create(ctx, user); err != nil {
+		// Somebody else creating it at the same moment is success, not failure.
+		if errors.Is(err, store.ErrConflict) {
+			return s.store.Users().ByUsername(ctx, builderName)
+		}
+		return nil, err
+	}
+	return user, nil
 }
+
+// serviceEmailDomain is what a service account's address looks like. Reserved and
+// unroutable, so a message to it goes nowhere rather than to somebody.
+const serviceEmailDomain = "users.noreply.dogit.invalid"
 
 // jobRef is the branch a job's image is named after, when the build says so.
 func jobRef(job *store.Job) string {
@@ -557,13 +623,27 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 		"status": status,
 	})
 
+	// Something changed about a pipeline this project can see, so a page watching
+	// one re-reads it. The event is the signal only: what the pipeline now looks
+	// like is fetched again through the endpoint that already knows how.
 	if job.ProjectPath != "" {
+		project, err := s.store.Projects().ByPath(r.Context(), job.ProjectPath)
+		if err == nil {
+			s.publishPipeline(r, project.ID, nil, models.EventPipelineUpdated, map[string]any{
+				"pipeline_id": job.PipelineID,
+				"job_name":    job.Name,
+				"status":      status,
+			})
+		}
+
 		emoji := "✅"
 		switch status {
 		case store.JobFailed:
 			emoji = "❌"
 		case store.JobCanceled:
 			emoji = "🚫"
+		case store.JobInterrupted:
+			emoji = "⚠️"
 		}
 		s.notify(r, job.ProjectPath, "pipeline."+status, fmt.Sprintf(
 			"%s Job %q %s in %s", emoji, job.Name, status, job.ProjectPath),
@@ -707,7 +787,7 @@ func (s *Server) publishPipeline(r *http.Request, projectID uuid.UUID, actor *mo
 		return
 	}
 	if actor == nil {
-		actor = serviceUser()
+		actor = &models.User{Username: builderName}
 	}
 	var actorID *uuid.UUID
 	if actor.ID != uuid.Nil {

@@ -121,7 +121,7 @@ func (s *Server) handleProjectImages(w http.ResponseWriter, r *http.Request) {
 		canPush = true
 	}
 
-	token, err := s.issuePackageToken(r, user, integration, project.ID, scopes)
+	token, err := s.issuePackageToken(r, user, integration, &project.ID, scopes)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -147,15 +147,18 @@ func (s *Server) handleProjectImages(w http.ResponseWriter, r *http.Request) {
 // a module and be believed; handing the browser a token inverts that honestly. The
 // module verifies it by asking the core who is presenting it, which is the same
 // question every module asks about every request.
+// A nil projectID mints a token for the whole instance, which only an
+// administrator is given: there is no project to narrow it to, and narrowing is
+// what makes the per-project token safe to hand a browser at all.
 func (s *Server) issuePackageToken(r *http.Request, user *models.User, integration *models.Integration,
-	projectID uuid.UUID, scopes []string) (string, error) {
+	projectID *uuid.UUID, scopes []string) (string, error) {
 
 	scopes, err := filterScopes(integration, scopes)
 	if err != nil {
 		return "", err
 	}
 
-	token, _, err := s.mintModuleToken(r, user, integration, &projectID, scopes, packageTokenTTL)
+	token, _, err := s.mintModuleToken(r, user, integration, projectID, scopes, packageTokenTTL)
 	if err != nil {
 		return "", err
 	}
