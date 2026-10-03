@@ -396,18 +396,25 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	// An image the job was asked to produce is built here and pushed to the
 	// registry module, using the credential the core issued for this project.
 	var pushed string
+	// Why the build did not work, kept for the job's verdict rather than only for
+	// the runner's log. A build that failed while the script succeeded is a failed
+	// job: reporting it as a pass would leave a green build with no image behind it,
+	// which is the one outcome nobody can notice until they deploy it.
+	var buildErr error
+	var buildWait chan struct{}
 	if len(job.Build) > 0 {
 		buildDone := make(chan struct{})
 		go func() {
 			defer close(buildDone)
 			tag, err := buildAndPush(ctx, cfg, workspace, answer.Registry, job.Build)
 			if err != nil {
-				log.Printf("module-runner: build failed: %v", err)
+				buildErr = err
 				return
 			}
 			pushed = tag
 		}()
-		defer func() { <-buildDone }()
+		// Waited for below, once the script is done: the job's verdict covers both.
+		buildWait = buildDone
 	}
 
 	// Two writers, one per stream: a build's stderr is the line the reader is
@@ -423,16 +430,37 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	out.Close()
 	errs.Close()
 
+	// The build finishes after the script, often long after it. Reporting the job
+	// now would say "passed" about a build that is still running and may yet fail —
+	// which is exactly how a green pipeline ends up with no image behind it.
+	if buildWait != nil {
+		select {
+		case <-buildWait:
+		case <-ctx.Done():
+			buildErr = errors.New("the build was cut short when the job was stopping")
+		}
+	}
+
 	status := "success"
-	if result.Status != runner.StatusSuccess {
+	message := resultMessage(result)
+	if result.Status != runner.StatusSuccess || buildErr != nil {
 		status = "failed"
+	}
+	if buildErr != nil {
+		// Said in the log too: the job's verdict is one line on a page, and this is
+		// the line that says why.
+		core.log(ctx, job.ID, "err", fmt.Sprintf("build failed: %v\n", buildErr))
+		if result.Status == runner.StatusSuccess {
+			message = buildErr.Error()
+		}
+		log.Printf("module-runner: build failed: %v", buildErr)
 	}
 
 	if pushed != "" {
 		core.log(ctx, job.ID, "out", fmt.Sprintf("image pushed: %s\n", pushed))
 	}
 
-	core.finish(ctx, job.ID, status, time.Since(started), resultMessage(result))
+	core.finish(ctx, job.ID, status, time.Since(started), message)
 	log.Printf("module-runner: job %d %s in %s", job.ID, status, time.Since(started).Round(time.Second))
 }
 
@@ -565,6 +593,14 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	// The build itself is plain docker: this is the machine that is allowed to run
 	// it, which is the whole reason this process exists as its own binary.
 	args := []string{"build", "-t", full, "-f", filepathJoin(workspace, file), workspace}
+	// Provenance off.
+	//
+	// BuildKit attaches a record of how an image was built and pushes it beside the
+	// image. The record names the repository it believes it is building, which is
+	// not always the one being pushed, and the client then asks the registry for a
+	// credential for that name as well. It is a build record, not part of the image,
+	// and nothing here consumes it — so it is turned off rather than fought with.
+	args = append(args, "--provenance=false")
 	if contextPath != "." {
 		args[len(args)-1] = filepathJoin(workspace, contextPath)
 	}
@@ -583,20 +619,46 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	host := registryHost(address)
 	token := tokenOf(registry)
 
-	login := exec.CommandContext(ctx, cfg.dockerBinary, "login", host, "-u", "builder",
-		"--password-stdin")
-	login.Stdin = strings.NewReader(token)
-	if output, err := login.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("docker login: %w: %s", err, strings.TrimSpace(string(output)))
+	// A credential store of this job's own, and not the machine's.
+	//
+	// Docker keeps credentials per registry host in one file that belongs to the
+	// machine, not to a build. Two jobs on one runner therefore share it: the
+	// second finds the first project's token already there, logs in as that, and
+	// pushes to its own repository with a credential for somebody else's project —
+	// which is refused, correctly. It also means a build could inherit a login this
+	// job was never given, which is exactly what a build must not be able to do.
+	configDir, err := os.MkdirTemp("", "dogit-docker-config-")
+	if err != nil {
+		return "", fmt.Errorf("prepare a docker config: %w", err)
 	}
-	defer func() {
-		_, _ = run(context.WithoutCancel(ctx), cfg.dockerBinary, "logout", host)
-	}()
+	// Removed whatever happens, including on a crash: this file holds a credential.
+	defer func() { _ = os.RemoveAll(configDir) }()
 
-	if output, err := run(ctx, cfg.dockerBinary, "push", full); err != nil {
+	if output, err := dockerWithConfig(ctx, configDir, cfg.dockerBinary, token, "login", host,
+		"-u", "builder", "--password-stdin"); err != nil {
+		return "", fmt.Errorf("docker login: %w: %s", err, strings.TrimSpace(output))
+	}
+
+	if output, err := dockerWithConfig(ctx, configDir, cfg.dockerBinary, "", "push", full); err != nil {
 		return "", fmt.Errorf("docker push: %w: %s", err, lastLines(output, 20))
 	}
 	return full, nil
+}
+
+// dockerWithConfig runs a docker command against one credential store.
+//
+// The configuration directory is given as a flag rather than through the
+// environment so that nothing else on the machine can be affected by where it
+// points, and so that a build inside the container — which has its own view of the
+// filesystem — cannot be handed a path it cannot reach.
+func dockerWithConfig(ctx context.Context, configDir, binary, stdin string, args ...string) (string, error) {
+	command := exec.CommandContext(ctx, binary, append([]string{"--config", configDir}, args...)...)
+	command.Env = append(os.Environ(), "DOCKER_CONFIG="+configDir)
+	if stdin != "" {
+		command.Stdin = strings.NewReader(stdin)
+	}
+	output, err := command.CombinedOutput()
+	return string(output), err
 }
 
 func run(ctx context.Context, name string, args ...string) (string, error) {

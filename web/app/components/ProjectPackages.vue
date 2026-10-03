@@ -36,9 +36,17 @@ interface ImageRepository {
   size_bytes: number
 }
 
-const props = defineProps<{ projectPath: string }>()
+const props = defineProps<{
+  /** The id the API is asked about: a grouped project's path has a slash in it. */
+  projectId?: string
+  projectPath: string
+}>()
 
 const { add: notify } = useNotifyPool()
+
+/** The project as the API is asked about it: its id when there is one. */
+const apiRef = computed(() => props.projectId || encodeURIComponent(props.projectPath))
+
 
 const answer = ref<RegistryAnswer | null>(null)
 const repositories = ref<ImageRepository[]>([])
@@ -63,7 +71,7 @@ async function load() {
   error.value = ''
   try {
     const result = await api.get<RegistryAnswer>(
-      `/projects/${encodeURIComponent(props.projectPath)}/packages`,
+      `/projects/${apiRef.value}/packages`,
     )
     answer.value = result
 

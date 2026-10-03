@@ -237,6 +237,8 @@ func (s *Server) handleRegistryAuthenticate(w http.ResponseWriter, r *http.Reque
 		// for one repository cannot be traded at the token endpoint for one that
 		// reaches further than it does.
 		if fromToken.ProjectID == nil || *fromToken.ProjectID != project.ID {
+			s.log.Warn("registry credential refused", "reason", "the token was issued for another project",
+				"asked_for", project.Path)
 			s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
 				"errors": []map[string]string{{
 					"code": "UNAUTHORIZED", "message": "invalid login or password",
@@ -246,6 +248,8 @@ func (s *Server) handleRegistryAuthenticate(w http.ResponseWriter, r *http.Reque
 		}
 		for _, scope := range wanted {
 			if !fromToken.HasScope(scope) {
+				s.log.Warn("registry credential refused", "reason", "the token does not carry this right",
+					"missing", scope)
 				s.writeJSON(w, r, http.StatusUnauthorized, map[string]any{
 					"errors": []map[string]string{{
 						"code": "UNAUTHORIZED", "message": "invalid login or password",
@@ -319,6 +323,12 @@ func (s *Server) authenticateCredential(r *http.Request, login, credential strin
 		return nil, nil, store.ErrNotFound
 	}
 
+	// Why a credential was refused is written down, and the reason given to the
+	// caller does not change. "Invalid login or password" is the only honest answer
+	// to give somebody who is not logged in — but it is useless to the operator
+	// whose own runner cannot push, and they are exactly the person who needs it.
+	// Nothing secret is recorded: which of the two checks failed, and for which
+	// account name.
 	if presented, err := s.tokenFromHeaderValue(credential); err == nil {
 		who := s.introspect(r, presented)
 		if who.Active && who.UserID != nil {
@@ -326,14 +336,19 @@ func (s *Server) authenticateCredential(r *http.Request, login, credential strin
 			if err == nil {
 				return user, &who, nil
 			}
+			s.log.Warn("registry credential refused", "reason", "the account is gone", "login", login)
+		} else {
+			s.log.Warn("registry credential refused", "reason", "the token is not one this core issued")
 		}
 	}
 
 	user, err := s.findUserByLogin(r, login)
 	if err != nil {
+		s.log.Warn("registry credential refused", "reason", "no such account", "login", login)
 		return nil, nil, err
 	}
 	if !auth.VerifyPassword(credential, user.PasswordHash) {
+		s.log.Warn("registry credential refused", "reason", "the password does not match", "login", login)
 		return nil, nil, store.ErrNotFound
 	}
 	return user, nil, nil

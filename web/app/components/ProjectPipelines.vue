@@ -14,11 +14,23 @@ import type { ModulePipeline, PipelineStage, PipelineStageJob } from '~/types/pi
 import { formatDuration, statusClass, statusText } from '~/types/pipeline'
 
 const props = defineProps<{
+  /**
+   * What the API is asked about.
+   *
+   * The id rather than the path, because a grouped project's path contains a
+   * slash and no single path segment can carry one. The path is still there for
+   * everything shown to a person.
+   */
+  projectId?: string
   projectPath: string
   defaultBranch?: string
 }>()
 
 const { add: notify } = useNotifyPool()
+
+/** The project as the API is asked about it: its id when there is one. */
+const apiRef = computed(() => props.projectId || encodeURIComponent(props.projectPath))
+
 
 const pipelines = ref<ModulePipeline[]>([])
 const loading = ref(true)
@@ -69,7 +81,7 @@ async function load(quiet = false) {
   error.value = ''
   try {
     const answer = await api.get<{ pipelines: ModulePipeline[] }>(
-      `/projects/${encodeURIComponent(props.projectPath)}/pipelines`,
+      `/projects/${apiRef.value}/pipelines`,
     )
     pipelines.value = answer.pipelines
   } catch (caught) {
@@ -90,7 +102,7 @@ async function start() {
   error.value = ''
   try {
     const answer = await api.post<{ pipeline: ModulePipeline }>(
-      `/projects/${encodeURIComponent(props.projectPath)}/pipelines`,
+      `/projects/${apiRef.value}/pipelines`,
       { ref: props.defaultBranch || 'main' },
     )
     notify(`Pipeline #${answer.pipeline.iid} started`, { type: 'success' })
@@ -151,7 +163,7 @@ function closeStage() {
 async function retry(run: ModulePipeline, job: PipelineStageJob) {
   error.value = ''
   try {
-    await api.post(`/projects/${encodeURIComponent(props.projectPath)}/pipelines/${run.iid}/jobs/${job.iid}/retry`, {})
+    await api.post(`/projects/${apiRef.value}/pipelines/${run.iid}/jobs/${job.iid}/retry`, {})
     notify(`Retrying ${job.name} in pipeline #${run.iid}`, { type: 'success' })
     await load()
   } catch (caught) {
@@ -201,6 +213,7 @@ function onChanged() {
 }
 
 onMounted(() => {
+  void load()
   stopWatching = watchEvents({
     kinds: ['pipeline.created', 'pipeline.updated'],
     project: () => props.projectPath,

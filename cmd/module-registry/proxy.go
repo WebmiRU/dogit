@@ -463,4 +463,13 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(header[len(prefix):])
 }
 
-func ctxOf(r *http.Request) context.Context { return r.Context() }
+// ctxOf is the context this module's own calls are made under.
+//
+// The client's request context would be the obvious choice and is wrong here: a
+// docker client opens many requests at once and cancels the ones it does not need,
+// and a permission check that dies with them fails the push for reasons that have
+// nothing to do with permission. The question "may this caller push?" is asked on
+// this module's own time, and bounded, rather than on the client's.
+func ctxOf(r *http.Request) context.Context {
+	return context.WithoutCancel(r.Context())
+}

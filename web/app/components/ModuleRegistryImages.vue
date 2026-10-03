@@ -62,6 +62,31 @@ const unavailable = ref('')
 const busyTag = ref('')
 const collapsed = ref<Record<string, boolean>>({})
 
+/**
+ * What is here, counted three ways because they are three different things.
+ *
+ * A repository is a name in the registry. A tag is a name for one image inside it.
+ * An image is one digest — and two tags with different digests are two images that
+ * happen to share a repository, which is the normal case: the image name has no
+ * room for a tag, so every tag of a project lands in one repository.
+ *
+ * Calling that one image would be the sort of number that is defensible in a
+ * footnote and useless in the sentence it appears in.
+ */
+const repositories = computed(() => groups.value.reduce((sum, group) => sum + group.repositories, 0))
+const tags = computed(() => groups.value.reduce((sum, group) => sum + group.tags, 0))
+const images = computed(() => {
+  const digests = new Set<string>()
+  for (const group of groups.value) {
+    for (const project of group.projects) {
+      for (const repository of project.repositories) {
+        for (const tag of repository.tags) digests.add(tag.digest)
+      }
+    }
+  }
+  return digests.size
+})
+
 /** Projects, as the core named them, grouped by owner. */
 interface Placement {
   projects: { path: string; group: string | null }[]
@@ -267,8 +292,9 @@ onBeforeUnmount(() => stopWatching?.())
     <div v-else class="summary">
       <span class="badge badge-green">online</span>
       <span>{{ groups.length }} {{ groups.length === 1 ? 'group' : 'groups' }}</span>
-      <span>{{ groups.reduce((sum, group) => sum + group.repositories, 0) }} images</span>
-      <span>{{ groups.reduce((sum, group) => sum + group.tags, 0) }} tags</span>
+      <span>{{ images }} {{ images === 1 ? 'image' : 'images' }}</span>
+      <span>{{ repositories }} {{ repositories === 1 ? 'repository' : 'repositories' }}</span>
+      <span>{{ tags }} {{ tags === 1 ? 'tag' : 'tags' }}</span>
       <strong>{{ size(groups.reduce((sum, group) => sum + group.size, 0)) }}</strong>
     </div>
 
@@ -291,7 +317,8 @@ onBeforeUnmount(() => stopWatching?.())
             </NuxtLink>
             <span class="muted small">
               {{ project.repositories.length }}
-              {{ project.repositories.length === 1 ? 'image' : 'images' }}
+              {{ project.repositories.length === 1 ? 'repository' : 'repositories' }}
+              · {{ project.tags }} {{ project.tags === 1 ? 'tag' : 'tags' }}
             </span>
             <div class="spacer" />
             <span class="muted small mono">{{ size(project.size) }}</span>

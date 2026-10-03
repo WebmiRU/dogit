@@ -16,6 +16,14 @@ import type { ModulePipeline, PipelineJob, PipelineStage } from '~/types/pipelin
 import { formatDuration, statusClass, statusText } from '~/types/pipeline'
 
 const props = defineProps<{
+  /**
+   * What the API is asked about.
+   *
+   * The id rather than the path, because a grouped project's path contains a
+   * slash and no single path segment can carry one. The path is still there for
+   * everything shown to a person.
+   */
+  projectId?: string
   projectPath: string
   runIid: number
   /**
@@ -30,6 +38,10 @@ const props = defineProps<{
 }>()
 
 const { add: notify } = useNotifyPool()
+
+/** The project as the API is asked about it: its id when there is one. */
+const apiRef = computed(() => props.projectId || encodeURIComponent(props.projectPath))
+
 
 const pipeline = ref<ModulePipeline | null>(null)
 const jobs = ref<PipelineJob[]>([])
@@ -115,7 +127,7 @@ async function load() {
   error.value = ''
   try {
     const answer = await api.get<{ pipeline: ModulePipeline; jobs: PipelineJob[] }>(
-      `/projects/${encodeURIComponent(props.projectPath)}/pipelines/${props.runIid}`,
+      `/projects/${apiRef.value}/pipelines/${props.runIid}`,
     )
     pipeline.value = answer.pipeline
     jobs.value = answer.jobs
@@ -150,7 +162,7 @@ async function fetchLog(job: PipelineJob) {
   try {
     const response = await fetch(
       rawApiUrl(
-        `/projects/${encodeURIComponent(props.projectPath)}/pipelines/${props.runIid}/jobs/${job.iid}/log`,
+        `/projects/${apiRef.value}/pipelines/${props.runIid}/jobs/${job.iid}/log`,
       ),
       { credentials: 'include' },
     )
@@ -196,7 +208,7 @@ async function followLoop() {
 
     const answer = await api
       .get<{ pipeline: ModulePipeline; jobs: PipelineJob[] }>(
-        `/projects/${encodeURIComponent(props.projectPath)}/pipelines/${props.runIid}`,
+        `/projects/${apiRef.value}/pipelines/${props.runIid}`,
       )
       .catch(() => null)
     // A request that failed is not a reason to stop watching: the page is over a
@@ -286,7 +298,7 @@ async function rerun() {
   error.value = ''
   try {
     const answer = await api.post<{ pipeline: ModulePipeline }>(
-      `/projects/${encodeURIComponent(props.projectPath)}/pipelines`,
+      `/projects/${apiRef.value}/pipelines`,
       { ref: props.defaultBranch || 'main' },
     )
     notify(`Pipeline #${answer.pipeline.iid} started`, { type: 'success' })

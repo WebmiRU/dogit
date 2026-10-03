@@ -405,6 +405,7 @@ async function copyCloneUrl() {
              a list that also did that would do neither thing well. -->
         <ProjectPipelineRun
           v-else-if="view.name === 'pipelines' && view.rest[0]"
+          :project-id="projectId"
           :project-path="project.path"
           :run-iid="Number(view.rest[0])"
           :job-iid="view.rest[1] === 'jobs' && view.rest[2] ? Number(view.rest[2]) : 0"
@@ -412,11 +413,13 @@ async function copyCloneUrl() {
         />
         <ProjectPipelines
           v-else-if="view.name === 'pipelines'"
+          :project-id="projectId"
           :project-path="project.path"
           :default-branch="project.default_branch"
         />
         <ProjectPackages
           v-else-if="view.name === 'packages'"
+          :project-id="projectId"
           :project-path="project.path"
         />
         <RepositorySettings
