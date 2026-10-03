@@ -227,17 +227,6 @@ async function save() {
       </p>
     </div>
   </div>
-
-    <!-- Which channel this project's builds are announced in. Its own setting, so
-         that one project wanting a different chat does not make it an
-         administrator's decision. -->
-    <ProjectNotificationModules
-      v-if="!props.project.archived_at"
-      class="notifications"
-      :project-id="props.projectId"
-      :project-path="project.path"
-      :can-manage="canManage"
-    />
 </template>
 
 <style scoped>

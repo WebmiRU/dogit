@@ -36,15 +36,15 @@ const moduleKind = ref('')
 const tabNames = computed(() => [
   'overview',
   ...(moduleKind.value === 'registry:docker' ? ['images'] : []),
-  ...(moduleKind.value.startsWith('notify:') ? ['notify'] : []),
   'settings',
+  ...(moduleKind.value.startsWith('notify:') ? ['notifications'] : []),
   'removal',
 ])
 
 const tabTitles: Record<string, string> = {
   overview: 'Overview',
   images: 'Images',
-  notify: 'Notify',
+  notifications: 'Notifications',
   settings: 'Settings',
   removal: 'Removal',
 }
@@ -326,7 +326,7 @@ const storageFraction = computed(() => {
 
       <!-- Where this module writes. On the instance, and so inherited by every group
            and project that has not said otherwise. -->
-      <section v-else-if="tab === 'notify'">
+      <section v-else-if="tab === 'notifications'">
         <p class="muted">
           {{ module.manifest?.target?.description
             || 'One row per place this module writes to. Everything here is inherited by every group and project that has not changed it.' }}

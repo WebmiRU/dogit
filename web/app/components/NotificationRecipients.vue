@@ -42,14 +42,12 @@ const props = withDefaults(
   { scope: 'instance', canManage: true },
 )
 
+const { add: notify } = useNotifyPool()
+
 const recipients = ref<Recipient[]>([])
 const available = ref<RecipientsModule[]>([])
 const loading = ref(true)
-const error = ref('')
 const busy = ref('')
-/** A word about what the last test did, because a message that arrives is its own
- *  answer and one that does not needs saying out loud. */
-const note = ref('')
 
 /** The row being added or edited, or null when the form is closed. */
 const editing = ref<RecipientDraft | null>(null)
@@ -75,9 +73,15 @@ function where(row: Recipient): string {
   return row.overridden ? 'overridden here, ' + from : 'from ' + from
 }
 
+/**
+ * Reads the list.
+ *
+ * Hiding what is already on screen while it does so is a choice this component does
+ * not make: a person who flipped a switch is looking at that switch, and a blank
+ * table in its place reads as a page that has forgotten what it just did.
+ */
 async function load() {
-  loading.value = true
-  error.value = ''
+  if (recipients.value.length === 0) loading.value = true
   try {
     const answer = await api.get<{ targets: Recipient[]; modules: RecipientsModule[] }>(
       `/notification-targets?${scopeQuery.value}`,
@@ -90,10 +94,31 @@ async function load() {
     // entry and the form does not ask a question with a single answer.
     available.value = props.onlyModule ? modules.filter((one) => one.id === props.onlyModule) : modules
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
+    // Said in the corner rather than in the page: the list is either there or it is
+    // not, and a strip of error above an empty table explains nothing.
+    failed(caught, 'the recipients could not be read')
   } finally {
     loading.value = false
   }
+}
+
+/** How to call a recipient in a sentence. */
+function describe(row: Recipient): string {
+  const address = addressOf(row)
+  return address === '—' ? moduleName(row) : `${moduleName(row)} ${address}`
+}
+
+/**
+ * Says what happened, or why it did not.
+ *
+ * Through the pool rather than a banner in the page: the answer to "did that work"
+ * belongs with every other answer, in the corner, and not in the place where the
+ * thing that was just saved used to be.
+ */
+function failed(caught: unknown, what: string) {
+  notify(`${what}: ${caught instanceof ApiError ? caught.message : 'the request failed'}`, {
+    type: 'error',
+  })
 }
 
 /** The settings that make a recipient of this module, in the module's own words. */
@@ -181,8 +206,16 @@ async function save() {
     } else {
       await api.post(`/notification-targets?${scopeQuery.value}`, body)
     }
+    // A form is the one place a read afterwards is worth it: the row that was just
+    // written has an id and a place in the order that only the core knows, and the
+    // list is what shows it. A switch and a deletion are the other two cases, and
+    // neither needs to read anything back.
+    const added = !editing.value.id
+    const module = available.value.find((one) => one.id === editing.value?.moduleId)
+    const named = editing.value?.label || module?.name || 'the recipient'
     closeForm()
     await load()
+    if (added) notify(`Added ${named}`)
   } catch (caught) {
     formError.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -190,32 +223,40 @@ async function save() {
   }
 }
 
+/**
+ * Switches a recipient on or off.
+ *
+ * The switch moves first and the request follows. A switch that waits for a round trip
+ * to move is a switch that lies to whoever pressed it, and the answer arrives either
+ * way — as a notice when it worked is not needed, as one when it did not.
+ */
 async function toggle(row: Recipient) {
-  busy.value = row.id
-  error.value = ''
+  const wanted = !row.enabled
+  row.enabled = wanted
+  row.enabled_here = true
+
   try {
     await api.patch(`/notification-targets/${row.id}?${scopeQuery.value}`, {
       module_id: row.module_id,
       label: row.label,
-      enabled: !row.enabled,
+      enabled: wanted,
       values: {},
     })
-    await load()
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
-  } finally {
-    busy.value = ''
+    row.enabled = !wanted
+    row.enabled_here = false
+    failed(caught, `could not switch ${describe(row)}`)
   }
 }
 
 async function remove(row: Recipient) {
   busy.value = row.id
-  error.value = ''
   try {
     await api.del(`/notification-targets/${row.id}?${scopeQuery.value}`)
-    await load()
+    recipients.value = recipients.value.filter((one) => one.id !== row.id)
+    notify(`Removed ${describe(row)}`)
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
+    failed(caught, `could not remove ${describe(row)}`)
   } finally {
     busy.value = ''
   }
@@ -230,12 +271,13 @@ async function remove(row: Recipient) {
  */
 async function test(row: Recipient) {
   busy.value = row.id
-  error.value = ''
   try {
     await api.post(`/notification-targets/${row.id}/test?${scopeQuery.value}`, {})
-    note.value = 'Sent. If nothing arrives, the message will say why in the module log.'
+    // A message that arrives is its own answer. One that does not needs saying, and
+    // it says where the reason will be.
+    notify(`Test message queued for ${describe(row)}. If nothing arrives, the module's log says why.`)
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
+    failed(caught, 'the test could not be sent')
   } finally {
     busy.value = ''
   }
@@ -246,17 +288,12 @@ onMounted(load)
 
 <template>
   <div>
-    <div v-if="error" class="alert alert-error">{{ error }}</div>
-    <div v-if="note" class="alert alert-info">
-      {{ note }}
-      <button class="btn btn-small" type="button" @click="note = ''">Close</button>
-    </div>
-
     <div v-if="!canManage" class="alert alert-info">
       Changing this needs rights to manage {{ scopeWord.replace('the ', '') }}.
     </div>
 
     <div v-else-if="loading" class="spinner">Loading recipients…</div>
+
 
     <div v-else-if="available.length === 0" class="card empty">
       <h3>No notification modules are installed</h3>
@@ -350,47 +387,58 @@ onMounted(load)
       </div>
 
       <form v-if="editing" class="card recipient-form" @submit.prevent="save">
-        <h4>{{ editing.id ? 'Change this recipient' : 'Add a recipient' }}</h4>
+        <div class="card-body">
+          <h4>{{ editing.id ? 'Change this recipient' : 'Add a recipient' }}</h4>
 
-        <!-- Asked only when there is a choice to make. On the module's own page
-             there is one module, and offering a list of one is noise. -->
-        <label v-if="!editing.id && available.length > 1">
-          Module
-          <select v-model="editing.moduleId">
-            <option v-for="one in available" :key="one.id" :value="one.id">
-              {{ one.name }} ({{ one.kind }})
-            </option>
-          </select>
-        </label>
+          <!-- Asked only when there is a choice to make. On the module's own page
+               there is one module, and offering a list of one is noise. -->
+          <div v-if="!editing.id && available.length > 1" class="field">
+            <label for="recipient-module">Module</label>
+            <select id="recipient-module" v-model="editing.moduleId">
+              <option v-for="one in available" :key="one.id" :value="one.id">
+                {{ one.name }} ({{ one.kind }})
+              </option>
+            </select>
+          </div>
 
-        <p v-if="editing.overrideId" class="muted small">
-          Only what you fill in here changes. Everything left alone keeps coming from
-          above.
-        </p>
+          <!-- Said before the fields, because it changes how they are read: a box
+               left empty here keeps whatever is above, and a box filled in does not
+               touch what the row inherits. -->
+          <p v-if="editing.overrideId" class="muted form-note">
+            Only what you fill in is changed here. Everything left alone keeps coming
+            from above.
+          </p>
 
-        <label v-for="spec in settingsOf(editing.moduleId)" :key="spec.key">
-          {{ spec.label }}
-          <input
-            v-model="editing.values[spec.key]"
-            :type="spec.type === 'bool' ? 'checkbox' : 'text'"
-            :placeholder="spec.default !== undefined ? String(spec.default) : ''"
-          >
-          <span v-if="spec.secret && editing.overrideId" class="muted small">
-            Left empty, the value above is kept. What is stored is never shown.
-          </span>
-          <span v-if="spec.description" class="muted small">{{ spec.description }}</span>
-        </label>
+          <div class="field">
+            <label for="recipient-name">Name</label>
+            <input
+              id="recipient-name"
+              v-model="editing.label"
+              placeholder="What this recipient is for — the shared chat, deploys"
+            >
+          </div>
 
-        <label>
-          Name
-          <input v-model="editing.label" placeholder="What this recipient is for">
-        </label>
+          <!-- What a recipient is made of is the module's own question, asked in the
+               module's own words. The core has no fields of its own to offer. -->
+          <div v-for="spec in settingsOf(editing.moduleId)" :key="spec.key" class="field">
+            <label :for="`recipient-${spec.key}`">{{ spec.label }}</label>
+            <input
+              :id="`recipient-${spec.key}`"
+              v-model="editing.values[spec.key]"
+              :placeholder="spec.default !== undefined ? String(spec.default) : ''"
+            >
+            <div v-if="spec.description" class="muted field-note">{{ spec.description }}</div>
+            <div v-if="spec.secret && editing.overrideId" class="muted field-note">
+              Left empty, the value from above is kept. What is stored is never shown.
+            </div>
+          </div>
 
-        <div v-if="formError" class="alert alert-error">{{ formError }}</div>
+          <div v-if="formError" class="alert alert-error">{{ formError }}</div>
 
-        <div class="form-actions">
-          <button class="btn" type="submit" :disabled="formBusy">Save</button>
-          <button class="btn" type="button" @click="closeForm">Cancel</button>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" :disabled="formBusy">Save</button>
+            <button class="btn" type="button" @click="closeForm">Cancel</button>
+          </div>
         </div>
       </form>
 
@@ -440,15 +488,31 @@ onMounted(load)
 }
 
 .recipient-form {
-  max-width: 520px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  max-width: 560px;
   margin-bottom: 16px;
 }
 
 .recipient-form h4 {
-  margin: 0;
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+/* The module's own words about a setting, kept off the box it describes. */
+.field-note {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.form-note {
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  background: var(--bg-inset);
+  font-size: 12px;
 }
 
 .form-actions {

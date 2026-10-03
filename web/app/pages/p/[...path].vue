@@ -147,8 +147,12 @@ async function refsChanged() {
   }
 }
 
-onMounted(loadProject)
-watch(projectPath, loadProject)
+// The page is one component for every view of a repository, so watching the project
+// path rather than mounting is what keeps the content on screen when only the tab
+// changed. Reloading on mount — which is what a mount happens on, because the
+// catch-all route is re-created when its last segment changes — throws the whole
+// page away and shows a spinner in place of a table somebody was reading.
+watch(projectPath, loadProject, { immediate: true })
 
 /**
  * A repository with nothing in it.
