@@ -943,10 +943,14 @@ func (s *Server) integrationView(r *http.Request, integration *models.Integratio
 		settings = map[string]json.RawMessage{}
 	}
 
-	// Secret settings are never returned; the UI shows only that one is set.
+	// Secret settings are never returned; the UI shows only that one is set. A list
+	// setting is described as well as flagged, because a secret field inside one of
+	// its entries has to be masked entry by entry.
 	declared := map[string]bool{}
+	specs := map[string]models.SettingSpec{}
 	for _, spec := range integration.Capabilities.Settings {
 		declared[spec.Key] = spec.Secret
+		specs[spec.Key] = spec
 	}
 
 	view := map[string]any{
@@ -960,7 +964,10 @@ func (s *Server) integrationView(r *http.Request, integration *models.Integratio
 		"enabled":        integration.Enabled,
 		"last_seen_at":   integration.LastSeenAt,
 		"registered_at":  integration.RegisteredAt,
-		"settings":       redactSettings(settings, declared),
+		"settings": redactSettings(settings, declared, func(key string) (models.SettingSpec, bool) {
+			spec, ok := specs[key]
+			return spec, ok
+		}),
 	}
 
 	// Scopes declared but unused are worth showing: a module offering
@@ -1036,11 +1043,23 @@ func (s *Server) handleModuleRoutes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func redactSettings(settings map[string]json.RawMessage, secret map[string]bool) map[string]any {
+// redactSettings is the stored settings as they may be read out.
+//
+// A secret field is replaced rather than hidden, so the page can say "this is set"
+// without saying what. For a list setting that means descending into the entries: a
+// password inside one entry is a password, and a whole blob that is either returned or
+// not has no way to return the address beside it without the password.
+func redactSettings(settings map[string]json.RawMessage, secret map[string]bool,
+	describe func(string) (models.SettingSpec, bool)) map[string]any {
+
 	out := map[string]any{}
 	for key, raw := range settings {
 		if secret[key] {
 			out[key] = "********"
+			continue
+		}
+		if spec, ok := describe(key); ok && spec.Items != nil {
+			out[key] = redactList(spec, raw)
 			continue
 		}
 		var value any
@@ -1051,6 +1070,41 @@ func redactSettings(settings map[string]json.RawMessage, secret map[string]bool)
 		out[key] = string(raw)
 	}
 	return out
+}
+
+// redactList masks the secret fields of every entry of a list setting.
+//
+// Called on the way out only, and only for a setting whose description says which
+// fields are secret: the core is reading a module's own description of its own value,
+// which is the same thing it does for a plain secret setting.
+func redactList(spec models.SettingSpec, raw json.RawMessage) any {
+	var entries []map[string]any
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		var value any
+		if err := json.Unmarshal(raw, &value); err == nil {
+			return value
+		}
+		return string(raw)
+	}
+
+	if spec.Items == nil {
+		return entries
+	}
+	secret := map[string]bool{}
+	for _, field := range spec.Items.Fields {
+		if field.Secret {
+			secret[field.Key] = true
+		}
+	}
+
+	for _, entry := range entries {
+		for key := range secret {
+			if _, set := entry[key]; set {
+				entry[key] = "********"
+			}
+		}
+	}
+	return entries
 }
 
 // settingSpecOf finds what a module said about one of its settings.

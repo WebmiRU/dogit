@@ -33,7 +33,13 @@ func (s *Server) handleModuleSelf(w http.ResponseWriter, r *http.Request) {
 			"status":         integration.Status,
 			"enabled":        integration.Enabled,
 		},
-		"settings": redactSettings(settings, secretKeys(integration)),
+		// A module reading its own settings: it wrote them and knows the secrets, but
+		// it is still masked, because a token that comes back in a response is a token
+		// that ends up in a log.
+		"settings": redactSettings(settings, secretKeys(integration), func(key string) (models.SettingSpec, bool) {
+			spec, ok := settingSpecOf(integration, key)
+			return spec, ok
+		}),
 	})
 }
 
@@ -128,10 +134,13 @@ func (s *Server) handleModuleSelfSettings(w http.ResponseWriter, r *http.Request
 	}
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"kind":      integration.Kind,
-		"scopes":    integration.Capabilities.Scopes,
-		"schema":    integration.Capabilities.Settings,
-		"effective": redactSettings(settings, secretKeys(integration)),
+		"kind":   integration.Kind,
+		"scopes": integration.Capabilities.Scopes,
+		"schema": integration.Capabilities.Settings,
+		"effective": redactSettings(settings, secretKeys(integration), func(key string) (models.SettingSpec, bool) {
+			spec, ok := settingSpecOf(integration, key)
+			return spec, ok
+		}),
 	})
 }
 

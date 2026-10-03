@@ -98,7 +98,9 @@ func TestRedactSettingsHidesSecrets(t *testing.T) {
 	}
 	secrets := map[string]bool{"upstream_token": true}
 
-	redacted := redactSettings(settings, secrets)
+	redacted := redactSettings(settings, secrets, func(string) (models.SettingSpec, bool) {
+		return models.SettingSpec{}, false
+	})
 
 	if redacted["upstream_token"] == "s3cr3t" {
 		t.Error("a secret setting was returned in clear text")

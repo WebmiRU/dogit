@@ -182,12 +182,22 @@ type RegistryAccess struct {
 type SettingSpec struct {
 	Key         string   `json:"key"`
 	Label       string   `json:"label"`
-	Type        string   `json:"type"` // string | bool | int | enum | url
+	Type        string   `json:"type"` // string | bool | int | enum | url | list
 	Default     any      `json:"default,omitempty"`
 	Options     []string `json:"options,omitempty"`
 	Description string   `json:"description,omitempty"`
 	// Secret marks a value that is write-only: it is stored but never returned.
 	Secret bool `json:"secret,omitempty"`
+
+	// Items describes the fields of one entry when the type is "list".
+	//
+	// It exists because a list is the only setting whose value has fields of its own,
+	// and those fields have to be describable for two reasons: the form renders from
+	// the description rather than guessing, and a secret field inside an entry has to
+	// be markable so it can be masked on the way out. A password inside a list stored
+	// as one piece of JSON cannot be masked at all — the blob is either returned whole
+	// or not at all — which is why this is a type and not a convention.
+	Items *SettingItems `json:"items,omitempty"`
 
 	// MustContain lists substrings every value of this setting must include, and
 	// WhichAreThen explains why in the module's own words.
@@ -200,6 +210,16 @@ type SettingSpec struct {
 	MustContain []string `json:"must_contain,omitempty"`
 	// WhyContains is shown when a value is refused.
 	WhyContains string `json:"why_contains,omitempty"`
+}
+
+// SettingItems is what one entry of a list setting is made of.
+type SettingItems struct {
+	// Fields describe each entry. Their own keys are the names used in the stored
+	// value, and a field this build does not know is refused rather than dropped.
+	Fields []SettingSpec `json:"fields"`
+	// AddLabel is what the button to add another entry says. In the module's words,
+	// because "add a source" and "add a mirror" are not the same button.
+	AddLabel string `json:"add_label,omitempty"`
 }
 
 // Integration is a registered module.
