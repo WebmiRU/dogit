@@ -387,13 +387,34 @@ func eventFilter(settings map[string]any) string {
 	return "everything"
 }
 
+// botTokenOf says which token to call Telegram with.
+//
+// The core keeps the token as a secret, so reading it back from the settings page
+// returns a mask — a module that took the stored value would send every message as
+// an unauthenticated stranger and be told, correctly, that it does not exist. The
+// deployment's own environment is where the token came from, so that is what is
+// used; the stored value is only a fallback, and only when it is not the mask.
+func botTokenOf(settings map[string]any) string {
+	if token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")); token != "" {
+		return token
+	}
+	stored, _ := settings["bot_token"].(string)
+	if stored == redactedSetting {
+		return ""
+	}
+	return strings.TrimSpace(stored)
+}
+
+// redactedSetting is what the core sends instead of a secret.
+const redactedSetting = "********"
+
 // send delivers one notification.
 //
 // The text is HTML with the parts that came from a branch or a commit name escaped,
 // because those are things people push: an unescaped "&" in a tag name is a
 // notification that fails to send with a message about parse errors.
 func send(ctx context.Context, settings map[string]any, note notification) error {
-	botToken, _ := settings["bot_token"].(string)
+	botToken := botTokenOf(settings)
 	chatID, _ := settings["chat_id"].(string)
 	if botToken == "" || chatID == "" {
 		return errors.New("the bot token or the chat id is not set")
@@ -490,7 +511,7 @@ func callTelegram(ctx context.Context, botToken, method string, payload map[stri
 
 // verifyChat checks that the bot can actually post, before anything is relied on.
 func verifyChat(ctx context.Context, settings map[string]any) error {
-	botToken, _ := settings["bot_token"].(string)
+	botToken := botTokenOf(settings)
 	chatID, _ := settings["chat_id"].(string)
 	if botToken == "" || chatID == "" {
 		return errors.New("the bot token or the chat id is not set yet")

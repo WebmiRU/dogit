@@ -236,6 +236,7 @@ services:
       DOGIT_MODULE_ENDPOINT: http://module-notify-telegram:8093
       DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
 
   # Reference implementation of the module protocol. It has no product
