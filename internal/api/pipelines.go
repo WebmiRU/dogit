@@ -210,7 +210,16 @@ func (s *Server) handleListPipelines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pipelines, err := s.store.Pipelines().ListPipelines(r.Context(), project.ID, 20)
+	query := store.PipelineQuery{
+		Search:  r.URL.Query().Get("search"),
+		Ref:     r.URL.Query().Get("ref"),
+		Status:  r.URL.Query().Get("status"),
+		Source:  r.URL.Query().Get("source"),
+		Page:    atoiOr(r.URL.Query().Get("page"), 1),
+		PerPage: atoiOr(r.URL.Query().Get("per_page"), store.PipelinePageSizeDefault),
+	}
+
+	pipelines, total, err := s.store.Pipelines().ListPipelinesPage(r.Context(), project.ID, query)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -227,7 +236,20 @@ func (s *Server) handleListPipelines(w http.ResponseWriter, r *http.Request) {
 		views = append(views, s.pipelineView(r, pipeline, jobs))
 	}
 
-	s.writeJSON(w, r, http.StatusOK, map[string]any{"pipelines": views})
+	// How many pages there are, said rather than left to be worked out: a control that
+	// stops early looks like a list that ends.
+	pages := (total + query.PerPage - 1) / query.PerPage
+	if pages < 1 {
+		pages = 1
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"pipelines": views,
+		"total":     total,
+		"page":      query.Page,
+		"pages":     pages,
+		"per_page":  query.PerPage,
+	})
 }
 
 // handleGetPipeline returns one pipeline with its jobs.

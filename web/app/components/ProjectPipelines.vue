@@ -36,60 +36,136 @@ const pipelines = ref<ModulePipeline[]>([])
 const loading = ref(true)
 const error = ref('')
 const starting = ref(false)
-const filter = ref('')
 
-/**
- * What the filter matches.
- *
- * Matched against everything a row says, because a person looking for a run
- * remembers whichever of those they happen to remember: the number, a word from
- * the commit message, the branch. Making them remember which of them is searchable
- * would be the filter's job, not theirs.
- */
-const visible = computed(() => {
-  const needle = filter.value.trim().toLowerCase()
-  if (!needle) return pipelines.value
+/** The run list, and how much of it there is. */
+const total = ref(0)
+const page = ref(1)
+const pages = ref(1)
 
-  return pipelines.value.filter((run) =>
-    [
-      String(run.iid),
-      run.title ?? '',
-      run.ref,
-      run.sha,
-      run.author_name ?? '',
-      run.triggered_by?.name ?? '',
-      run.triggered_by?.username ?? '',
-      statusText[run.status],
-    ]
-      .join(' ')
-      .toLowerCase()
-      .includes(needle),
-  )
+/** The word being typed, apart from what has been searched for yet. */
+const typing = ref('')
+
+/** Where the run page lives. The repository page owns the address bar, so this keeps
+ *  its own key for these settings rather than fighting over the project's tabs. */
+const PIPE_KEY = 'dogit:pipelines'
+
+interface PipelineView {
+  ref?: string
+  status?: string
+  source?: string
+  search?: string
+  page?: number
+}
+
+// One state object for the whole component, created here rather than inside the
+// handler that changes it: a state created outside setup is not the same state.
+const stored = useState<PipelineView>(PIPE_KEY, () => ({}))
+
+const view = computed<Required<PipelineView>>(() => {
+  const current = stored.value
+  return {
+    ref: current.ref ?? '',
+    status: current.status ?? '',
+    source: current.source ?? '',
+    search: current.search ?? '',
+    page: Math.max(1, current.page ?? 1),
+  }
 })
+
+function remember(change: Partial<PipelineView>) {
+  const next = { ...view.value, ...change }
+  // Any narrowing starts again at the first page: page seven of a search that now
+  // matches two runs is a page about nothing.
+  if (change.search !== undefined || change.ref !== undefined ||
+      change.status !== undefined || change.source !== undefined) {
+    next.page = 1
+  }
+  stored.value = next
+}
 
 /**
  * Reads the list.
  *
- * The list is fetched again rather than patched when something changes: an event
- * says a pipeline moved, not what it now looks like, and re-reading one small
- * endpoint is cheaper than being wrong.
+ * The list is fetched again rather than patched when something changes: an event says a
+ * pipeline moved, not what it now looks like, and re-reading one small endpoint is
+ * cheaper than being wrong.
+ *
+ * A reload that follows an event leaves the rows alone. Refreshing the whole list every
+ * few seconds would move the row somebody is reading out from under them — and with a
+ * page of it, would drop them on a different page entirely.
  */
 async function load(quiet = false) {
-  // A reload that follows an event leaves the rows alone. Refreshing the whole list
-  // every few seconds would move the row somebody is reading out from under them.
   if (!quiet) loading.value = true
   error.value = ''
   try {
-    const answer = await api.get<{ pipelines: ModulePipeline[] }>(
-      `/projects/${apiRef.value}/pipelines`,
-    )
-    pipelines.value = answer.pipelines
+    const parts = new URLSearchParams({ per_page: '20', page: String(view.value.page) })
+    for (const key of ['search', 'ref', 'status', 'source'] as const) {
+      if (view.value[key]) parts.set(key, view.value[key])
+    }
+
+    const answer = await api.get<{
+      pipelines: ModulePipeline[]
+      total: number
+      page: number
+      pages: number
+    }>(`/projects/${apiRef.value}/pipelines?${parts.toString()}`)
+
+    pipelines.value = answer.pipelines ?? []
+    total.value = answer.total ?? 0
+    page.value = answer.page ?? 1
+    pages.value = Math.max(1, answer.pages ?? 1)
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
     loading.value = false
   }
 }
+
+// Searching waits for the typing to stop: every keystroke is a request otherwise, and
+// on a slow connection they arrive out of order, so the list shows results for a word
+// typed two searches ago.
+let wait: ReturnType<typeof setTimeout> | undefined
+watch(typing, (word) => {
+  clearTimeout(wait)
+  wait = setTimeout(() => {
+    if (word !== view.value.search) {
+      remember({ search: word })
+      void load()
+    }
+  }, 300)
+})
+
+watch(view, () => void load())
+onBeforeUnmount(() => clearTimeout(wait))
+
+/** The branches that have runs, so the filter offers the ones there are. */
+const branches = computed(() => {
+  const seen = new Set<string>()
+  for (const run of pipelines.value) seen.add(run.ref)
+  return [...seen].sort()
+})
+
+const states = [
+  { value: '', label: 'Any state' },
+  { value: 'success', label: 'Success' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'canceled', label: 'Canceled' },
+  { value: 'running', label: 'Running' },
+]
+
+/** A search or a filter, dropped. */
+function clearFilters() {
+  typing.value = ''
+  remember({ search: '', ref: '', status: '', source: '' })
+}
+
+/** "21–40 of 340" — what is shown out of what there is. */
+const range = computed(() => {
+  if (total.value === 0) return 'nothing'
+  const first = (page.value - 1) * 20 + 1
+  const last = Math.min(first + pipelines.value.length - 1, total.value)
+  return `${first}\u2013${last} of ${total.value}`
+})
 
 /**
  * Starts a run.
@@ -213,6 +289,9 @@ function onChanged() {
 }
 
 onMounted(() => {
+  // The search box comes back holding whatever was searched for, so a page reloaded
+  // — or a different tab opened — does not silently show a different list.
+  typing.value = view.value.search
   void load()
   stopWatching = watchEvents({
     kinds: ['pipeline.created', 'pipeline.updated'],
@@ -245,12 +324,42 @@ watch(() => props.projectPath, () => load())
 
     <div class="toolbar">
       <input
-        v-model="filter"
+        v-model="typing"
         class="filter"
         type="search"
-        placeholder="Filter pipelines"
-        aria-label="Filter pipelines"
+        placeholder="Search runs, branches and commits"
+        aria-label="Search runs"
       />
+
+      <select
+        :value="view.ref"
+        aria-label="Branch"
+        @change="remember({ ref: ($event.target as HTMLSelectElement).value })"
+      >
+        <option value="">Any branch</option>
+        <option v-for="branch in branches" :key="branch" :value="branch">{{ branch }}</option>
+        <option v-if="view.ref && !branches.includes(view.ref)" :value="view.ref">
+          {{ view.ref }} (not on this page)
+        </option>
+      </select>
+
+      <select
+        :value="view.status"
+        aria-label="State"
+        @change="remember({ status: ($event.target as HTMLSelectElement).value })"
+      >
+        <option v-for="one in states" :key="one.value" :value="one.value">{{ one.label }}</option>
+      </select>
+
+      <select
+        :value="view.source"
+        aria-label="What started it"
+        @change="remember({ source: ($event.target as HTMLSelectElement).value })"
+      >
+        <option value="">Pushes and people</option>
+        <option value="push">Pushes</option>
+        <option value="manual">Started by hand</option>
+      </select>
     </div>
 
     <div v-if="loading && pipelines.length === 0" class="spinner">Loading pipelines…</div>
@@ -260,8 +369,11 @@ watch(() => props.projectPath, () => load())
       and press “New pipeline”.
     </div>
 
-    <div v-else-if="visible.length === 0" class="card empty">
-      Nothing matches “{{ filter }}”.
+    <div v-else-if="pipelines.length === 0" class="card empty">
+      Nothing runs here
+      <template v-if="view.search">that matches “{{ view.search }}”</template>
+      <template v-else-if="view.status || view.ref">with these filters</template>.
+      <button class="btn btn-small" type="button" @click="clearFilters()">Clear the filters</button>
     </div>
 
     <table v-else class="pipeline-table">
@@ -275,7 +387,7 @@ watch(() => props.projectPath, () => load())
         </tr>
       </thead>
       <tbody>
-        <tr v-for="run in visible" :key="run.iid">
+        <tr v-for="run in pipelines" :key="run.iid">
           <td class="col-status">
             <NuxtLink :to="`/p/${projectPath}/-/pipelines/${run.iid}`">
               <span class="badge" :class="statusClass[run.status] ?? 'badge-neutral'">
@@ -391,6 +503,28 @@ watch(() => props.projectPath, () => load())
         </tr>
       </tbody>
     </table>
+
+    <div v-if="total > 0" class="pager">
+      <span class="muted small">{{ range }}</span>
+      <div class="spacer" />
+      <button
+        class="btn btn-small"
+        type="button"
+        :disabled="page <= 1"
+        @click="remember({ page: page - 1 })"
+      >
+        Newer
+      </button>
+      <span class="muted small">page {{ page }} of {{ pages }}</span>
+      <button
+        class="btn btn-small"
+        type="button"
+        :disabled="page >= pages"
+        @click="remember({ page: page + 1 })"
+      >
+        Older
+      </button>
+    </div>
   </div>
 </template>
 
@@ -403,6 +537,25 @@ watch(() => props.projectPath, () => load())
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+/* The search takes what is left; the filters are as wide as their words. Inputs are
+   full width everywhere else here, which is right in a form and wrong in a toolbar:
+   three stacked filters read as three separate controls. */
+.toolbar select {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pager .spacer {
+  flex: 1;
 }
 
 .filter {

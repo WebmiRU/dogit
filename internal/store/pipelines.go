@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -314,34 +315,141 @@ func (r *PipelineRepo) PipelineByIID(ctx context.Context, projectID uuid.UUID, i
 }
 
 // ListPipelines returns a project's pipelines, newest first.
-func (r *PipelineRepo) ListPipelines(ctx context.Context, projectID uuid.UUID, limit int) ([]Pipeline, error) {
-	if limit <= 0 {
-		limit = 20
-	}
+// PipelineQuery is which runs to show and how many of them.
+//
+// A project with ten thousand runs is ordinary — a busy repository makes one per push —
+// so the list is a window with a count beside it rather than the last twenty and no
+// way to reach the rest.
+type PipelineQuery struct {
+	// Search matches the run number, the branch, the commit, its author and the
+	// state, case-insensitively.
+	//
+	// It is here rather than in the interface because the list is now a page of a long
+	// history: a filter that only looked at the twenty runs on screen would report
+	// "nothing matches" about a run that happened yesterday.
+	Search string
+	// Ref narrows to one branch. Empty is every branch.
+	Ref string
+	// Status narrows to one state. Empty is every state.
+	Status string
+	// Source narrows to what started the run. Empty is both a push and a person.
+	Source string
+	Page   int
+	// PerPage is how many runs to return.
+	PerPage int
+}
 
-	rows, err := r.s.pool.Query(ctx, `
-		SELECT id, iid, project_id, ref, sha, source, status, variables, created_by_id,
-		       commit_title, commit_author_name, commit_author_email,
-		       created_at, started_at, finished_at
-		FROM pipelines WHERE project_id = $1 ORDER BY iid DESC LIMIT $2`, projectID, limit)
+// PipelinePageSizeDefault is how many runs a page holds when nobody says.
+const PipelinePageSizeDefault = 20
+
+// PipelinePageSizeMax is the most one request may ask for.
+const PipelinePageSizeMax = 100
+
+// searchPattern is a search term as a pattern, or "" when there is no search.
+//
+// The wildcards in it are escaped: somebody looking for "50%" is looking for a run
+// about the "50%" stage, not for every run there is.
+func (q PipelineQuery) searchPattern() string {
+	if q.Search == "" {
+		return ""
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(q.Search))
+	return "%" + escaped + "%"
+}
+
+func (q PipelineQuery) normalise() PipelineQuery {
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.PerPage < 1 {
+		q.PerPage = PipelinePageSizeDefault
+	}
+	if q.PerPage > PipelinePageSizeMax {
+		q.PerPage = PipelinePageSizeMax
+	}
+	q.Search = strings.TrimSpace(q.Search)
+	q.Ref = strings.TrimSpace(q.Ref)
+	q.Status = strings.TrimSpace(q.Status)
+	q.Source = strings.TrimSpace(q.Source)
+	return q
+}
+
+// ListPipelinesPage returns one page of runs, and how many there are in total.
+//
+// Newest first, because the run somebody came to look at is nearly always the last
+// one, and a list ordered the other way makes them scroll to the bottom of a page of
+// history to find out whether anything happened.
+func (r *PipelineRepo) ListPipelinesPage(ctx context.Context, projectID uuid.UUID,
+	q PipelineQuery) ([]Pipeline, int, error) {
+
+	q = q.normalise()
+
+	const statement = `
+		WITH matching AS (
+			SELECT * FROM pipelines
+			WHERE project_id = $1
+			  AND ($2 = '' OR ref = $2)
+			  AND ($3 = '' OR status = $3)
+			  AND ($4 = '' OR source = $4)
+			  AND ($5 = '' OR iid::text ILIKE $5 ESCAPE '\'
+			                  OR ref ILIKE $5 ESCAPE '\'
+			                  OR sha ILIKE $5 ESCAPE '\'
+			                  OR COALESCE(commit_title, '') ILIKE $5 ESCAPE '\'
+			                  OR COALESCE(commit_author_name, '') ILIKE $5 ESCAPE '\'
+			                  OR status ILIKE $5 ESCAPE '\')
+		), totals AS (
+			SELECT count(*) AS total FROM matching
+		), page AS (
+			SELECT * FROM matching ORDER BY iid DESC LIMIT $6 OFFSET $7
+		)
+		SELECT page.id, page.iid, page.project_id, page.ref, page.sha, page.source,
+		       page.status, page.variables, page.created_by_id, page.commit_title,
+		       page.commit_author_name, page.commit_author_email, page.created_at,
+		       page.started_at, page.finished_at, totals.total
+		FROM page CROSS JOIN totals`
+
+	rows, err := r.s.pool.Query(ctx, statement, projectID, q.Ref, q.Status, q.Source,
+		q.searchPattern(), q.PerPage, (q.Page-1)*q.PerPage)
 	if err != nil {
-		return nil, fmt.Errorf("list pipelines: %w", err)
+		return nil, 0, fmt.Errorf("list pipelines: %w", err)
 	}
 	defer rows.Close()
 
 	pipelines := []Pipeline{}
+	total := 0
 	for rows.Next() {
 		var pipeline Pipeline
 		if err := rows.Scan(&pipeline.ID, &pipeline.IID, &pipeline.ProjectID, &pipeline.Ref,
 			&pipeline.SHA, &pipeline.Source, &pipeline.Status, &pipeline.Variables,
 			&pipeline.CreatedBy, &pipeline.CommitTitle, &pipeline.CommitAuthorName,
 			&pipeline.CommitAuthorEmail, &pipeline.CreatedAt, &pipeline.StartedAt,
-			&pipeline.FinishedAt); err != nil {
-			return nil, fmt.Errorf("scan pipeline: %w", err)
+			&pipeline.FinishedAt, &total); err != nil {
+			return nil, 0, fmt.Errorf("scan pipeline: %w", err)
 		}
 		pipelines = append(pipelines, pipeline)
 	}
-	return pipelines, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// Past the end is not the end: the count has to come back anyway, or the page
+	// control cannot say where the end is.
+	if total == 0 && q.Page > 1 {
+		if err := r.s.pool.QueryRow(ctx,
+			`SELECT count(*) FROM pipelines WHERE project_id = $1
+			   AND ($2 = '' OR ref = $2) AND ($3 = '' OR status = $3) AND ($4 = '' OR source = $4)
+			   AND ($5 = '' OR iid::text ILIKE $5 ESCAPE '\'
+			                  OR ref ILIKE $5 ESCAPE '\'
+			                  OR sha ILIKE $5 ESCAPE '\'
+			                  OR COALESCE(commit_title, '') ILIKE $5 ESCAPE '\'
+			                  OR COALESCE(commit_author_name, '') ILIKE $5 ESCAPE '\'
+			                  OR status ILIKE $5 ESCAPE '\')`,
+			projectID, q.Ref, q.Status, q.Source, q.searchPattern()).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count pipelines: %w", err)
+		}
+	}
+
+	return pipelines, total, nil
 }
 
 // JobByID returns one job with everything a runner needs to run it.
