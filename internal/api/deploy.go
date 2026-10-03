@@ -124,8 +124,11 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	project *models.Project, repoDir string, config *pipeline.Config) error {
 
 	spec := config.Deploy
+	// The newline is in the format string, not added here: appendJobOutput marks each
+	// line it is given, and a line that has already ended gets an empty one after it,
+	// which reads as though the deployment paused between every step.
 	log := func(format string, args ...any) {
-		_, _ = s.appendJobOutput(ctx, job, "out", fmt.Sprintf(format, args...)+"\n")
+		_, _ = s.appendJobOutput(ctx, job, "out", fmt.Sprintf(format, args...))
 	}
 
 	started := time.Now()
@@ -141,7 +144,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// and is refused here rather than sent on to be applied as though it were what
 	// the run produced: the whole point of rolling out by digest is that the thing
 	// being deployed is the thing that was tested.
-	image, err := s.imageForDeploy(ctx, job, log)
+	image, err := s.imageForDeploy(ctx, job, pipelineRun, log)
 	if err != nil {
 		return err
 	}
@@ -189,7 +192,6 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		return fmt.Errorf("could not describe the deployment: %w", err)
 	}
 
-	log("\n")
 	call, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(target.Endpoint, "/")+"/deploy", bytes.NewReader(body))
 	if err != nil {
@@ -212,13 +214,13 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if response.StatusCode != http.StatusOK {
 		message := strings.TrimSpace(string(raw))
-		log("\nThe %s module refused: %s\n", spec.Target, message)
+		log("The %s module refused: %s\n", spec.Target, message)
 		return fmt.Errorf("the %s module refused: %s", spec.Target, message)
 	}
 
 	var answer deployAnswer
 	if err := json.Unmarshal(raw, &answer); err != nil {
-		log("\nThe %s module's answer could not be read: %v\n", spec.Target, err)
+		log("The %s module's answer could not be read: %v\n", spec.Target, err)
 		return fmt.Errorf("the %s module's answer could not be read: %w", spec.Target, err)
 	}
 
@@ -232,19 +234,19 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	}
 
 	if answer.Error != "" {
-		log("\n%s\n", answer.Error)
+		log("%s\n", answer.Error)
 		return fmt.Errorf("%s", answer.Error)
 	}
 
 	switch answer.Deployment.State {
 	case "succeeded", "rolled_back":
-		log("\nDeployed in %s.\n", time.Since(started).Round(time.Second))
+		log("Deployed in %s.\n", time.Since(started).Round(time.Second))
 		return nil
 	case "":
-		log("\nThe module said nothing about what it did.\n")
+		log("The module said nothing about what it did.\n")
 		return fmt.Errorf("the %s module did not report a state", spec.Target)
 	default:
-		log("\nThe deployment %s: %s\n", answer.Deployment.State, answer.Deployment.Reason)
+		log("The deployment %s: %s\n", answer.Deployment.State, answer.Deployment.Reason)
 		return fmt.Errorf("the deployment %s: %s", answer.Deployment.State, answer.Deployment.Reason)
 	}
 }
@@ -255,23 +257,31 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 // between the build and the rollout, so a rollback that went back to a tag could
 // return to a different image than the one that was rolled out from. Asking the
 // registry what the tag currently points at pins it to what was actually tested.
-func (s *Server) imageForDeploy(ctx context.Context, job *store.Job,
+// The image is the one the run built, which is not this job's own build: a deploy job
+// has no build of its own, so asking it here would find nothing and apply the
+// manifests with the placeholder still in them. It comes from whichever job in this
+// run produced an image.
+func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.Pipeline,
 	log func(string, ...any)) (string, error) {
 
-	image := ""
-	if job.Build != nil {
-		image, _ = job.Build["image"].(string)
-	}
-	image = strings.TrimSpace(image)
-	if image == "" {
-		// Not a failure of this module's doing, and said as such: a repository can
-		// deploy something it did not build, and the pipeline may not have produced
-		// an image at all.
-		log("  image:     none — the manifests are applied as they are written\n")
+	image, from := builtImage(ctx, s, run, job.ID)
+	if strings.TrimSpace(image) == "" {
+		// Said rather than refused, because a repository can deploy something it did
+		// not build, and the manifests then apply as they are written. A rollout of
+		// whatever the manifest names is a real deployment; silently substituting
+		// nothing is not, so the log says which of the two happened.
+		if from == "" {
+			log("  image:     none — no job in this run built one, so the manifests are " +
+				"applied as they are written\n")
+			return "", nil
+		}
+		log("  image:     none — job %q ran but produced no image\n", from)
 		return "", nil
 	}
 
-	digest, err := s.resolveImageDigest(ctx, job, image)
+	log("  image:     %s (built by %q)\n", image, from)
+
+	digest, err := s.resolveImageDigest(ctx, job, image, s.buildTag(ctx, run))
 	if err != nil {
 		// A tag that cannot be resolved is reported and the tag is used, because the
 		// alternative is refusing to deploy something that is perfectly deployable.
@@ -430,46 +440,60 @@ func (s *Server) readManifest(ctx context.Context, repoDir, sha, path string) (
 	return string(contents), apiVersion, kind, name, nil
 }
 
-// manifestIdentity is the apiVersion, kind and name at the top of a manifest.
+// manifestIdentity is the apiVersion, kind, namespace and name at the top of a
+// manifest.
+//
+// Handled rather than parsed with a YAML library, because the only three facts needed
+// are the kind and the name — for the log line and to know what to wait for — and a
+// real parser for that would be a dependency the core otherwise does not have. It does
+// read the name from inside the metadata block, which is where it always is: reading
+// only the unindented lines would find apiVersion and kind and no name at all, and a
+// deployment applied to a nameless object is not a deployment.
 func manifestIdentity(body string) (apiVersion, kind, name string) {
+	inMetadata := false
+
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimRight(line, " \t\r")
-		if trimmed == "" || strings.HasPrefix(strings.TrimSpace(trimmed), "#") {
+		if strings.TrimSpace(trimmed) == "" || strings.HasPrefix(strings.TrimSpace(trimmed), "#") {
 			continue
 		}
-		// The document has ended, so anything after this is somebody else's.
 		if trimmed == "---" {
-			break
+			// The document has ended; anything after this is somebody else's.
+			if name != "" {
+				break
+			}
+			inMetadata = false
+			continue
 		}
 
-		indent := len(trimmed) - len(strings.TrimLeft(trimmed, " "))
-		if indent != 0 {
-			continue
-		}
+		indented := strings.TrimSpace(trimmed) != trimmed
 		key, value, found := strings.Cut(trimmed, ":")
 		if !found {
 			continue
 		}
+		key = strings.TrimSpace(key)
 		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		switch strings.TrimSpace(key) {
-		case "apiVersion":
-			if apiVersion == "" {
-				apiVersion = value
+
+		if !indented {
+			inMetadata = key == "metadata"
+			switch key {
+			case "apiVersion":
+				if apiVersion == "" {
+					apiVersion = value
+				}
+			case "kind":
+				if kind == "" {
+					kind = value
+				}
 			}
-		case "kind":
-			if kind == "" {
-				kind = value
-			}
-		case "metadata":
-			// metadata is a block; the name is on the next line, indented.
 			continue
-		case "name":
-			if name == "" && kind != "" {
-				name = value
-			}
 		}
-		if kind != "" && name != "" {
-			return apiVersion, kind, name
+
+		if inMetadata && key == "name" && value != "" && name == "" {
+			name = value
+			if apiVersion != "" && kind != "" {
+				return apiVersion, kind, name
+			}
 		}
 	}
 	return apiVersion, kind, name
@@ -481,7 +505,16 @@ func manifestIdentity(body string) (apiVersion, kind, name string) {
 // and the answer is only correct because somebody who does know went and asked the
 // storage API. A failure is returned rather than guessed at — an unpinned image is
 // visible on the log line that follows, which is enough for a person to act on.
-func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image string) (string, error) {
+func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image, tag string) (string, error) {
+	// The repository is what the build recorded and the tag is what it was pushed as,
+	// kept apart on purpose. Handed over as one string, the registry can only see
+	// everything after the last slash, which for "registry:5000/home-store/www" is
+	// "www" — not a repository, and not this project's either.
+	repository, fromName := splitImage(image)
+	if tag == "" {
+		tag = fromName
+	}
+
 	registry, err := s.store.Integrations().ByKind(ctx, registryKind)
 	if err != nil {
 		return "", fmt.Errorf("no registry is installed, so an image cannot be pinned")
@@ -498,7 +531,8 @@ func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image s
 
 	body, err := json.Marshal(map[string]string{
 		"project": job.ProjectPath,
-		"image":   image,
+		"image":   repository,
+		"tag":     tag,
 		"token":   token,
 	})
 	if err != nil {
@@ -534,15 +568,6 @@ func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image s
 		return "", fmt.Errorf("the registry did not answer with a digest")
 	}
 
-	// The repository with the digest on it: what the cluster pulls is the digest, and
-	// a name with a tag on the end would be a different thing.
-	repository := image
-	if index := strings.LastIndex(repository, "@"); index > 0 {
-		return repository, nil
-	}
-	if index := strings.LastIndex(repository, ":"); index > strings.LastIndex(repository, "/") {
-		repository = repository[:index]
-	}
 	return repository + "@" + answer.Digest, nil
 }
 
@@ -560,10 +585,96 @@ func (s *Server) resolveToken(ctx context.Context, registry *models.Integration,
 		return "", err
 	}
 
-	token, _, err := s.mintModuleToken(nil, builder, registry, &project.ID,
+	token, _, err := s.mintModuleToken(ctx, builder, registry, &project.ID,
 		[]string{models.ScopeRegistryPull}, 10*time.Minute)
 	if err != nil {
 		return "", err
 	}
 	return token, nil
+}
+
+// builtImage is the image this run produced, and the job that produced it.
+//
+// The run's jobs rather than the deploy's own, and the job name with it: "the image
+// came from nowhere" and "the image came from the build job" are the same blank on a
+// log line and completely different things when a rollout misbehaves.
+func builtImage(ctx context.Context, s *Server, run *store.Pipeline, skipJobID int64) (string, string) {
+	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, run.ID)
+	if err != nil {
+		return "", ""
+	}
+
+	fallback := ""
+	fallbackFrom := ""
+	for _, job := range jobs {
+		if job.ID == skipJobID || job.Build == nil {
+			continue
+		}
+		image, _ := job.Build["image"].(string)
+		image = strings.TrimSpace(image)
+		if image == "" {
+			continue
+		}
+
+		// A job that runs a build is the better answer than one that merely mentions
+		// an image, so a second candidate is kept rather than taking the first.
+		if strings.TrimSpace(asString(job.Build["dockerfile"])) != "" ||
+			strings.TrimSpace(asString(job.Build["context"])) != "" {
+			return image, job.Name
+		}
+		if fallback == "" {
+			fallback, fallbackFrom = image, job.Name
+		}
+	}
+	return fallback, fallbackFrom
+}
+
+func asString(value any) string {
+	if value == nil {
+		return ""
+	}
+	text, _ := value.(string)
+	return text
+}
+
+// splitImage is the repository and the tag of an image name.
+//
+// The host is kept in the repository: it is what a cluster pulls from, and it is part
+// of the name rather than something to strip off. A colon after the last slash is a
+// tag, and a colon before one is a port — which is the whole difference between a
+// registry on port 5000 and an image called "www:dev".
+func splitImage(image string) (repository, tag string) {
+	repository = strings.TrimSpace(image)
+	if index := strings.LastIndex(repository, "@"); index > 0 {
+		repository = repository[:index]
+	}
+
+	colon := strings.LastIndex(repository, ":")
+	if colon > strings.LastIndex(repository, "/") {
+		tag = repository[colon+1:]
+		repository = repository[:colon]
+	}
+	return repository, tag
+}
+
+// buildTag is the tag the run pushed, which is not in the image name.
+//
+// The core records the repository and the tag separately — the tag is what a pipeline
+// asked for and the repository is what the registry's naming rule produced — so the
+// tag has to come from where it was recorded rather than from being parsed back out
+// of a name that does not carry it.
+func (s *Server) buildTag(ctx context.Context, run *store.Pipeline) string {
+	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, run.ID)
+	if err != nil {
+		return ""
+	}
+	for _, one := range jobs {
+		if one.Build == nil {
+			continue
+		}
+		if tag, _ := one.Build["tag"].(string); strings.TrimSpace(tag) != "" {
+			return strings.TrimSpace(tag)
+		}
+	}
+	return ""
 }

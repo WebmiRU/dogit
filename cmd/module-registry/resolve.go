@@ -23,6 +23,7 @@ func resolve(registry *registry) http.HandlerFunc {
 		var req struct {
 			Project string `json:"project"`
 			Image   string `json:"image"`
+			Tag     string `json:"tag"`
 			Token   string `json:"token"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -41,7 +42,15 @@ func resolve(registry *registry) http.HandlerFunc {
 		// somebody asking what a tag is has no more right to the answer than to the
 		// image behind it, and a deploy module asking about a project's image is
 		// acting for that project.
-		access, err := registry.core.ask(r.Context(), req.Token, projectOf(name), "pull")
+		// The project is what the caller says it is, not what can be guessed from the
+		// image name: a repository called "home-store/www" has a slash in its path, and
+		// everything after the last one of them is "www", which is not a project
+		// anybody has.
+		project := req.Project
+		if project == "" {
+			project = projectOf(name)
+		}
+		access, err := registry.core.ask(r.Context(), req.Token, project, "pull")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
@@ -51,15 +60,20 @@ func resolve(registry *registry) http.HandlerFunc {
 			return
 		}
 
-		reference, err := registry.resolveDigest(r.Context(), name, tagOf(name))
+		tag := req.Tag
+		if tag == "" {
+			tag = tagOf(req.Image)
+		}
+
+		reference, err := registry.resolveDigest(r.Context(), name, tag)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
 
 		writeJSON(w, map[string]any{
-			"image":  strings.TrimSuffix(req.Image, ":"+tagOf(name)),
-			"tag":    tagOf(name),
+			"image":  name,
+			"tag":    tag,
 			"digest": reference,
 			"pinned": reference,
 		})
@@ -113,16 +127,23 @@ func (registry *registry) resolveDigest(ctx context.Context, name, tag string) (
 
 // imageNameOf is the repository part of an image reference, without the registry host.
 //
-// The caller hands over whatever the pipeline recorded, which includes the host this
-// registry is reached at — a name that is right for a client pushing from this
-// network and wrong for the storage API, which addresses repositories only.
+// Only the first component is dropped, and only when it looks like a host. Everything
+// after it is the repository, which may have as many path elements as the project has:
+// "registry:5000/home-store/www" is the repository "home-store/www", and taking what
+// follows the last slash instead asks the registry about a repository called "www",
+// which belongs to no project anywhere.
 func imageNameOf(image string) string {
 	name := strings.TrimSpace(image)
-	if name == "" {
-		return ""
+	slash := strings.Index(name, "/")
+	if slash < 0 {
+		return name
 	}
-	if index := strings.LastIndex(name, "/"); index >= 0 {
-		name = name[index+1:]
+
+	host := name[:slash]
+	// A first component with a dot, a colon or the word "localhost" is a host by
+	// every convention in use; anything else is the first element of the repository.
+	if strings.ContainsAny(host, ".:") || host == "localhost" {
+		return strings.TrimPrefix(name[slash+1:], "/")
 	}
 	return name
 }

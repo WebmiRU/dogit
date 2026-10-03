@@ -64,11 +64,28 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 
 	// Not derived from the caller's request: that request is about a runner reporting
 	// a test result, and it is answered already. A deploy outlives it.
-	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Minute)
-	defer cancel()
+	//
+	// The deadline belongs to the goroutine rather than to this function, and that is
+	// not a detail. A `defer cancel()` here would fire the moment this function
+	// returned — which is immediately, since the goroutine has only just started — and
+	// cancel a deployment that had not yet read a single manifest. It fails in the
+	// least legible way available: the job is left "running" with an error about a
+	// cancelled context and nothing in a cluster.
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeoutLimit)
 
-	go s.carryOutDeploy(detached, job, run, project)
+	go func() {
+		defer cancel()
+		s.carryOutDeploy(detached, job, run, project)
+	}()
 }
+
+// deployTimeoutLimit is how long a deployment may take before it is abandoned.
+//
+// An hour, which is longer than any rollout and longer than any migration that would
+// be run as part of one. It exists so a deployment that hangs — a cluster that accepts
+// a connection and then never answers — ends as a failed job rather than as a job
+// that stays "running" for ever and blocks the next one to the same place.
+const deployTimeoutLimit = time.Hour
 
 // carryOutDeploy is the deployment itself, off the request that led to it.
 func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.Pipeline,

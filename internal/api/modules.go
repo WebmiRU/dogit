@@ -109,28 +109,43 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 	// module that lost them can show an administrator what to restore.
 	var database any
 	if integration.Capabilities.Database {
-		provisioned, err := s.store.Integrations().ProvisionModuleDatabase(
-			r.Context(), s.cfg.DatabaseURL, integration.Kind)
-		if err != nil {
-			s.log.Error("could not provision a database for the module",
-				"kind", integration.Kind, "error", err)
-			s.writeError(w, r, err)
-			return
-		}
+		// Only ever once per module.
+		//
+		// Re-registering is normal — a module that restarts comes back with a new
+		// address and says so — and provisioning again would leave the module holding
+		// the password to a second, empty database while its first, which has the
+		// history in it, is orphaned. So a module that already has one is told nothing
+		// and keeps what it kept, and a module that has lost its password is a module
+		// whose administrator has to hand it a new one: that is a deliberate act rather
+		// than something a restart does to somebody.
+		switch {
+		case integration.DatabaseName != "":
+			s.log.Info("the module already has a database; keeping it",
+				"kind", integration.Kind, "database", integration.DatabaseName)
+		default:
+			provisioned, err := s.store.Integrations().ProvisionModuleDatabase(
+				r.Context(), s.cfg.DatabaseURL, integration.Kind)
+			if err != nil {
+				s.log.Error("could not provision a database for the module",
+					"kind", integration.Kind, "error", err)
+				s.writeError(w, r, err)
+				return
+			}
 
-		if err := s.store.Integrations().SetModuleDatabase(r.Context(), integration.ID,
-			provisioned.Name, provisioned.Role); err != nil {
-			s.log.Warn("the database was created but its name could not be recorded",
-				"kind", integration.Kind, "error", err)
-		}
+			if err := s.store.Integrations().SetModuleDatabase(r.Context(), integration.ID,
+				provisioned.Name, provisioned.Role); err != nil {
+				s.log.Warn("the database was created but its name could not be recorded",
+					"kind", integration.Kind, "error", err)
+			}
 
-		database = map[string]any{
-			"url":  provisioned.URL,
-			"name": provisioned.Name,
-			"role": provisioned.Role,
+			database = map[string]any{
+				"url":  provisioned.URL,
+				"name": provisioned.Name,
+				"role": provisioned.Role,
+			}
+			s.log.Info("provisioned a database for the module",
+				"kind", integration.Kind, "database", provisioned.Name)
 		}
-		s.log.Info("provisioned a database for the module",
-			"kind", integration.Kind, "database", provisioned.Name)
 	}
 
 	s.publishInstanceEvent(r, models.EventModuleRegistered, integration, map[string]any{

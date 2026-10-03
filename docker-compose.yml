@@ -261,9 +261,17 @@ services:
         condition: service_healthy
     environment:
       DOGIT_CORE_URL: http://app:8080
-      DOGIT_MODULE_ENDPOINT: http://module-deploy:8094
+      DOGIT_MODULE_ENDPOINT: http://module-deploy-kubernetes:8094
       DOGIT_MODULE_NAME: ${DOGIT_MODULE_DEPLOY_NAME:-kubernetes}
       DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+    # A development convenience: a name for the machine this container runs on.
+    #
+    # A cluster reached at 127.0.0.1 is not reachable from inside a container, so a
+    # kubeconfig pasted in as-is points at the module's own empty network. Naming the
+    # host means an administrator can write the address that works rather than
+    # discovering the problem from a rollout that timed out.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # Reference implementation of the module protocol. It has no product
   # behaviour: it exists to prove that registration, heartbeats and
