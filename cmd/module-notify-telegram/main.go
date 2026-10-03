@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -174,6 +175,10 @@ func manifest() map[string]any {
 		// What a row in the recipients list is, in this module's words: a chat id
 		// names one, and the core is told so rather than guessing from a column name.
 		"target": map[string]any{
+			// The token is deliberately not here. It is the bot, and one bot serves
+			// every chat; a repository given a row of its own must never be shown a
+			// secret that belongs to the module.
+			"settings":    []string{"chat_id", "thread_id"},
 			"identify":    []string{"chat_id", "thread_id"},
 			"title":       "Which chats",
 			"description": "One row per chat this bot writes to. The same bot can write to as many as you add, and every row is a separate message.",
@@ -407,10 +412,21 @@ func poll(ctx context.Context, core *coreClient, settings map[string]any) {
 		// decided by the pipeline that said it, not here: a module that filtered
 		// events would be deciding on the project's behalf, from a list it would have
 		// to keep up to date.
+		// Everything in the batch goes at once.
+		//
+		// The recipients are separate places, not steps in a queue: one message to a
+		// slow chat must not hold up the same message to a fast one, and which of them
+		// arrives first was never something to depend on. Telegram itself is the
+		// reason — a few hundred milliseconds per call, and a batch of them in a row
+		// is the difference between a notification and a notification from yesterday.
+		delivered := deliverAll(ctx, settings, answer.Notifications)
+
+		// The cursor only moves over records that were sent. One that failed is asked
+		// for again on the next pass, which repeats it — a duplicate is an annoyance,
+		// a gap is a lie.
 		for _, note := range answer.Notifications {
-			if err := send(ctx, recipient(note, settings), note); err != nil {
-				log.Printf("module-notify: could not send: %v", err)
-				continue
+			if !delivered[note.ID] {
+				break
 			}
 			cursor = max64(cursor, note.ID)
 		}
@@ -436,6 +452,37 @@ func poll(ctx context.Context, core *coreClient, settings map[string]any) {
 // an unauthenticated stranger and be told, correctly, that it does not exist. The
 // deployment's own environment is where the token came from, so that is what is
 // used; the stored value is only a fallback, and only when it is not the mask.
+// deliverAll sends a batch at once and says which of them went.
+//
+// A few at a time rather than all of them: a hundred queued messages would otherwise
+// become a hundred simultaneous requests, which is the same as a denial of service
+// aimed at ourselves.
+func deliverAll(ctx context.Context, settings map[string]any, notes []notification) map[int64]bool {
+	const atOnce = 4
+
+	done := make(map[int64]bool, len(notes))
+	guard := make(chan struct{}, atOnce)
+
+	var group sync.WaitGroup
+	for _, note := range notes {
+		group.Add(1)
+		go func(note notification) {
+			defer group.Done()
+			guard <- struct{}{}
+			defer func() { <-guard }()
+
+			if err := send(ctx, recipient(note, settings), note); err != nil {
+				log.Printf("module-notify: could not send: %v", err)
+				return
+			}
+			done[note.ID] = true
+		}(note)
+	}
+	group.Wait()
+
+	return done
+}
+
 func botTokenOf(settings map[string]any) string {
 	if token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")); token != "" {
 		return token

@@ -121,9 +121,19 @@ function failed(caught: unknown, what: string) {
   })
 }
 
-/** The settings that make a recipient of this module, in the module's own words. */
+/**
+ * The settings that make a recipient of this module, in the module's own words.
+ *
+ * Not all of them: a module says which of its settings are a destination and which
+ * are its own, and only the first kind is asked for here. That is what keeps a bot
+ * token — the module's business — off the page of somebody's repository.
+ */
 function settingsOf(moduleId: string): SettingSpec[] {
-  return available.value.find((one) => one.id === moduleId)?.settings ?? []
+  const module = available.value.find((one) => one.id === moduleId)
+  const all = module?.settings ?? []
+  const ofTarget = module?.target?.settings
+  if (!ofTarget?.length) return all
+  return ofTarget.map((key) => all.find((spec) => spec.key === key)).filter((spec): spec is SettingSpec => !!spec)
 }
 
 /** What a recipient of this module is called in a list. */

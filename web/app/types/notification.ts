@@ -43,6 +43,9 @@ export interface RecipientsModule {
   name: string
   enabled: boolean
   target?: {
+    /** The settings a recipient is made of. Absent means all of them. */
+    settings?: string[]
+    /** The settings that name a recipient, best first. */
     identify?: string[]
     title?: string
     description?: string

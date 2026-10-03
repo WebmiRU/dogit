@@ -440,13 +440,32 @@ func (s *Server) scopeParents(ctx context.Context, scopeType string,
 	}
 }
 
-// checkTargetValues enforces what the module said about its own settings.
+// checkTargetValues enforces what the module said about its own settings, and refuses
+// anything that is not part of a destination.
+//
+// The second part is the one that keeps a repository from being shown the module's
+// own configuration: a bot token belongs to the bot, and asking a project for it
+// because the form happened to render every setting the module declared is how a
+// secret ends up copied into twenty places.
 func (s *Server) checkTargetValues(r *http.Request, integration *models.Integration,
 	values map[string]string) (map[string]json.RawMessage, error) {
 
 	declared := map[string]models.SettingSpec{}
 	for _, spec := range integration.Capabilities.Settings {
 		declared[spec.Key] = spec
+	}
+
+	// A module that says nothing is taken to mean that all of its settings make one
+	// recipient, which is the case for a module with nothing but an address.
+	recipientKeys := map[string]bool{}
+	for _, spec := range integration.Capabilities.Settings {
+		recipientKeys[spec.Key] = true
+	}
+	if declaredTarget := integration.Capabilities.Target.Settings; len(declaredTarget) > 0 {
+		recipientKeys = map[string]bool{}
+		for _, key := range declaredTarget {
+			recipientKeys[key] = true
+		}
 	}
 
 	out := map[string]json.RawMessage{}
@@ -456,6 +475,11 @@ func (s *Server) checkTargetValues(r *http.Request, integration *models.Integrat
 			// An unknown setting is a refusal, not a shrug: a form that sends a field
 			// nobody declared is a form and a core that have drifted apart.
 			return nil, errBadRequest("this module does not have a setting called " + key)
+		}
+		if !recipientKeys[key] {
+			// Declared, but not part of a destination. Said plainly rather than
+			// quietly dropped, so a form that is one field out of date says which.
+			return nil, errBadRequest(spec.Label + " belongs to the module, not to a recipient")
 		}
 		for _, want := range spec.MustContain {
 			if !strings.Contains(value, want) {

@@ -1,5 +1,21 @@
 <script setup lang="ts">
 /**
+ * What identifies this page to Nuxt.
+ *
+ * By default a page is keyed by its whole address, so moving from Notifications to
+ * Pipelines tore down this component and built it again — the header, the tabs and
+ * all — and every one of those was thrown away and redrawn in front of the reader.
+ *
+ * The key here is the repository and nothing below it. The tabs are one component
+ * choosing between children, which is what they are: moving between them swaps what
+ * is under the tabs and leaves the tabs themselves where they were, while moving to
+ * another repository rebuilds the page as it should.
+ */
+definePageMeta({
+  key: (route) => route.path.split('/-/')[0] ?? route.path,
+})
+
+/**
  * Repository view.
  *
  * The URL carries both the project path and the view, mirroring the familiar

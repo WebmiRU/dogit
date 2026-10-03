@@ -75,6 +75,11 @@ type Manifest struct {
 // so a list can say "-100…a chat" rather than "row 1" — and a word for what such a
 // row is.
 type TargetSpec struct {
+	// Settings are the keys a recipient is made of, and it matters that a module
+	// says so: a Telegram bot's token is the module's, not a destination's, and a
+	// repository must never be asked for it. Left empty, every declared setting is
+	// taken to make one, which is what a module with nothing but addresses wants.
+	Settings []string `json:"settings,omitempty"`
 	// Identify lists the settings that name a recipient, best first: a chat id, an
 	// address. They are shown as the row's name when nobody gave it one.
 	Identify []string `json:"identify,omitempty"`
