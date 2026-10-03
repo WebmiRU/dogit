@@ -77,7 +77,11 @@ func (r *EventRepo) RecentActivity(ctx context.Context, userID uuid.UUID, limit 
 	}
 
 	rows, err := r.s.pool.Query(ctx, `
-		SELECT e.id, e.kind, e.created_at, e.project_id, p.path, p.name,
+		-- Instance-wide events carry no project, and therefore no path: coalesced
+		-- rather than left null, because a module registering is a real entry and a
+		-- reader cannot tell it from a broken one.
+		SELECT e.id, e.kind, e.created_at, e.project_id,
+		       COALESCE(p.path, ''), COALESCE(p.name, ''),
 		       e.actor_id, COALESCE(u.username, 'unknown'), e.payload
 		FROM events e
 		LEFT JOIN projects p ON p.id = e.project_id

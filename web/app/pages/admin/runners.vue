@@ -59,13 +59,18 @@ onMounted(() => {
 
 onBeforeUnmount(() => stopWatching?.())
 
-/** How busy this machine is, as one word rather than a fraction. */
-function load_pressure(runner: RunnerRow): { label: string; cls: string } {
+/**
+ * How busy this machine is, as one word rather than a fraction.
+ *
+ * The class is a colour, not a badge class: the status above is already a badge,
+ * and two of them stacked would say the same thing twice.
+ */
+function load_pressure(runner: RunnerRow): { label: string; colour: string } {
   const capacity = runner.concurrent_limit ?? 0
-  if (capacity === 0) return { label: 'unknown capacity', cls: 'badge-neutral' }
-  if (runner.running_jobs === 0) return { label: 'idle', cls: 'badge-green' }
-  if (runner.running_jobs >= capacity) return { label: 'full', cls: 'badge-warning' }
-  return { label: 'busy', cls: 'badge-private' }
+  if (capacity === 0) return { label: 'capacity unknown', colour: 'unknown' }
+  if (runner.running_jobs === 0) return { label: 'idle', colour: 'green' }
+  if (runner.running_jobs >= capacity) return { label: 'at capacity', colour: 'warn' }
+  return { label: 'busy', colour: 'blue' }
 }
 
 /** How full this machine's own storage is, or nothing at all if it said. */
@@ -146,7 +151,7 @@ function humanBytes(bytes: number): string {
                 :class="runner.status === 'online' ? 'badge-green' : 'badge-neutral'"
               >{{ runner.status }}</span>
               <span v-if="!runner.enabled" class="badge badge-warning">forbidden</span>
-              <div class="pressure" :class="load_pressure(runner).cls">
+              <div class="pressure" :class="load_pressure(runner).colour">
                 {{ load_pressure(runner).label }}
               </div>
             </td>
@@ -218,10 +223,26 @@ function humanBytes(bytes: number): string {
 }
 
 .pressure {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   margin-top: 4px;
   font-size: 11px;
   color: var(--text-muted);
 }
+
+.pressure::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pressure.green { color: #3fb950; }
+.pressure.warn { color: #d29922; }
+.pressure.blue { color: #a371f7; }
+.pressure.unknown { color: var(--text-muted); }
 
 .small {
   font-size: 12px;

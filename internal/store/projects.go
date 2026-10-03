@@ -385,7 +385,13 @@ func (r *EventRepo) VisibleSince(ctx context.Context, userID uuid.UUID, projectI
 	}
 
 	rows, err := r.s.pool.Query(ctx, `
-		SELECT e.id, e.kind, e.created_at, e.project_id, p.path, p.name,
+		-- An event about the instance rather than about a project — a module
+		-- registering, a runner going quiet — has no project and therefore no path.
+		-- Both are coalesced rather than left null: an entry with no project is a
+		-- real kind of entry, and a reader that cannot tell one from a broken row
+		-- cannot use the feed at all.
+		SELECT e.id, e.kind, e.created_at, e.project_id,
+		       COALESCE(p.path, ''), COALESCE(p.name, ''),
 		       e.actor_id, COALESCE(u.username, 'unknown'), e.payload
 		FROM events e
 		LEFT JOIN projects p ON p.id = e.project_id
