@@ -105,6 +105,7 @@ func (s *Server) Register(r chi.Router) {
 	moduleRoutes.Put("/settings", s.handleModuleSelfSettingsWrite)
 	// What a runner module is for: taking work, and saying what happened to it.
 	moduleRoutes.Post("/runner/claim", s.handleClaimJob)
+	moduleRoutes.Post("/runner/jobs/{jobID}/key", s.handleJobKey)
 	moduleRoutes.Post("/runner/jobs/{jobID}/log", s.handleAppendJobLog)
 	moduleRoutes.Post("/runner/jobs/{jobID}/finish", s.handleFinishJob)
 

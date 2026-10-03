@@ -401,6 +401,14 @@ async function copyCloneUrl() {
           :can-push="canPush"
           @change-ref="switchRef"
         />
+        <!-- A run has its own page: watching the log is what people come for, and
+             a list that also did that would do neither thing well. -->
+        <ProjectPipelineRun
+          v-else-if="view.name === 'pipelines' && view.rest[0]"
+          :project-path="project.path"
+          :run-iid="Number(view.rest[0])"
+          :default-branch="project.default_branch"
+        />
         <ProjectPipelines
           v-else-if="view.name === 'pipelines'"
           :project-path="project.path"

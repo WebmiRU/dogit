@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"syscall"
@@ -13,8 +14,8 @@ import (
 // not there to read — and every failure leaves the number out rather than putting a
 // zero there. A runner reporting "this machine has no memory" would be believed by
 // an administrator deciding whether the disk is the problem.
-func machine() (cpus float64, memory int64, ok bool) {
-	cpus = float64(countCPUs())
+func machine() (cpus int, memory int64, ok bool) {
+	cpus = countCPUs()
 	memory = readMemTotal()
 	return cpus, memory, cpus > 0 || memory > 0
 }
@@ -106,4 +107,19 @@ func parseInt64(value string) int64 {
 		return -parsed
 	}
 	return parsed
+}
+
+// humanBytes is a size a person can read at a glance. A byte count with nine
+// digits is accurate and useless.
+func humanBytes(value int64) string {
+	const unit = 1024
+	if value < unit {
+		return fmt.Sprintf("%d B", value)
+	}
+	div, exp := int64(unit), 0
+	for n := value / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(value)/float64(div), "KMGTPE"[exp])
 }

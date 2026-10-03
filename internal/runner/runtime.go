@@ -79,6 +79,10 @@ type Handle struct {
 // ID returns the runtime's identifier for this environment.
 func (h Handle) ID() string { return h.runtimeID }
 
+// Discards is a writer that throws everything away, for a caller that wants the
+// exit status and not the output.
+var Discard io.Writer = io.Discard
+
 // Status is the outcome of a job.
 type Status string
 
@@ -108,9 +112,13 @@ type Result struct {
 type Runtime interface {
 	// Prepare creates an isolated environment for the job.
 	Prepare(ctx context.Context, spec JobSpec) (Handle, error)
-	// Stream runs the job, writing its combined output to logs until the script
+	// Stream runs the job, writing its output to the given writers until the script
 	// finishes or the deadline passes.
-	Stream(ctx context.Context, handle Handle, spec JobSpec, logs io.Writer) Result
+	//
+	// The two streams are written separately rather than merged. A build that fails
+	// says why on stderr, and a merged log makes that line look like any other —
+	// which is precisely the line the reader is looking for.
+	Stream(ctx context.Context, handle Handle, spec JobSpec, stdout, stderr io.Writer) Result
 	// Collect retrieves the declared artifact paths from a finished environment.
 	//
 	// It runs after Stream because artifacts are whatever the job left behind: an

@@ -26,6 +26,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -62,6 +64,8 @@ func main() {
 	flag.DurationVar(&cfg.heartbeat, "heartbeat", 30*time.Second, "heartbeat interval")
 	flag.StringVar(&cfg.workspace, "workspace", envOr("DOGIT_RUNNER_WORKSPACE", "/data/work"),
 		"where checkouts are made")
+	flag.StringVar(&cfg.sshHost, "ssh-host", envOr("DOGIT_SSH_HOST", "localhost"),
+		"the instance's SSH host, for cloning over git-over-ssh")
 	flag.Parse()
 
 	if cfg.registrationToken == "" {
@@ -143,9 +147,25 @@ func main() {
 // runtime's interface, which wants the level named as a method.
 type logAdapter struct{}
 
-func (logAdapter) Warn(msg string, args ...any)  { log.Printf("runner: "+msg, args...) }
-func (logAdapter) Info(msg string, args ...any)  { log.Printf("runner: "+msg, args...) }
-func (logAdapter) Debug(msg string, args ...any) { log.Printf("runner: "+msg, args...) }
+func (logAdapter) Warn(msg string, args ...any)  { logRunner(msg, args...) }
+func (logAdapter) Info(msg string, args ...any)  { logRunner(msg, args...) }
+func (logAdapter) Debug(msg string, args ...any) { logRunner(msg, args...) }
+
+// logRunner prints the message followed by its key/value pairs.
+//
+// The runtime hands over structured arguments, and handing those to a formatting
+// logger as if they were a format string produces a line nobody can read: the
+// pairs come out as one %!(EXTRA...) blob. They are joined as text instead.
+func logRunner(msg string, args ...any) {
+	var parts []string
+	for i := 0; i+1 < len(args); i += 2 {
+		parts = append(parts, fmt.Sprintf("%v=%v", args[i], args[i+1]))
+	}
+	if len(args)%2 == 1 {
+		parts = append(parts, fmt.Sprint(args[len(args)-1]))
+	}
+	log.Printf("runner: %s %s", msg, strings.Join(parts, " "))
+}
 
 // config is what this runner was told to be.
 type config struct {
@@ -159,6 +179,9 @@ type config struct {
 	poll              time.Duration
 	heartbeat         time.Duration
 	workspace         string
+	// sshHost is the instance's SSH host: the runner clones over git-over-ssh,
+	// because that is how repositories are served.
+	sshHost string
 }
 
 // manifest is what this runner says it can do.
@@ -222,16 +245,28 @@ type job struct {
 
 // claim is the core's answer to "is there anything for me".
 type claim struct {
+	// core is the client to ask for the project key with. Not part of the answer:
+	// it is how a job, which knows only what the core sent it, gets at the core.
+	core *coreClient
+
 	Job *job `json:"job"`
 	// Registry is what a job that builds an image needs: the address, the name the
 	// registry's own rule gives it, and a credential scoped to that project alone.
 	Registry map[string]any `json:"registry,omitempty"`
-	// CloneURL and CloneToken are how this machine gets the code. A runner is a
-	// machine the deployment knows nothing about, so it cannot already hold a key on
-	// the project; the credential is minted for this job and for nothing else.
-	CloneURL   string `json:"clone_url,omitempty"`
-	CloneToken string `json:"clone_token,omitempty"`
-	LogKey     string `json:"log_key,omitempty"`
+	// CloneURL and Key are how this machine gets the code. A runner is a machine the
+	// deployment knows nothing about, so it cannot already hold a key on the project;
+	// the core mints one for this job, read-only, and takes it away when the job is
+	// over.
+	CloneURL string     `json:"clone_url,omitempty"`
+	Key      *deployKey `json:"key,omitempty"`
+	LogKey   string     `json:"log_key,omitempty"`
+}
+
+// deployKey is the credential for one job: a private key and where it came from.
+type deployKey struct {
+	PrivateKey  string `json:"private_key"`
+	Fingerprint string `json:"fingerprint"`
+	ExpiresAt   string `json:"expires_at"`
 }
 
 type registryAccess struct {
@@ -277,6 +312,7 @@ func take(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg con
 	}
 
 	answer, err := core.claim(ctx, cfg.tags())
+	answer.core = core
 	if err != nil {
 		<-slots
 		if !errors.Is(err, errNothingToDo) {
@@ -288,6 +324,7 @@ func take(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg con
 		<-slots
 		return
 	}
+	answer.core = core
 
 	go func() {
 		defer func() { <-slots }()
@@ -369,7 +406,18 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 		defer func() { <-buildDone }()
 	}
 
-	result := runtime.Stream(ctx, handle, spec, newLogWriter(ctx, core, job.ID))
+	// Two writers, one per stream: a build's stderr is the line the reader is
+	// looking for, and merging it into stdout makes it look like progress.
+	out := newLogWriter(ctx, core, job.ID, "out")
+	errs := newLogWriter(ctx, core, job.ID, "err")
+
+	result := runtime.Stream(ctx, handle, spec, out, errs)
+
+	// Whatever is still buffered goes now. A job that finishes in less time than
+	// the flush interval never reaches one, and its last lines — usually the ones
+	// that say why it failed — would never be sent at all.
+	out.Close()
+	errs.Close()
 
 	status := "success"
 	if result.Status != runner.StatusSuccess {
@@ -377,7 +425,7 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	}
 
 	if pushed != "" {
-		core.log(ctx, job.ID, fmt.Sprintf("\nimage pushed: %s\n", pushed))
+		core.log(ctx, job.ID, "out", fmt.Sprintf("image pushed: %s\n", pushed))
 	}
 
 	core.finish(ctx, job.ID, status, time.Since(started), resultMessage(result))
@@ -424,37 +472,62 @@ func tokenOf(registry map[string]any) string {
 
 // checkout makes a working copy for one job.
 func checkout(ctx context.Context, cfg config, answer claim, workspace string) error {
-	projectPath, token := answer.Job.ProjectPath, answer.CloneToken
+	projectPath := answer.Job.ProjectPath
+
+	// The key is asked for here, at the moment it is needed. The core may already
+	// hold one for this job from an earlier attempt; if so it says so rather than
+	// minting a second, and the private half the runner has is the one that works.
+	cloneURL, privateKey, err := answer.core.jobKey(ctx, answer.Job.ID)
+	if err != nil {
+		return fmt.Errorf("ask for a project key: %w", err)
+	}
+	// Removed rather than emptied: git refuses to clone into a directory that
+	// exists and is not empty, and a leftover from a previous attempt is not
+	// something to merge into.
 	if err := os.RemoveAll(workspace); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(workspace, 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(workspace), 0o750); err != nil {
 		return err
 	}
 
 	// The core serves the repository over its own HTTP API, which is how a runner
 	// outside the deployment network gets at code that lives nowhere else. The
 	// credential goes in the URL because git has nowhere else to put it, and it is
-	// this job's own: a runner that leaked it would leak access to one project for
-	// two hours.
-	base := strings.TrimRight(cfg.coreURL, "/")
-	if address := strings.TrimSpace(answer.CloneURL); address != "" {
-		base = strings.TrimRight(address, "/")
-	}
-	clone := fmt.Sprintf("%s/api/v1/projects/%s/repository/clone",
-		base, url.PathEscape(projectPath))
-
-	if token != "" {
-		clone = strings.Replace(clone, "://", "://builder:"+token+"@", 1)
+	// Over SSH, with a key the core minted for this job alone. The key is written to
+	// a file with the permissions ssh insists on and removed with the workspace: it
+	// belongs to one build and outlives nothing.
+	if cloneURL == "" {
+		cloneURL = "ssh://git@" + cfg.sshHost
 	}
 
-	command := exec.CommandContext(ctx, "git", "clone", clone, workspace)
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	command := exec.CommandContext(ctx, "git", "clone", cloneURL+"/"+
+		url.PathEscape(projectPath)+".git", workspace)
+
+	environment := os.Environ()
+
+	// The key lives in a file rather than on a command line, where any process on
+	// the machine could read it out of the process list.
+	keyPath := ""
+	if privateKey != "" {
+		// Outside the checkout: git creates that directory itself, and a key file
+		// written into a path that does not exist yet is a key file nowhere.
+		keyPath = filepath.Join(os.TempDir(), fmt.Sprintf("dogit-job-%d.key", answer.Job.ID))
+		if err := os.WriteFile(keyPath, []byte(privateKey), 0o600); err != nil {
+			return err
+		}
+		defer func() { _ = os.Remove(keyPath) }()
+
+		environment = append(environment,
+			"GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -i "+keyPath)
+	}
+	command.Env = append(environment, "GIT_TERMINAL_PROMPT=0")
 
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git clone %s: %w: %s", projectPath, err, strings.TrimSpace(string(output)))
 	}
+
 	return nil
 }
 
@@ -537,11 +610,16 @@ func lastLines(output string, count int) string {
 	return strings.Join(lines, "; ")
 }
 
-// logWriter streams a job's output to the core as it is produced.
+// logWriter streams one of a job's output streams to the core as it is produced.
+//
+// Each writer flushes whole lines only: a half-written line sent on its own would
+// arrive as two fragments, and a message cut in half is worse than one slightly
+// late.
 type logWriter struct {
 	ctx    context.Context
 	core   *coreClient
 	jobID  int64
+	stream string
 	buffer strings.Builder
 	last   time.Time
 }
@@ -550,31 +628,42 @@ type logWriter struct {
 // prints thousands of lines, and a request each would cost more than the work.
 const logFlushInterval = 2 * time.Second
 
-func newLogWriter(ctx context.Context, core *coreClient, jobID int64) *logWriter {
-	return &logWriter{ctx: ctx, core: core, jobID: jobID, last: time.Now()}
+func newLogWriter(ctx context.Context, core *coreClient, jobID int64, stream string) *logWriter {
+	return &logWriter{ctx: ctx, core: core, jobID: jobID, stream: stream, last: time.Now()}
 }
 
 func (w *logWriter) Write(data []byte) (int, error) {
 	w.buffer.Write(data)
 
-	if time.Since(w.last) >= logFlushInterval {
+	// A complete line goes as soon as it is complete; the rest waits for the next
+	// flush so that a build printing without newlines still shows something.
+	if strings.Contains(w.buffer.String(), "\n") || time.Since(w.last) >= logFlushInterval {
 		w.flush()
 	}
 	return len(data), nil
 }
 
-// Close sends whatever is left, which is the part that usually says why.
+// Close sends whatever is left, which is often the part that says why.
 func (w *logWriter) Close() { w.flush() }
 
 func (w *logWriter) flush() {
-	if w.buffer.Len() == 0 {
+	text := w.buffer.String()
+	if text == "" {
 		return
 	}
-	text := w.buffer.String()
+
+	// Only whole lines, so the core stores something it can colour line by line.
+	lines := strings.SplitAfter(text, "\n")
+	complete := lines[:len(lines)-1]
+	if len(complete) == 0 {
+		return
+	}
+
 	w.buffer.Reset()
+	w.buffer.WriteString(lines[len(lines)-1])
 	w.last = time.Now()
 
-	if err := w.core.log(w.ctx, w.jobID, text); err != nil {
+	if err := w.core.log(w.ctx, w.jobID, w.stream, strings.Join(complete, "")); err != nil {
 		log.Printf("module-runner: could not send log output: %v", err)
 	}
 }
@@ -748,12 +837,35 @@ func (c *coreClient) claim(ctx context.Context, tags []string) (claim, error) {
 	return answer, nil
 }
 
-func (c *coreClient) log(ctx context.Context, jobID int64, text string) error {
+// log sends part of a job's output, tagged with which stream it came from.
+func (c *coreClient) log(ctx context.Context, jobID int64, stream, text string) error {
 	if text == "" {
 		return nil
 	}
 	return c.post(ctx, fmt.Sprintf("/api/v1/module/runner/jobs/%d/log", jobID),
-		map[string]string{"text": text}, nil)
+		map[string]string{"stream": stream, "text": text}, nil)
+}
+
+// jobKey asks the core for the credential to clone with.
+//
+// Asked at the moment the clone is about to happen rather than when the job was
+// claimed: a runner with one machine and several projects may hold a job for minutes
+// before it begins, and a key whose short life was measured from the moment of
+// claiming would be dead before the machine was ready.
+func (c *coreClient) jobKey(ctx context.Context, jobID int64) (string, string, error) {
+	var answer struct {
+		CloneURL string `json:"clone_url"`
+		Key      struct {
+			PrivateKey  string `json:"private_key"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"key"`
+	}
+
+	if err := c.post(ctx, fmt.Sprintf("/api/v1/module/runner/jobs/%d/key", jobID),
+		map[string]any{}, &answer); err != nil {
+		return "", "", err
+	}
+	return answer.CloneURL, answer.Key.PrivateKey, nil
 }
 
 func (c *coreClient) finish(ctx context.Context, jobID int64, status string, duration time.Duration, reason string) {
@@ -805,19 +917,54 @@ var startedAt = time.Now()
 func stats() map[string]any {
 	reading := map[string]any{
 		"uptime_seconds": int64(time.Since(startedAt).Seconds()),
-		"extra": map[string]any{
-			"docker": dockerVersion(),
-		},
 	}
+
+	// The workspace is the runner's own storage: it is what fills up, and it is what
+	// gets cleaned. The node's disk is a fact about the machine rather than about
+	// this module, so it goes in extra where the core shows it without pretending
+	// it measured the thing the panel is about.
 	if total, free, ok := diskFree(workspaceOf()); ok {
-		reading["host_disk_total_bytes"] = total
-		reading["host_disk_used_bytes"] = total - free
+		reading["storage_total_bytes"] = total
+		reading["storage_used_bytes"] = total - free
 	}
-	if cpus, memory, ok := machine(); ok {
-		reading["host_cpu_count"] = cpus
+	if total, free, ok := diskFree("/"); ok {
+		reading["extra"] = map[string]string{
+			"host_disk": humanBytes(total-free) + " of " + humanBytes(total),
+		}
+	}
+	if memory := readMemTotal(); memory > 0 {
 		reading["host_memory_total_bytes"] = memory
+		reading["host_load1"] = load1()
+	}
+
+	extra := map[string]string{"docker": dockerVersion()}
+	if cpus := countCPUs(); cpus > 0 {
+		extra["cores"] = fmt.Sprint(cpus)
+	}
+	for key, value := range extra {
+		if reading["extra"] == nil {
+			reading["extra"] = map[string]string{}
+		}
+		reading["extra"].(map[string]string)[key] = value
 	}
 	return reading
+}
+
+/** Average load over the last minute, which is what people mean by "is it busy". */
+func load1() float64 {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return 0
+	}
+	value, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0
+	}
+	return value
 }
 
 func workspaceOf() string { return envOr("DOGIT_RUNNER_WORKSPACE", "/data/work") }

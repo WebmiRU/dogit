@@ -294,19 +294,12 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	// job. A runner that dies must not take the log with it.
 	answer["log_key"] = s.jobLogKey(job)
 
-	// How to get the code.
-	//
-	// A runner is a machine the deployment knows nothing about, so it cannot already
-	// have a key on the project. The credential is minted for this one job and is
-	// the only reason the runner can read anything at all.
-	answer["clone_url"] = s.cfg.HTTPAddr
-	token, _, err := s.mintModuleToken(r, serviceUser(), integration, &job.ProjectID,
-		[]string{models.ScopeRegistryPull}, 2*time.Hour)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-	answer["clone_token"] = token
+	// How to get the code. The key itself is not issued here: a runner may sit on a
+	// job for as long as it likes before it starts, and a key whose clock ran from
+	// the moment of claiming would be dead before the machine was ready. The runner
+	// asks for one when it is actually about to clone, which is the moment the key
+	// is needed and the moment its life should start.
+	answer["clone_url"] = s.cloneURL()
 
 	s.writeJSON(w, r, http.StatusOK, answer)
 }
@@ -393,6 +386,50 @@ func jobRef(job *store.Job) string {
 	return ""
 }
 
+// handleJobKey issues the key a runner needs to clone, at the moment it starts.
+//
+// The clock starts here rather than when the job was claimed. A runner with one
+// machine and several projects may hold a job for minutes before it begins, and a
+// key that had to survive that wait would be a long-lived credential for a machine
+// that did not need it yet.
+//
+// Asking twice within one job returns the same key: a runner whose first attempt
+// failed halfway needs to be able to try again without being refused for using up
+// its allowance.
+func (s *Server) handleJobKey(w http.ResponseWriter, r *http.Request) {
+	integration := integrationFrom(r.Context())
+
+	jobID, err := strconv.ParseInt(pathParam(r, "jobID"), 10, 64)
+	if err != nil {
+		s.writeError(w, r, errBadRequest("a job id is required"))
+		return
+	}
+
+	job, err := s.store.Pipelines().JobByID(r.Context(), jobID)
+	if err != nil {
+		s.writeError(w, r, errNotFound("no such job"))
+		return
+	}
+
+	// Only the runner that was given the job may ask for its key. Without this,
+	// any runner on the network could mint a credential for a job it does not hold.
+	if job.RunnerID == nil || *job.RunnerID != integration.ID {
+		s.writeError(w, r, errForbidden("this job belongs to another runner"))
+		return
+	}
+	if job.Status != store.JobRunning {
+		s.writeError(w, r, errBadRequestf("this job is %q, not running", job.Status))
+		return
+	}
+
+	key, err := s.issueJobKey(r, job.ProjectID, job.ID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"key": key, "clone_url": s.cloneURL()})
+}
+
 // handleFinishJob records what a runner did with a job.
 func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	integration := integrationFrom(r.Context())
@@ -439,6 +476,12 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Pipelines().FinishJob(r.Context(), jobID, status, duration); err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+
+	// The key goes with the job. A credential that outlived the build it was made
+	// for would be a credential nobody is watching.
+	if err := s.revokeJobKey(r, job.ProjectID, jobID); err != nil {
+		s.log.Warn("remove a job's key", "job_id", jobID, "error", err)
 	}
 
 	s.publishPipeline(r, job.ProjectID, nil, models.EventJobUpdated, map[string]any{
@@ -488,6 +531,9 @@ func (s *Server) handleAppendJobLog(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Text string `json:"text"`
+		// Stream is "out" or "err". Kept because a build's stderr is the line the
+		// reader is looking for, and a merged log makes it look like progress.
+		Stream string `json:"stream"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, r, err)
@@ -497,11 +543,16 @@ func (s *Server) handleAppendJobLog(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, r, http.StatusOK, map[string]any{"appended": 0})
 		return
 	}
+	if req.Stream != "err" {
+		req.Stream = "out"
+	}
 
 	key := s.jobLogKey(job)
 	// Appending means reading what is there: object storage has no append, and a
 	// runner streams in pieces rather than holding a whole build's output in memory.
-	chunk := []byte(req.Text)
+	// Each line carries which stream it came from, so the log can be coloured
+	// later without the storage format becoming something only this program reads.
+	chunk := []byte(markStream(req.Stream, req.Text))
 	if previous, _, err := s.objects.Get(r.Context(), key); err == nil {
 		if existing, err := io.ReadAll(previous); err == nil {
 			chunk = append(existing, chunk...)
@@ -598,6 +649,38 @@ func (s *Server) publishPipeline(r *http.Request, projectID uuid.UUID, actor *mo
 	if err := s.events.Publish(r.Context(), kind, &projectID, actorID, payload); err != nil {
 		s.log.Debug("publish pipeline event", "kind", kind, "error", err)
 	}
+}
+
+// markStream prefixes every line with its stream.
+//
+// The file stays plain text and still reads sensibly in a terminal — "out" and
+// "err" in front of each line — rather than becoming a format that only this
+// program can interpret.
+func markStream(stream, text string) string {
+	if text == "" {
+		return ""
+	}
+	tag := "out| "
+	if stream == "err" {
+		tag = "err| "
+	}
+
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	for index, line := range lines {
+		lines[index] = tag + line
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// cloneURL is the address a runner clones from.
+//
+// The runner is on the network the core is on — usually the same deployment — so
+// this is the internal address, and there is nothing about it a client needs to see.
+func (s *Server) cloneURL() string {
+	if strings.TrimSpace(s.cfg.SSHHost) != "" && s.cfg.SSHPort != 22 {
+		return fmt.Sprintf("ssh://git@%s:%d", s.cfg.SSHHost, s.cfg.SSHPort)
+	}
+	return fmt.Sprintf("ssh://git@%s", s.cfg.SSHHost)
 }
 
 // jobLogKey is where a job's output lives.

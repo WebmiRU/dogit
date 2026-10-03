@@ -146,6 +146,13 @@ func (s *Server) Handle(ctx context.Context, rawCommand, username string, stdin 
 		return 1
 	}
 
+	// A deploy key is a machine, not a person: it may read the project it was
+	// issued for and write nothing. Resolved by its fingerprint, because the login
+	// name is the same shared "git" account every client uses.
+	if fingerprint, ok := DeployIdentityFrom(ctx); ok {
+		return s.handleDeploy(ctx, verb, requested, fingerprint, stdin, stdout, stderr)
+	}
+
 	user, err := s.store.Users().ByUsername(ctx, username)
 	if errors.Is(err, store.ErrNotFound) {
 		fmt.Fprintf(stderr, "ERROR: unknown user %q\n", username)

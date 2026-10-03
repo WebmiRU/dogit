@@ -51,6 +51,29 @@ func HookEntry(ctx context.Context, args []string) error {
 	if rest[0] == "hook" {
 		return Hook(ctx, rest[1:])
 	}
+
+	// A deploy key is a machine's credential, not a person's. It arrives with its
+	// fingerprint where a username would be, and the server resolves it there rather
+	// than as a user: a key issued to a runner must never be able to act as somebody.
+	if rest[0] == "deploy" {
+		if len(rest) < 2 || rest[1] == "" {
+			fmt.Fprintln(os.Stderr, "dogit-hook: no deploy key fingerprint")
+			return exitCode(1)
+		}
+
+		a, err := app.NewWithLogLevel(ctx, hookLogLevel())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			return exitCode(1)
+		}
+		defer a.Close()
+
+		srv := gitserver.New(a.Store, a.Cfg.RepoDir, a.Cfg.GitBinary, a.Cfg.HookBinary)
+		return exitCode(srv.Handle(
+			gitserver.WithDeployKey(ctx, rest[1]),
+			originalCommand(), "", os.Stdin, os.Stdout, os.Stderr))
+	}
+
 	if rest[0] != "git" {
 		fmt.Fprintf(os.Stderr, "dogit-hook: refusing %q; only git sessions are allowed\n", rest[0])
 		return exitCode(1)
@@ -122,6 +145,20 @@ func AuthorizedKeys(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stdout,
 			gitserver.AuthorizedKeyLine(k.Username, k.Key.Fingerprint, k.Key.PublicKey, a.Cfg.HookBinary))
 	}
+
+	// Deploy keys are offered here too, because sshd asks this command for every
+	// connection and passes the login name — which is always the shared "git"
+	// account, so it says nothing about which credential is being presented. The
+	// forced command carries the fingerprint, and the server resolves that.
+	deployKeys, err := a.Store.DeployKeys().AllValid(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "authorized-keys: %v\n", err)
+		return nil
+	}
+	for _, key := range deployKeys {
+		fmt.Fprintln(os.Stdout, gitserver.DeployKeyLine(key, a.Cfg.HookBinary))
+	}
+
 	return nil
 }
 

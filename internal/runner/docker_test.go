@@ -220,8 +220,8 @@ func TestDockerRuntimeRunsAJob(t *testing.T) {
 	}
 	defer runtime.Destroy(ctx, handle)
 
-	var logs bytes.Buffer
-	result := runtime.Stream(ctx, handle, spec, &logs)
+	var logs, errors bytes.Buffer
+	result := runtime.Stream(ctx, handle, spec, &logs, &errors)
 
 	if result.Status != StatusSuccess {
 		t.Fatalf("status = %s, error = %v\nlogs:\n%s", result.Status, result.Error, logs.String())
@@ -263,8 +263,8 @@ func TestDockerRuntimeReportsAFailingScript(t *testing.T) {
 	}
 	defer runtime.Destroy(ctx, handle)
 
-	var logs bytes.Buffer
-	result := runtime.Stream(ctx, handle, spec, &logs)
+	var logs, errors bytes.Buffer
+	result := runtime.Stream(ctx, handle, spec, &logs, &errors)
 
 	if result.Status != StatusFailed {
 		t.Errorf("status = %s, want failed", result.Status)
@@ -301,8 +301,8 @@ func TestDockerRuntimeEnforcesTheTimeout(t *testing.T) {
 	}
 	defer runtime.Destroy(ctx, handle)
 
-	var logs bytes.Buffer
-	result := runtime.Stream(ctx, handle, spec, &logs)
+	var logs, errors bytes.Buffer
+	result := runtime.Stream(ctx, handle, spec, &logs, &errors)
 
 	// A job that runs past its deadline must fail, not linger: a pipeline that hangs
 	// is worse than one that reports a timeout.

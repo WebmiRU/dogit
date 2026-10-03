@@ -165,7 +165,7 @@ func (d *Docker) Prepare(ctx context.Context, spec JobSpec) (Handle, error) {
 // Logs are read incrementally rather than collected and printed at the end: a
 // build that takes ten minutes has to show progress while it runs, and a failed
 // step has to show the lines that came before it.
-func (d *Docker) Stream(ctx context.Context, handle Handle, spec JobSpec, logs io.Writer) Result {
+func (d *Docker) Stream(ctx context.Context, handle Handle, spec JobSpec, stdout, stderr io.Writer) Result {
 	started := time.Now()
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -188,8 +188,12 @@ func (d *Docker) Stream(ctx context.Context, handle Handle, spec JobSpec, logs i
 	}
 
 	run := exec.CommandContext(runCtx, d.binary, "start", "-a", handle.ContainerID)
-	run.Stdout = logs
-	run.Stderr = logs
+	// The container's two streams go to two places. "docker start -a" keeps them
+	// apart only when no terminal is attached, which is the case here on purpose:
+	// attaching a pty would merge them again and colour every line by whether it
+	// looked like a tty line.
+	run.Stdout = stdout
+	run.Stderr = stderr
 
 	result := Result{Status: StatusSuccess}
 
