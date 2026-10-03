@@ -66,11 +66,14 @@ type SSHKey struct {
 }
 
 type Group struct {
-	ID        uuid.UUID `json:"id"`
-	Slug      string    `json:"slug"`
-	Name      string    `json:"name"`
-	FullPath  string    `json:"full_path"`
-	CreatedAt time.Time `json:"created_at"`
+	ID   uuid.UUID `json:"id"`
+	Slug string    `json:"slug"`
+	Name string    `json:"name"`
+	// Description is a line about what the group is for, in the group's own words.
+	// Empty means nobody has written one, which the page says rather than inventing.
+	Description string    `json:"description"`
+	FullPath    string    `json:"full_path"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type GroupMember struct {

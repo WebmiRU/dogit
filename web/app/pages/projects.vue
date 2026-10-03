@@ -3,42 +3,22 @@
 import type { GroupSummary } from '~/types/dashboard'
 import type { ProjectSummary } from '~/types/repository'
 
-const projects = ref<ProjectSummary[]>([])
-// The groups the user may put a project into. A project created under a group
-// gets that group's namespace in its path and inherits the group's members.
+// The groups the user may put a project into. A project created under a group gets
+// that group's namespace in its path and inherits the group's members.
 const groups = ref<GroupSummary[]>([])
-const loading = ref(true)
-const loadError = ref('')
 
-async function load() {
-  loading.value = true
-  loadError.value = ''
+async function loadGroups() {
   try {
-    const response = await api.get<{ projects: ProjectSummary[] }>('/projects')
-    projects.value = response.projects
-    const { groups: available } = await api.get<{ groups: GroupSummary[] }>('/groups')
-    groups.value = available
-  } catch (caught) {
-    loadError.value = caught instanceof ApiError ? caught.message : 'the request failed'
-  } finally {
-    loading.value = false
+    const answer = await api.get<{ groups: GroupSummary[] }>('/groups')
+    groups.value = answer.groups ?? []
+  } catch {
+    // A missing list of namespaces is not worth an error above the form: the project
+    // can still be created without one.
+    groups.value = []
   }
 }
 
-onMounted(load)
-
-const search = ref('')
-
-const filtered = computed(() => {
-  const needle = search.value.trim().toLowerCase()
-  if (!needle) return projects.value
-  return projects.value.filter(
-    (project) =>
-      project.path.toLowerCase().includes(needle) ||
-      (project.name ?? '').toLowerCase().includes(needle) ||
-      (project.description ?? '').toLowerCase().includes(needle),
-  )
-})
+onMounted(loadGroups)
 
 const showForm = ref(false)
 const creating = ref(false)
@@ -74,9 +54,10 @@ async function createProject() {
   <div>
     <div class="repo-head">
       <div class="title">
-        <h1 class="page-title">Projects</h1>
+        <h1 class="page-title">Projects and groups</h1>
         <p class="page-subtitle">
-          {{ projects.length }} {{ projects.length === 1 ? 'project' : 'projects' }}
+          Everything here you have access to. A group is a namespace: it holds projects
+          and its members can reach them.
         </p>
       </div>
       <button class="btn btn-primary" type="button" @click="showForm = !showForm">
@@ -137,28 +118,8 @@ async function createProject() {
       </div>
     </div>
 
-    <div v-if="projects.length > 4" class="field" style="max-width: 320px">
-      <input v-model="search" type="search" placeholder="Filter projects" />
-    </div>
+    <PlacesTable />
 
-    <div v-if="loading" class="spinner">Loading projects…</div>
-    <div v-else-if="loadError" class="alert alert-error">{{ loadError }}</div>
-    <div v-else-if="filtered.length === 0" class="card empty">
-      {{ projects.length === 0 ? 'No projects yet. Create the first one above.' : 'Nothing matches that filter.' }}
-    </div>
-    <div v-else class="project-grid">
-      <article v-for="project in filtered" :key="project.id" class="project-card">
-        <h3>
-          <NuxtLink :to="`/p/${project.path}`">{{ project.name || project.path }}</NuxtLink>
-        </h3>
-        <p>{{ project.description || 'No description' }}</p>
-        <div class="meta">
-          <span class="mono">{{ project.path }}</span>
-          <span class="badge" :class="`badge-${project.visibility}`">{{ project.visibility }}</span>
-          <span class="badge">{{ project.access_name }}</span>
-        </div>
-      </article>
-    </div>
   </div>
 </template>
 

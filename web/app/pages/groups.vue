@@ -1,25 +1,13 @@
 <script setup lang="ts">
-/** Group list and creation. */
-import type { GroupSummary } from '~/types/dashboard'
-
-const groups = ref<GroupSummary[]>([])
-const loading = ref(true)
-const loadError = ref('')
-
-async function load() {
-  loading.value = true
-  loadError.value = ''
-  try {
-    const response = await api.get<{ groups: GroupSummary[] }>('/groups')
-    groups.value = response.groups
-  } catch (caught) {
-    loadError.value = caught instanceof ApiError ? caught.message : 'the request failed'
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(load)
+/**
+ * Groups, and their creation.
+ *
+ * The list is the shared one — the same table as the projects page, showing the group
+ * rows of it. A group is a namespace holding projects, so a page that lists one kind
+ * and not the other makes somebody look in two places for the same question.
+ */
+/** Redrawn after a group is created, which is the one thing the table cannot notice. */
+const created = ref(0)
 
 const showForm = ref(false)
 const creating = ref(false)
@@ -34,7 +22,7 @@ async function createGroup() {
     form.slug = ''
     form.name = ''
     showForm.value = false
-    await load()
+    created.value++
   } catch (caught) {
     createError.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -77,21 +65,8 @@ async function createGroup() {
       </div>
     </div>
 
-    <div v-if="loading" class="spinner">Loading groups…</div>
-    <div v-else-if="loadError" class="alert alert-error">{{ loadError }}</div>
-    <div v-else-if="groups.length === 0" class="card empty">
-      No groups yet. A group bundles projects and their members.
-    </div>
-    <div v-else class="project-grid">
-      <article v-for="group in groups" :key="group.id" class="project-card">
-        <h3>
-          <NuxtLink :to="`/groups/${group.id}`">{{ group.name || group.slug }}</NuxtLink>
-        </h3>
-        <p class="mono">{{ group.full_path }}</p>
-        <div class="meta">
-          <span class="badge">{{ group.access_name }}</span>
-        </div>
-      </article>
-    </div>
+    <!-- Keyed on the create counter so a new group shows up without a reload. -->
+    <PlacesTable :key="created" type="group" :filter-kind="false" />
+
   </div>
 </template>

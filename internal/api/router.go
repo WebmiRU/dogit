@@ -237,6 +237,9 @@ func (s *Server) projectRoutes() chi.Router {
 	// shadow it.
 	projects.Get("/", s.handleListProjects)
 	projects.Post("/", s.handleCreateProject)
+	// Where to work, as one list: projects and groups are rows of the same table,
+	// with a search, filters and a page.
+	projects.Get("/places", s.handleListPlaces)
 
 	projects.Get(base, s.handleGetProject)
 	projects.Patch(base, s.handleUpdateProject)

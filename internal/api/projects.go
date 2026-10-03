@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +72,93 @@ func (s *Server) projectToView(p *models.Project, level int) projectView {
 		UpdatedAt:  p.UpdatedAt,
 		ArchivedAt: p.ArchivedAt,
 	}
+}
+
+// handleListPlaces is the one list of where to work.
+//
+// Projects and groups are rows in the same table, because to somebody looking for
+// somewhere to work they are the same kind of thing: a name, a path, an address. Two
+// lists would mean two searches and a page to find twice.
+//
+// Search, filters and a page size are all here rather than in the interface, because
+// the list a person is shown has to be a list the database chose. Loading everything
+// and filtering it in the browser is how a page stops opening after a year.
+func (s *Server) handleListPlaces(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+
+	query := store.ListingQuery{
+		Search:     r.URL.Query().Get("search"),
+		Kind:       r.URL.Query().Get("type"),
+		Visibility: r.URL.Query().Get("visibility"),
+		Page:       atoiOr(r.URL.Query().Get("page"), 1),
+		PerPage:    atoiOr(r.URL.Query().Get("per_page"), store.DefaultPageSize),
+	}
+
+	rows, total, err := s.store.ListVisible(r.Context(), user.ID, query)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	places := make([]placeView, 0, len(rows))
+	for _, row := range rows {
+		places = append(places, placeView{
+			ID:           row.ID,
+			Kind:         row.Kind,
+			Path:         row.Path,
+			Name:         row.Name,
+			Description:  row.Description,
+			Visibility:   row.Visibility,
+			GroupID:      row.GroupID,
+			ProjectCount: row.ProjectCount,
+			AccessLevel:  row.AccessLevel,
+			AccessName:   models.AccessLevelName(row.AccessLevel),
+		})
+	}
+
+	// A page past the end says where the end is, rather than showing nothing and
+	// leaving a person to conclude the list is empty.
+	pages := (total + query.PerPage - 1) / query.PerPage
+	if pages < 1 {
+		pages = 1
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"places":   places,
+		"total":    total,
+		"page":     query.Page,
+		"pages":    pages,
+		"per_page": query.PerPage,
+	})
+}
+
+// placeView is one row of that list, of either kind.
+type placeView struct {
+	ID           uuid.UUID  `json:"id"`
+	Kind         string     `json:"kind"`
+	Path         string     `json:"path"`
+	Name         string     `json:"name"`
+	Description  string     `json:"description"`
+	Visibility   string     `json:"visibility"`
+	GroupID      *uuid.UUID `json:"group_id,omitempty"`
+	ProjectCount *int       `json:"project_count,omitempty"`
+	AccessLevel  int        `json:"access_level"`
+	AccessName   string     `json:"access_name"`
+}
+
+// atoiOr reads a number from a query, falling back when it is absent or nonsense.
+//
+// A page that is not a number is a page that cannot be requested, and answering with
+// the first page rather than an error is what a person typing into a box wants.
+func atoiOr(raw string, fallback int) int {
+	if raw == "" {
+		return fallback
+	}
+	number, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return number
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
@@ -546,12 +634,27 @@ func (s *Server) handleGetGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Whether the reader may change anything here, said once here rather than worked
+	// out again by the page: the page has a Notifications tab, and a tab that shows a
+	// form nobody may fill in is worse than a tab that says what is allowed.
+	canManage := userFrom(r.Context()).IsAdmin
+	if !canManage {
+		canManage, err = s.store.Permissions().CanGroup(r.Context(), userFrom(r.Context()),
+			id, store.ActionManageGroup)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	}
+
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"group": map[string]any{
 			"id": group.ID, "slug": group.Slug, "name": group.Name,
-			"full_path": group.FullPath, "access_level": level,
+			"description": group.Description,
+			"full_path":   group.FullPath, "access_level": level,
 			"access_name": models.AccessLevelName(level),
 		},
+		"can_manage": canManage,
 	})
 }
 
