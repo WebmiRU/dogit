@@ -218,6 +218,26 @@ services:
       # somewhere the process never looks.
       - /var/run/docker.sock:/run/docker.sock
 
+  # Notifications to Telegram.
+  #
+  # The token is in the environment rather than in this file, because a bot token
+  # in a repository is a bot token in every clone of it.
+  module-notify-telegram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-notify-telegram"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-notify-telegram:8093
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
+
   # Reference implementation of the module protocol. It has no product
   # behaviour: it exists to prove that registration, heartbeats and
   # introspection work before the real modules are built.

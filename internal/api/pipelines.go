@@ -102,6 +102,9 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		"ref":          ref,
 		"sha":          sha,
 	})
+	s.notify(r, project.Path, "pipeline.started", fmt.Sprintf(
+		"Pipeline #%d started on %s in %s", pipeline.IID, ref, project.Path),
+		fmt.Sprintf("/p/%s/-/pipelines/%d", project.Path, pipeline.IID), nil)
 
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{"pipeline": pipelineView(r, pipeline, nil)})
 }
@@ -442,6 +445,19 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 		"job_id": jobID,
 		"status": status,
 	})
+
+	if job.ProjectPath != "" {
+		emoji := "✅"
+		switch status {
+		case store.JobFailed:
+			emoji = "❌"
+		case store.JobCanceled:
+			emoji = "🚫"
+		}
+		s.notify(r, job.ProjectPath, "pipeline."+status, fmt.Sprintf(
+			"%s Job %q %s in %s", emoji, job.Name, status, job.ProjectPath),
+			fmt.Sprintf("/p/%s/-/pipelines/%d", job.ProjectPath, job.PipelineID), nil)
+	}
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"job_id": jobID, "status": status})
 }

@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/store"
 )
 
 // handleModuleSelf answers "which module am I?", so a module can confirm it
@@ -33,6 +35,60 @@ func (s *Server) handleModuleSelf(w http.ResponseWriter, r *http.Request) {
 		},
 		"settings": redactSettings(settings, secretKeys(integration)),
 	})
+}
+
+// handleModuleSelfSettingsWrite lets a module record its own configuration.
+//
+// A module knows things the core does not: the token an operator gave it, the
+// address it is really reachable at. Requiring a person to copy those into the
+// settings page is how they end up wrong, and a module that cannot record what it
+// was told keeps asking every time it starts.
+//
+// Only settings the module itself declared are accepted, and only at the instance
+// scope: a module configuring a group or a project would be writing policy on
+// somebody's behalf.
+func (s *Server) handleModuleSelfSettingsWrite(w http.ResponseWriter, r *http.Request) {
+	integration := integrationFrom(r.Context())
+
+	var req struct {
+		Values map[string]json.RawMessage `json:"values"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if len(req.Values) == 0 {
+		s.writeError(w, r, errBadRequest("no settings were given"))
+		return
+	}
+
+	for key, value := range req.Values {
+		if !moduleDeclaresSetting(integration, key) {
+			s.writeError(w, r, errBadRequestf("module %s does not declare a setting named %q",
+				integration.Kind, key))
+			return
+		}
+		if problem := s.checkSettingValue(integration, key, value); problem != nil {
+			s.writeError(w, r, problem)
+			return
+		}
+	}
+
+	for key, value := range req.Values {
+		if err := s.store.Integrations().SetSetting(r.Context(), integration.ID,
+			store.ScopeInstance, nil, key, value); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		s.log.Info("module recorded its own setting", "kind", integration.Kind, "key", key)
+	}
+
+	settings, err := s.store.Integrations().SettingsAt(r.Context(), integration.ID, store.ScopeInstance, nil)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"settings": settings})
 }
 
 // handleModuleSelfSettings returns the effective settings for a project or group.

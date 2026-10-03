@@ -102,10 +102,15 @@ func (s *Server) Register(r chi.Router) {
 	moduleRoutes.Post("/heartbeat", s.handleModuleHeartbeat)
 	moduleRoutes.Get("/me", s.handleModuleSelf)
 	moduleRoutes.Get("/settings", s.handleModuleSelfSettings)
+	moduleRoutes.Put("/settings", s.handleModuleSelfSettingsWrite)
 	// What a runner module is for: taking work, and saying what happened to it.
 	moduleRoutes.Post("/runner/claim", s.handleClaimJob)
 	moduleRoutes.Post("/runner/jobs/{jobID}/log", s.handleAppendJobLog)
 	moduleRoutes.Post("/runner/jobs/{jobID}/finish", s.handleFinishJob)
+
+	// What happened, for the modules that were asked to be told.
+	moduleRoutes.Post("/notifications", s.handleModuleNotifications)
+	moduleRoutes.Post("/notifications/ack", s.handleAcknowledgeNotifications)
 
 	moduleRoutes.Post("/registry/access", s.handleRegistryAccess)
 	moduleRoutes.Post("/registry/resolve", s.handleRegistryResolve)
@@ -140,6 +145,9 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Post("/modules/{kind}/token", s.handleMintModuleToken)
 		authenticated.Get("/modules", s.handleListModules)
 		authenticated.Get("/modules/routes", s.handleModuleRoutes)
+		// Asks for one message to be sent, so settings can be checked before anything
+		// is relied on.
+		authenticated.Post("/modules/{integrationID}/notify-test", s.handleTestNotification)
 		authenticated.Get("/modules/{integrationID}", s.handleGetModule)
 		authenticated.Put("/modules/{integrationID}/state", s.handleSetModuleState)
 		authenticated.Delete("/modules/{integrationID}", s.handleDeleteModule)
