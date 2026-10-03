@@ -240,9 +240,11 @@ func (r *PipelineRepo) JobByID(ctx context.Context, id int64) (*Job, error) {
 	err := r.s.pool.QueryRow(ctx, jobColumns+`
 		FROM jobs j
 		JOIN pipelines p ON p.id = j.pipeline_id
+		JOIN projects pr ON pr.id = p.project_id
 		WHERE j.id = $1`, id).Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage,
 		&job.Status, &job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs,
-		&build, &job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt, &job.ProjectID)
+		&build, &job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
+		&job.ProjectID, &job.ProjectPath)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}
@@ -263,6 +265,7 @@ func (r *PipelineRepo) JobsOfPipeline(ctx context.Context, pipelineID int64) ([]
 	rows, err := r.s.pool.Query(ctx, jobColumns+`
 		FROM jobs j
 		JOIN pipelines p ON p.id = j.pipeline_id
+		JOIN projects pr ON pr.id = p.project_id
 		WHERE j.pipeline_id = $1 ORDER BY j.iid`, pipelineID)
 	if err != nil {
 		return nil, fmt.Errorf("list jobs: %w", err)
@@ -283,7 +286,7 @@ func (r *PipelineRepo) JobsOfPipeline(ctx context.Context, pipelineID int64) ([]
 const jobColumns = `
 	SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.runner_id, j.image,
 	       j.script, j.allow_failure, j.needs, j.build, j.started_at, j.finished_at,
-	       j.duration_ms, j.created_at, p.project_id::text`
+	       j.duration_ms, j.created_at, p.project_id, pr.path`
 
 func scanJob(rows pgx.Rows) (*Job, error) {
 	var job Job
@@ -291,7 +294,8 @@ func scanJob(rows pgx.Rows) (*Job, error) {
 
 	if err := rows.Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
 		&job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs, &build,
-		&job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt, &job.ProjectID); err != nil {
+		&job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
+		&job.ProjectID, &job.ProjectPath); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
 

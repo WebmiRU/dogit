@@ -182,6 +182,42 @@ services:
     volumes:
       - dogit-registry:/var/lib/registry:ro
 
+  # A runner: claims jobs and builds images.
+  #
+  # It is a module rather than part of the core so that it can live on a machine
+  # the deployment knows nothing about — a virtual machine with a usable Docker,
+  # where building images is allowed. Nothing here depends on it being in the same
+  # compose file, which is the point.
+  module-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-runner"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-runner:8092
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      DOGIT_RUNNER_CONCURRENCY: ${DOGIT_RUNNER_CONCURRENCY:-1}
+      DOGIT_RUNNER_WORKSPACE: /data/work
+      DOGIT_DOCKER_BINARY: /usr/bin/docker
+    # The socket's group, so the client inside the container is allowed to talk to
+    # it. Running as root is the other way and is how a build ends up able to do
+    # anything at all; a group id is the smallest thing that works.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    volumes:
+      - dogit-runner-work:/data
+      # The socket, because this is the machine that runs the jobs. A runner without
+      # it would be a runner that cannot do anything.
+      # Mounted at /run/docker.sock rather than /var/run/docker.sock: inside the
+      # image /var/run is a symlink to ../run, and a file mounted through it lands
+      # somewhere the process never looks.
+      - /var/run/docker.sock:/run/docker.sock
+
   # Reference implementation of the module protocol. It has no product
   # behaviour: it exists to prove that registration, heartbeats and
   # introspection work before the real modules are built.
@@ -248,3 +284,6 @@ volumes:
   # The images themselves, shared between the registry that writes them and the
   # module that reports how much of the disk they take.
   dogit-registry:
+  # Checkouts a runner makes. Its own volume, so that a runner can be replaced
+  # without losing the workspace it was in the middle of using.
+  dogit-runner-work:

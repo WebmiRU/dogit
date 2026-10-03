@@ -22,6 +22,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -221,9 +222,16 @@ type job struct {
 
 // claim is the core's answer to "is there anything for me".
 type claim struct {
-	Job      *job           `json:"job"`
+	Job *job `json:"job"`
+	// Registry is what a job that builds an image needs: the address, the name the
+	// registry's own rule gives it, and a credential scoped to that project alone.
 	Registry map[string]any `json:"registry,omitempty"`
-	LogKey   string         `json:"log_key,omitempty"`
+	// CloneURL and CloneToken are how this machine gets the code. A runner is a
+	// machine the deployment knows nothing about, so it cannot already hold a key on
+	// the project; the credential is minted for this job and for nothing else.
+	CloneURL   string `json:"clone_url,omitempty"`
+	CloneToken string `json:"clone_token,omitempty"`
+	LogKey     string `json:"log_key,omitempty"`
 }
 
 type registryAccess struct {
@@ -326,7 +334,7 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	// The checkout happens on this machine rather than inside the job's container:
 	// a container that is only allowed to run a script has no business being
 	// allowed to clone.
-	if err := checkout(ctx, cfg, workspace, job.ProjectPath); err != nil {
+	if err := checkout(ctx, cfg, answer, workspace); err != nil {
 		log.Printf("module-runner: cannot check out %s: %v", job.ProjectPath, err)
 		core.finish(ctx, job.ID, "failed", time.Since(started), err.Error())
 		return
@@ -415,7 +423,8 @@ func tokenOf(registry map[string]any) string {
 }
 
 // checkout makes a working copy for one job.
-func checkout(ctx context.Context, cfg config, workspace, projectPath string) error {
+func checkout(ctx context.Context, cfg config, answer claim, workspace string) error {
+	projectPath, token := answer.Job.ProjectPath, answer.CloneToken
 	if err := os.RemoveAll(workspace); err != nil {
 		return err
 	}
@@ -424,9 +433,20 @@ func checkout(ctx context.Context, cfg config, workspace, projectPath string) er
 	}
 
 	// The core serves the repository over its own HTTP API, which is how a runner
-	// outside the deployment network gets at code that lives nowhere else.
+	// outside the deployment network gets at code that lives nowhere else. The
+	// credential goes in the URL because git has nowhere else to put it, and it is
+	// this job's own: a runner that leaked it would leak access to one project for
+	// two hours.
+	base := strings.TrimRight(cfg.coreURL, "/")
+	if address := strings.TrimSpace(answer.CloneURL); address != "" {
+		base = strings.TrimRight(address, "/")
+	}
 	clone := fmt.Sprintf("%s/api/v1/projects/%s/repository/clone",
-		strings.TrimRight(cfg.coreURL, "/"), projectPath)
+		base, url.PathEscape(projectPath))
+
+	if token != "" {
+		clone = strings.Replace(clone, "://", "://builder:"+token+"@", 1)
+	}
 
 	command := exec.CommandContext(ctx, "git", "clone", clone, workspace)
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")

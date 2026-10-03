@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/modulehost"
+	"github.com/ewolf/dogit/internal/pipeline"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -40,15 +42,10 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Ref   string `json:"ref"`
-		Image string `json:"image"`
-		// Script overrides the configured one. It is here for a manual run, where
-		// the point is usually to run something different once.
-		Script []string `json:"script"`
-		// Build describes an image to produce, using the registry module's own rules
-		// for naming. The core stores it and passes it on; it does not decide what an
-		// image is called, because that is the registry's rule and not this one's.
-		Build map[string]any `json:"build"`
+		Ref string `json:"ref"`
+		// Job runs one named job on its own. Without it the whole configuration runs,
+		// which is what a push does and what most people mean by "run the pipeline".
+		Job string `json:"job"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, r, err)
@@ -73,30 +70,29 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	image := req.Image
-	if image == "" {
-		image = "alpine:3.21"
-	}
-
-	script := req.Script
-	if len(script) == 0 {
-		script = []string{"echo \"this pipeline has no script yet\""}
-	}
-
-	job := store.Job{
-		Name:   "run",
-		Stage:  "build",
-		Image:  image,
-		Script: script,
-		Build:  req.Build,
-	}
-
-	pipeline, err := s.store.Pipelines().CreatePipeline(r.Context(), project.ID, ref, sha,
-		"manual", nil, &user.ID, []store.Job{job})
+	// The configuration is read from the commit being run, not from the working
+	// state of anybody's machine: a pipeline that ran yesterday's file is not the
+	// pipeline this commit describes.
+	config, err := s.pipelineConfig(r.Context(), rc.RepoDir, sha)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+
+	jobs := jobsFrom(config, ref, req.Job)
+	if len(jobs) == 0 {
+		s.writeError(w, r, errBadRequestf(
+			"nothing to run for %q in %s", ref, pipeline.ConfigFileName))
+		return
+	}
+
+	created, err := s.store.Pipelines().CreatePipeline(r.Context(), project.ID, ref, sha,
+		"manual", config.VariablesAsStrings(), &user.ID, jobs)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	pipeline := created
 
 	s.log.Info("pipeline created", "project", project.Path, "pipeline", pipeline.IID,
 		"ref", ref, "by", user.Username)
@@ -108,6 +104,69 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 	})
 
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{"pipeline": pipelineView(r, pipeline, nil)})
+}
+
+// pipelineConfig reads a project's configuration from a commit.
+//
+// The file is read at the commit rather than from the working tree, because a
+// pipeline is a claim about code: running yesterday's configuration against today's
+// code produces a build that never existed.
+func (s *Server) pipelineConfig(ctx context.Context, repoDir, sha string) (*pipeline.Config, error) {
+	contents, _, _, err := s.git.CatFile(ctx, repoDir, sha, pipeline.ConfigFileName)
+	if err != nil {
+		return nil, errNotFoundf("this project has no %s at %s", pipeline.ConfigFileName, shortSHA(sha))
+	}
+
+	config, err := pipeline.Parse(contents)
+	if err != nil {
+		// A broken configuration is reported with the file and the commit, because
+		// "cannot run" without those is not something anybody can act on.
+		return nil, errBadRequestf("%s at %s could not be read: %v",
+			pipeline.ConfigFileName, shortSHA(sha), err)
+	}
+	return config, nil
+}
+
+// jobsFrom turns a configuration into the jobs a run will actually do.
+//
+// A job whose rules exclude this branch is left out entirely rather than created
+// and skipped: a pipeline page listing a deploy job that is not going to deploy is
+// noise, and one listing it as skipped invites somebody to read the reason.
+func jobsFrom(config *pipeline.Config, ref, only string) []store.Job {
+	jobs := []store.Job{}
+	for _, name := range config.Order {
+		spec, ok := config.Jobs[name]
+		if !ok {
+			continue
+		}
+		if only != "" && name != only {
+			continue
+		}
+		if !pipeline.RunsOn(spec, ref, false) {
+			continue
+		}
+
+		script := append([]string{}, spec.BeforeScript...)
+		script = append(script, spec.Script...)
+
+		jobs = append(jobs, store.Job{
+			Name:         name,
+			Stage:        spec.Stage,
+			Image:        spec.Image,
+			Script:       script,
+			AllowFailure: spec.AllowFailure,
+			Needs:        spec.Needs,
+			Build:        spec.Build,
+		})
+	}
+	return jobs
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 8 {
+		return sha[:8]
+	}
+	return sha
 }
 
 // handleListPipelines returns a project's pipelines.
@@ -231,6 +290,20 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	// Where the logs go: object storage, not a file on the machine that ran the
 	// job. A runner that dies must not take the log with it.
 	answer["log_key"] = s.jobLogKey(job)
+
+	// How to get the code.
+	//
+	// A runner is a machine the deployment knows nothing about, so it cannot already
+	// have a key on the project. The credential is minted for this one job and is
+	// the only reason the runner can read anything at all.
+	answer["clone_url"] = s.cfg.HTTPAddr
+	token, _, err := s.mintModuleToken(r, serviceUser(), integration, &job.ProjectID,
+		[]string{models.ScopeRegistryPull}, 2*time.Hour)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	answer["clone_token"] = token
 
 	s.writeJSON(w, r, http.StatusOK, answer)
 }

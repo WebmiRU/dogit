@@ -71,7 +71,11 @@ var PathEntryRejectsTraversal = func(path string) bool {
 		if part == ".." || part == "" || part == "." {
 			return true
 		}
-		if strings.HasPrefix(part, ".git") {
+		// ".git" itself is the repository's own metadata and nothing else may
+		// claim that name. Files that merely begin with those letters are ordinary
+		// files — ".gitlab-ci.yml" is the name every CI configuration has, and
+		// refusing it would make it impossible to add one at all.
+		if part == ".git" {
 			return true
 		}
 	}

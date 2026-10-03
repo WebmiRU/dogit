@@ -14,6 +14,7 @@ import (
 	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/logger"
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/objects"
 	"github.com/ewolf/dogit/internal/repos"
 	"github.com/ewolf/dogit/internal/web"
 )
@@ -66,8 +67,13 @@ func TestGroupedProjectIsRoutableThroughTheServer(t *testing.T) {
 
 	session := dbtest.NewSession(t, st, user.ID)
 
+	objects, err := objects.NewLocal(t.TempDir(), "test")
+	if err != nil {
+		t.Fatalf("object store: %v", err)
+	}
+
 	apiServer := api.New(&config.Config{AuthTokenTTL: time.Hour}, logger.Discard(), st, git,
-		repos.New(st, git, repoRoot), nil)
+		repos.New(st, git, repoRoot), nil, objects)
 	server := web.NewServer(&config.Config{}, logger.Discard(), st, apiServer)
 
 	cases := []struct {
