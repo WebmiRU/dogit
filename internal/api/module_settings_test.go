@@ -8,7 +8,6 @@ import (
 
 	"github.com/ewolf/dogit/internal/dbtest"
 	"github.com/ewolf/dogit/internal/models"
-	"github.com/ewolf/dogit/internal/store"
 )
 
 // A settings page submits a form, not a series of unrelated actions, so the write
@@ -185,32 +184,18 @@ func TestSettingsNeedAnAdministrator(t *testing.T) {
 // cannot work from a value it is not allowed to see, and there is no session on this
 // path to protect: masking belongs where a browser is reading.
 func TestAModuleIsGivenItsOwnSettingsUnmasked(t *testing.T) {
-	rf := setupRegistry(t, models.AccessLevelDeveloper)
+	stored := map[string]json.RawMessage{"bot_token": json.RawMessage(`"123456:ABC"`)}
 
-	spec, found := settingSpecOf(rf.module, "image_name_template")
-	if !found {
-		t.Fatalf("the fixture declares no image_name_template to read")
-	}
-	if spec.Secret {
-		t.Fatalf("the fixture is not testing a secret: image_name_template is marked one")
-	}
+	spec := models.SettingSpec{Key: "bot_token", Label: "Bot token", Type: "string", Secret: true}
+	secret := map[string]bool{"bot_token": true}
+	describe := func(key string) (models.SettingSpec, bool) { return spec, key == "bot_token" }
 
-	raw, err := json.Marshal(map[string]any{"image_name_template": "{{project}}"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := rf.store.Integrations().SetSetting(t.Context(), rf.module.ID,
-		store.ScopeInstance, nil, "image_name_template", raw); err != nil {
-		t.Fatal(err)
+	if got, _ := unmaskedSettings(stored)["bot_token"].(string); got != "123456:ABC" {
+		t.Errorf("the module was given %q, want the value it was configured with", got)
 	}
 
-	settings, err := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil)
-	if err != nil {
-		t.Fatalf("read the settings: %v", err)
-	}
-
-	got := unmaskedSettings(settings)["image_name_template"]
-	if value, _ := got.(string); value != "{{project}}" {
-		t.Errorf("the module was given %#v, want the value it was configured with", got)
+	// The other path still masks, which is the point of having two.
+	if got := redactSettings(stored, secret, describe)["bot_token"]; got != "********" {
+		t.Errorf("the browser path returned %#v, want a mask", got)
 	}
 }
