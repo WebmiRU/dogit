@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -33,13 +32,14 @@ func (s *Server) handleModuleSelf(w http.ResponseWriter, r *http.Request) {
 			"status":         integration.Status,
 			"enabled":        integration.Enabled,
 		},
-		// A module reading its own settings: it wrote them and knows the secrets, but
-		// it is still masked, because a token that comes back in a response is a token
-		// that ends up in a log.
-		"settings": redactSettings(settings, secretKeys(integration), func(key string) (models.SettingSpec, bool) {
-			spec, ok := settingSpecOf(integration, key)
-			return spec, ok
-		}),
+		// Not masked, and the reason is that this is the module's own configuration.
+		//
+		// A module that cannot read its own token cannot work: the telegram module
+		// spent a while taking its bot token from the environment instead and treating
+		// the stored value as unusable, which is a workaround for a rule that was
+		// protecting nobody. Masking belongs on the path to a browser, where an
+		// operator's session is what could leak it — and there is none here.
+		"settings": unmaskedSettings(settings),
 	})
 }
 
@@ -137,11 +137,26 @@ func (s *Server) handleModuleSelfSettings(w http.ResponseWriter, r *http.Request
 		"kind":   integration.Kind,
 		"scopes": integration.Capabilities.Scopes,
 		"schema": integration.Capabilities.Settings,
-		"effective": redactSettings(settings, secretKeys(integration), func(key string) (models.SettingSpec, bool) {
-			spec, ok := settingSpecOf(integration, key)
-			return spec, ok
-		}),
+		// The module's own configuration, unmasked, for the same reason as above.
+		"effective": unmaskedSettings(settings),
 	})
+}
+
+// unmaskedSettings decodes a module's settings as plain values.
+//
+// Deliberately not the redaction path: a module asking what it was configured with is
+// asking for the values it needs to do its job, and it authenticated as itself to ask.
+func unmaskedSettings(settings map[string]json.RawMessage) map[string]any {
+	out := map[string]any{}
+	for key, raw := range settings {
+		var value any
+		if err := json.Unmarshal(raw, &value); err == nil {
+			out[key] = value
+			continue
+		}
+		out[key] = string(raw)
+	}
+	return out
 }
 
 // resolveProjectRef accepts a project id or a project path.
@@ -154,14 +169,4 @@ func (s *Server) resolveProjectRef(ctx context.Context, ref string) (*uuid.UUID,
 		return nil, err
 	}
 	return &project.ID, nil
-}
-
-func secretKeys(integration *models.Integration) map[string]bool {
-	secrets := map[string]bool{}
-	for _, spec := range integration.Capabilities.Settings {
-		if spec.Secret {
-			secrets[spec.Key] = true
-		}
-	}
-	return secrets
 }

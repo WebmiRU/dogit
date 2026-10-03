@@ -477,13 +477,6 @@ func poll(ctx context.Context, core *coreClient, settings map[string]any) {
 	}
 }
 
-// botTokenOf says which token to call Telegram with.
-//
-// The core keeps the token as a secret, so reading it back from the settings page
-// returns a mask — a module that took the stored value would send every message as
-// an unauthenticated stranger and be told, correctly, that it does not exist. The
-// deployment's own environment is where the token came from, so that is what is
-// used; the stored value is only a fallback, and only when it is not the mask.
 // deliverAll sends a batch at once and says which of them went.
 //
 // A few at a time rather than all of them: a hundred queued messages would otherwise
@@ -515,19 +508,22 @@ func deliverAll(ctx context.Context, settings map[string]any, notes []notificati
 	return done
 }
 
+// botTokenOf says which token to call Telegram with.
+//
+// The stored value, which the core returns unmasked on this path: a module reading its
+// own configuration is asking for the values it needs to work, and it authenticated as
+// itself to ask.
+//
+// The environment is still checked first. That is where the token comes from in every
+// deployment, so a module set up that way keeps working with its settings left empty —
+// which is how it is meant to be configured for a single bot.
 func botTokenOf(settings map[string]any) string {
 	if token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")); token != "" {
 		return token
 	}
 	stored, _ := settings["bot_token"].(string)
-	if stored == redactedSetting {
-		return ""
-	}
 	return strings.TrimSpace(stored)
 }
-
-// redactedSetting is what the core sends instead of a secret.
-const redactedSetting = "********"
 
 // send delivers one notification.
 //

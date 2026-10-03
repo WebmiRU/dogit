@@ -178,11 +178,11 @@ func manifest() map[string]any {
 							"label": "Kubeconfig",
 							// A multi-line field rather than a password box: a kubeconfig is a
 							// document, and pasting one into a single-line input would trim it.
-							"type":   "text",
-							"secret": true,
+							"type": "text",
 							"description": "The contents of a kubeconfig, pasted in, for when this module runs " +
-								"outside the cluster. `kubectl config view --raw` prints one. It is stored " +
-								"and never shown again, so keep the original file somewhere.",
+								"outside the cluster. `kubectl config view --raw` prints one. Only an " +
+								"administrator sees this page, so it is shown back like any other " +
+								"setting: a masked credential is one nobody can check is still there.",
 						},
 						{
 							"key":         "context",
