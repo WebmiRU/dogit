@@ -8,6 +8,7 @@
  *   node scripts/check-vue.mjs
  */
 import { parse } from '@vue/compiler-sfc'
+import { transformSync } from 'esbuild'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, extname } from 'node:path'
 
@@ -25,10 +26,28 @@ function componentsIn(dir) {
 
 const broken = []
 for (const file of componentsIn(root)) {
-  const { errors } = parse(readFileSync(file, 'utf8'), { filename: file })
+  const name = file.replace(root, 'app/')
+  const source = readFileSync(file, 'utf8')
+
+  const { errors, descriptor } = parse(source, { filename: file })
   for (const error of errors) {
     const line = error.loc?.start?.line
-    broken.push(`${file.replace(root, 'app/')}${line ? `:${line}` : ''} — ${error.message}`)
+    broken.push(`${name}${line ? `:${line}` : ''} — ${error.message}`)
+  }
+  if (errors.length) continue
+
+  // The script is read as TypeScript as well, because the template parsing above
+  // says nothing about whether it compiles: a component whose script does not parse
+  // still has a perfectly good template, and the dev server answers 404 for the whole
+  // page rather than showing what is wrong with it.
+  for (const block of [descriptor.script, descriptor.scriptSetup]) {
+    if (!block) continue
+    try {
+      transformSync(block.content, { loader: block.lang === 'ts' ? 'ts' : 'jsx' })
+    } catch (error) {
+      const line = block.loc.start.line + (error.errors?.[0]?.location?.line ?? 1) - 1
+      broken.push(`${name}:${line} — the script does not compile: ${error.errors?.[0]?.text ?? error.message}`)
+    }
   }
 }
 

@@ -37,6 +37,19 @@ export interface Recipient {
  * settings name a destination, so the list can print an address instead of a row
  * number.
  */
+/** The answer for one place: its recipients, the modules available, and what went. */
+export interface RecipientsAnswer {
+  targets: Recipient[]
+  modules: RecipientsModule[]
+  /**
+   * How many settings were removed because they had stopped applying — a project moved
+   * to another group, leaving them pointing at a channel that is not its own any more.
+   * Said rather than done quietly: a setting that vanishes without a word is a setting
+   * somebody will look for.
+   */
+  stale_removed?: number
+}
+
 export interface RecipientsModule {
   id: string
   kind: string

@@ -178,10 +178,18 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               {{ option }}
             </option>
           </select>
-          <select v-else-if="spec.type === 'bool'" v-model="values[spec.key]">
-            <option value="true">enabled</option>
-            <option value="false">disabled</option>
-          </select>
+          <button
+            v-else-if="spec.type === 'bool'"
+            class="switch"
+            :class="{ on: values[spec.key] === 'true' }"
+            type="button"
+            role="switch"
+            :aria-checked="values[spec.key] === 'true'"
+            :title="values[spec.key] === 'true' ? 'On' : 'Off'"
+            @click="values[spec.key] = values[spec.key] === 'true' ? 'false' : 'true'"
+          >
+            <span class="knob" />
+          </button>
           <input
             v-else
             v-model="values[spec.key]"

@@ -361,10 +361,21 @@ const storageFraction = computed(() => {
                 <select v-if="spec.type === 'enum'" v-model="values[spec.key]">
                   <option v-for="option in spec.options" :key="option" :value="option">{{ option }}</option>
                 </select>
-                <select v-else-if="spec.type === 'bool'" v-model="values[spec.key]">
-                  <option value="true">enabled</option>
-                  <option value="false">disabled</option>
-                </select>
+                <!-- A switch, not a list of two. "Enabled or disabled" is one question,
+                     and drawn as a list it takes twice the space and reads as though
+                     there were other answers. -->
+                <button
+                  v-else-if="spec.type === 'bool'"
+                  class="switch"
+                  :class="{ on: values[spec.key] === 'true' }"
+                  type="button"
+                  role="switch"
+                  :aria-checked="values[spec.key] === 'true'"
+                  :title="values[spec.key] === 'true' ? 'On' : 'Off'"
+                  @click="values[spec.key] = values[spec.key] === 'true' ? 'false' : 'true'"
+                >
+                  <span class="knob" />
+                </button>
                 <input
                   v-else
                   v-model="values[spec.key]"

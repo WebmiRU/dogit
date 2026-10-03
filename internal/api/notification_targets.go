@@ -51,9 +51,19 @@ func (s *Server) handleListNotificationTargets(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Settings that no longer mean anything are removed when a project changes group,
+	// and the ones removed are reported here rather than left only in the log: a setting
+	// that vanishes without a word is a setting somebody will look for.
+	stale := s.dropStaleTargets(r)
+	if stale > 0 {
+		s.log.Info("notification settings that no longer apply were removed",
+			"project", scopeType, "removed", stale)
+	}
+
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"targets": targets,
-		"modules": s.notificationModules(r),
+		"targets":       targets,
+		"modules":       s.notificationModules(r),
+		"stale_removed": stale,
 	})
 }
 
@@ -129,6 +139,26 @@ func (s *Server) targetRowView(r *http.Request, integration *models.Integration,
 		"position":       row.Root.Position,
 		"can_edit":       true,
 	}
+}
+
+// dropStaleTargets removes the rows at this scope that override something no longer in
+// it, and says how many that was.
+//
+// Called from the list rather than from the move itself, because the move may be undone:
+// a project that goes back to the group it came from should find its settings intact,
+// and the moment to decide they are gone is when somebody looks.
+func (s *Server) dropStaleTargets(r *http.Request) int {
+	scopeType, scopeID, err := s.settingScope(r)
+	if err != nil || scopeType != store.ScopeProject || scopeID == nil {
+		return 0
+	}
+
+	removed, err := s.store.NotificationTargets().PruneStale(r.Context(), *scopeID)
+	if err != nil {
+		s.log.Warn("could not remove notification settings that stopped applying", "error", err)
+		return 0
+	}
+	return len(removed)
 }
 
 // notificationModules is what may be added to the list: the modules that announce

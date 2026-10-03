@@ -20,7 +20,7 @@
  *   says so in its own configuration; this list only says where a message would go.
  */
 import type { SettingSpec } from '~/types/module'
-import type { Recipient, RecipientDraft, RecipientsModule } from '~/types/notification'
+import type { Recipient, RecipientDraft, RecipientsAnswer } from '~/types/notification'
 
 const props = withDefaults(
   defineProps<{
@@ -45,7 +45,9 @@ const props = withDefaults(
 const { add: notify } = useNotifyPool()
 
 const recipients = ref<Recipient[]>([])
-const available = ref<RecipientsModule[]>([])
+const available = ref<RecipientsAnswer['modules']>([])
+/** What stopped applying and was removed, said once and then left alone. */
+const stale = ref('')
 const loading = ref(true)
 const busy = ref('')
 
@@ -83,9 +85,7 @@ function where(row: Recipient): string {
 async function load() {
   if (recipients.value.length === 0) loading.value = true
   try {
-    const answer = await api.get<{ targets: Recipient[]; modules: RecipientsModule[] }>(
-      `/notification-targets?${scopeQuery.value}`,
-    )
+    const answer = await api.get<RecipientsAnswer>(`/notification-targets?${scopeQuery.value}`)
     const modules = answer.modules ?? []
     recipients.value = props.onlyModule
       ? (answer.targets ?? []).filter((row) => row.module_id === props.onlyModule)
@@ -93,6 +93,11 @@ async function load() {
     // The choice of module is this module's on its own page, so the list has one
     // entry and the form does not ask a question with a single answer.
     available.value = props.onlyModule ? modules.filter((one) => one.id === props.onlyModule) : modules
+
+    // Settings that had stopped applying are gone by the time this list arrives, and
+    // the count says so. Left out, a person who set something and cannot find it has
+    // no way to tell a bug from something they never saved.
+    stale.value = staleNotice(answer.stale_removed ?? 0)
   } catch (caught) {
     // Said in the corner rather than in the page: the list is either there or it is
     // not, and a strip of error above an empty table explains nothing.
@@ -100,6 +105,20 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * What to say about settings that were removed.
+ *
+ * Only the singular and plural differ, and saying "1 settings" is the kind of thing
+ * that makes people stop reading notices.
+ */
+function staleNotice(dropped: number): string {
+  if (dropped <= 0) return ''
+  if (dropped === 1) {
+    return 'One setting of this project\u2019s no longer applied after a move and was removed.'
+  }
+  return `${dropped} settings of this project\u2019s no longer applied after a move and were removed.`
 }
 
 /** How to call a recipient in a sentence. */
@@ -298,6 +317,11 @@ onMounted(load)
 
 <template>
   <div>
+    <div v-if="stale" class="alert alert-warning">
+      {{ stale }}
+      <button class="btn btn-small" type="button" @click="stale = ''">Close</button>
+    </div>
+
     <div v-if="!canManage" class="alert alert-info">
       Changing this needs rights to manage {{ scopeWord.replace('the ', '') }}.
     </div>
