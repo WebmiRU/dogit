@@ -180,9 +180,14 @@ type RegistryAccess struct {
 
 // SettingSpec is one configurable setting of a module.
 type SettingSpec struct {
-	Key         string   `json:"key"`
-	Label       string   `json:"label"`
-	Type        string   `json:"type"` // string | bool | int | enum | url | list
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Type is string | text | bool | int | enum | url | list.
+	//
+	// "text" is a string that is shown as a multi-line box. It exists because a
+	// kubeconfig is a document: pasting one into a single-line input trims it, and the
+	// result is a credential that parses as nothing at all.
+	Type        string   `json:"type"`
 	Default     any      `json:"default,omitempty"`
 	Options     []string `json:"options,omitempty"`
 	Description string   `json:"description,omitempty"`

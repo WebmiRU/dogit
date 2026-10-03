@@ -37,7 +37,14 @@ func clusterSetup(t *testing.T) (k8s.Client, string) {
 		}
 	}
 
-	client, err := k8s.Connect(context.Background(), k8s.Access{Kubeconfig: kubeconfig})
+	// The file's contents, because that is what a settings page holds: the module is
+	// given a kubeconfig rather than a path it may not be able to open.
+	contents, err := os.ReadFile(kubeconfig)
+	if err != nil {
+		t.Skipf("the kubeconfig could not be read: %v", err)
+	}
+
+	client, err := k8s.Connect(context.Background(), k8s.Access{Kubeconfig: contents})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

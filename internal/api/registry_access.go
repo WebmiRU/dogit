@@ -287,7 +287,7 @@ func (s *Server) handleRegistryAuthenticate(w http.ResponseWriter, r *http.Reque
 	// The token is short: it only has to survive the pull or push it was minted
 	// for, and a credential that outlives it would keep working after the rights
 	// behind it were taken away.
-	token, _, err := s.mintModuleToken(r, user, integration, &project.ID, scopes, moduleTokenTTL)
+	token, _, err := s.mintModuleToken(r.Context(), user, integration, &project.ID, scopes, moduleTokenTTL)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

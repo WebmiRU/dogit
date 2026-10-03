@@ -124,6 +124,12 @@ type Job struct {
 	// definition is the module's own: the core stores it and hands it back, and does
 	// not decide what a Dockerfile is.
 	Build map[string]any `json:"build,omitempty"`
+	// Deploy is set on a job that deploys rather than runs a script. No runner may
+	// claim such a job — there is nothing on a machine to run — so the core carries
+	// it out itself, by handing the task to the module that was named. It lives on
+	// the job so a deploy is part of the run that caused it: same log, same retry,
+	// same place on the pipeline page.
+	Deploy map[string]any `json:"deploy,omitempty"`
 	// ProjectPath and ProjectID are carried on the job rather than looked up, so a
 	// runner on another machine needs one round trip rather than two.
 	ProjectPath string    `json:"project_path"`
@@ -214,17 +220,21 @@ func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, 
 		if err != nil {
 			return nil, err
 		}
+		deploy, err := jsonbOf(job.Deploy)
+		if err != nil {
+			return nil, err
+		}
 
 		// RETURNING rather than a plain insert: the job's id is needed by whatever
 		// asked for this pipeline, and reading it back separately would be a second
 		// round trip for a value the database already had.
 		err = tx.QueryRow(ctx, `
 			INSERT INTO jobs (pipeline_id, iid, name, stage, status, image, script,
-			                  allow_failure, needs, build)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			                  allow_failure, needs, build, deploy)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			RETURNING id`,
 			job.PipelineID, job.IID, job.Name, job.Stage, job.Status, job.Image,
-			job.Script, job.AllowFailure, job.Needs, build).Scan(&job.ID)
+			job.Script, job.AllowFailure, job.Needs, build, deploy).Scan(&job.ID)
 		if err != nil {
 			return nil, fmt.Errorf("create job: %w", err)
 		}
@@ -456,6 +466,7 @@ func (r *PipelineRepo) ListPipelinesPage(ctx context.Context, projectID uuid.UUI
 func (r *PipelineRepo) JobByID(ctx context.Context, id int64) (*Job, error) {
 	var job Job
 	var build []byte
+	var deploy []byte
 
 	err := r.s.pool.QueryRow(ctx, jobColumns+`
 		FROM jobs j
@@ -463,7 +474,7 @@ func (r *PipelineRepo) JobByID(ctx context.Context, id int64) (*Job, error) {
 		JOIN projects pr ON pr.id = p.project_id
 		WHERE j.id = $1`, id).Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage,
 		&job.Status, &job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs,
-		&build, &job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
+		&build, &deploy, &job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
 		&job.ProjectID, &job.ProjectPath)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
@@ -476,6 +487,12 @@ func (r *PipelineRepo) JobByID(ctx context.Context, id int64) (*Job, error) {
 	decodeJSONB(build, &job.Build)
 	if len(job.Build) == 0 {
 		job.Build = nil
+	}
+
+	job.Deploy = map[string]any{}
+	decodeJSONB(deploy, &job.Deploy)
+	if len(job.Deploy) == 0 {
+		job.Deploy = nil
 	}
 	return &job, nil
 }
@@ -505,15 +522,16 @@ func (r *PipelineRepo) JobsOfPipeline(ctx context.Context, pipelineID int64) ([]
 
 const jobColumns = `
 	SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.runner_id, j.image,
-	       j.script, j.allow_failure, j.needs, j.build, j.started_at, j.finished_at,
+	       j.script, j.allow_failure, j.needs, j.build, j.deploy, j.started_at, j.finished_at,
 	       j.duration_ms, j.created_at, p.project_id, pr.path`
 
 func scanJob(rows pgx.Rows) (*Job, error) {
 	var job Job
 	var build []byte
+	var deploy []byte
 
 	if err := rows.Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
-		&job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs, &build,
+		&job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs, &build, &deploy,
 		&job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
 		&job.ProjectID, &job.ProjectPath); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
@@ -523,6 +541,12 @@ func scanJob(rows pgx.Rows) (*Job, error) {
 	decodeJSONB(build, &job.Build)
 	if len(job.Build) == 0 {
 		job.Build = nil
+	}
+
+	job.Deploy = map[string]any{}
+	decodeJSONB(deploy, &job.Deploy)
+	if len(job.Deploy) == 0 {
+		job.Deploy = nil
 	}
 	return &job, nil
 }
@@ -543,12 +567,17 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 
 	// FOR UPDATE SKIP LOCKED: a runner takes the row and moves on, rather than
 	// waiting behind one that is about to find the job is not available.
+	//
+	// deploy IS NULL is not an optimisation. A job with a deploy has no script, so a
+	// runner that claimed it would find nothing to run, exit successfully, and report
+	// a deployment that never happened — the worst possible outcome, because it is a
+	// green tick over something that was not done.
 	var id int64
 	err = tx.QueryRow(ctx, `
 		UPDATE jobs SET status = $1, runner_id = $2, started_at = now()
 		WHERE id = (
 			SELECT j.id FROM jobs j
-			WHERE j.status = $3
+			WHERE j.status = $3 AND j.deploy IS NULL
 			ORDER BY j.pipeline_id, j.iid
 			FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
@@ -574,6 +603,37 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 		return nil, fmt.Errorf("claim job: %w", err)
 	}
 	return r.JobByID(ctx, id)
+}
+
+// ClaimDeployJob marks a deployment as this process's to carry out.
+//
+// Separate from FinishJob because that one stamps finished_at: a claim is not an end.
+// Doing it through the wrong method would leave a job with a start and a finish at
+// the same instant and a duration of zero, which is a lie about how long a rollout
+// took.
+//
+// It only succeeds if the job is still pending, which is the lock. Two calls arriving
+// together — a retried finish, a second runner reporting the last test — both see a
+// pending row, and only the first update finds one to update.
+func (r *PipelineRepo) ClaimDeployJob(ctx context.Context, id int64) (bool, error) {
+	tag, err := r.s.pool.Exec(ctx, `
+		UPDATE jobs
+		SET status = $2, started_at = now()
+		WHERE id = $1 AND status = $3`, id, JobRunning, JobPending)
+	if err != nil {
+		return false, fmt.Errorf("claim deployment job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+
+	if _, err := r.s.pool.Exec(ctx, `
+		UPDATE pipelines SET started_at = COALESCE(started_at, now())
+		WHERE id = (SELECT pipeline_id FROM jobs WHERE id = $1) AND status = $2`,
+		id, PipelinePending); err != nil {
+		return true, fmt.Errorf("mark the pipeline running: %w", err)
+	}
+	return true, nil
 }
 
 // FinishJob records what happened to a job.

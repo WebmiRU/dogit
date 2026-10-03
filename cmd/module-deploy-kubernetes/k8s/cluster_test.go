@@ -37,7 +37,14 @@ func clusterClientFor(t *testing.T) Client {
 		kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
 	}
 
-	client, err := Connect(context.Background(), Access{Kubeconfig: kubeconfig})
+	// The file's contents, because that is what the settings page holds: a module is
+	// given a kubeconfig, not a path it may or may not be able to open.
+	contents, err := os.ReadFile(kubeconfig)
+	if err != nil {
+		t.Skipf("the kubeconfig could not be read: %v", err)
+	}
+
+	client, err := Connect(context.Background(), Access{Kubeconfig: contents})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

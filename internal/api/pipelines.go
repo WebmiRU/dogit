@@ -113,7 +113,7 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("pipeline created", "project", project.Path, "pipeline", pipeline.IID,
 		"ref", ref, "by", user.Username)
 
-	s.publishPipeline(r, project.ID, nil, models.EventPipelineCreated, map[string]any{
+	s.publishPipeline(r.Context(), project.ID, nil, models.EventPipelineCreated, map[string]any{
 		"pipeline_iid": pipeline.IID,
 		"ref":          ref,
 		"sha":          sha,
@@ -185,7 +185,48 @@ func jobsFrom(config *pipeline.Config, ref, only string) []store.Job {
 			Build:        spec.Build,
 		})
 	}
+
+	// The deployment is a job of this run, not a separate thing that happens later.
+	//
+	// Adding it here rather than creating it when the build finishes means the
+	// pipeline page lists the deploy from the start, so a person watching a run knows
+	// a deployment is coming — which is the difference between waiting and wondering.
+	// It also means it is retried and logged like anything else, because there is
+	// nothing special about it once it exists.
+	//
+	// No rules of its own: a deploy block has none to have, and inventing a way to
+	// exclude one by branch would be a feature nobody asked for.
+	//
+	// Skipped when one job was named on the command line, because that is somebody
+	// asking to run one thing; adding a deployment they did not ask for would be the
+	// pipeline surprising them in the most expensive way available.
+	if !config.Deploy.Empty() && only == "" {
+		jobs = append(jobs, deployJob(config.Deploy))
+	}
+
 	return jobs
+}
+
+// deployJob is the job that carries out a deployment.
+//
+// It has no script, which is exactly why no runner may claim it: there is nothing on
+// a machine to run. The core carries it out itself, once the jobs it needs have
+// passed, by handing the task to the module the file named.
+func deployJob(spec pipeline.DeploySpec) store.Job {
+	deploy := map[string]any{}
+	encoded, err := json.Marshal(spec)
+	if err == nil {
+		_ = json.Unmarshal(encoded, &deploy)
+	}
+
+	return store.Job{
+		// "deploy" is a reserved job name in the file's own terms: somebody who
+		// writes a job called deploy gets this one instead of theirs, which is why it
+		// is checked for while the configuration is read.
+		Name:   "deploy",
+		Stage:  "deploy",
+		Deploy: deploy,
+	}
 }
 
 // registryHost is the address a docker client is given as the registry host:
@@ -335,7 +376,7 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.log.Info("job retried", "project", project.Path, "pipeline", pipeline.IID, "job", job.Name)
-	s.publishPipeline(r, project.ID, userFrom(r.Context()), models.EventPipelineUpdated, map[string]any{
+	s.publishPipeline(r.Context(), project.ID, userFrom(r.Context()), models.EventPipelineUpdated, map[string]any{
 		"pipeline_id": pipeline.IID,
 		"job_name":    job.Name,
 		"status":      store.JobPending,
@@ -462,7 +503,7 @@ func (s *Server) registryCredentialsFor(r *http.Request, job *store.Job) (map[st
 		return nil, err
 	}
 
-	token, _, err := s.mintModuleToken(r, builder, registry, &project.ID,
+	token, _, err := s.mintModuleToken(r.Context(), builder, registry, &project.ID,
 		[]string{models.ScopeRegistryPush, models.ScopeRegistryPull}, 2*time.Hour)
 	if err != nil {
 		return nil, err
@@ -672,7 +713,7 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("remove a job's key", "job_id", jobID, "error", err)
 	}
 
-	s.publishPipeline(r, job.ProjectID, nil, models.EventJobUpdated, map[string]any{
+	s.publishPipeline(r.Context(), job.ProjectID, nil, models.EventJobUpdated, map[string]any{
 		"job_id": jobID,
 		"status": status,
 	})
@@ -694,7 +735,7 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 				pipeline = nil
 			}
 			if pipeline != nil {
-				s.publishPipeline(r, project.ID, nil, models.EventPipelineUpdated, map[string]any{
+				s.publishPipeline(r.Context(), project.ID, nil, models.EventPipelineUpdated, map[string]any{
 					"pipeline_id": pipeline.ID,
 					"job_name":    job.Name,
 					"status":      status,
@@ -709,6 +750,12 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 				}
 				s.notifyEvent(r.Context(), "job.finished", jobEvent,
 					notificationSummary(jobEvent, project))
+
+				// The deployment is waited for rather than started here. It is a job
+				// of this run and it is still pending, so the check below finds it and
+				// the run is not over yet — which is right: a pipeline whose deploy has
+				// not happened has not finished.
+				s.startDeployIfReady(r.Context(), pipeline.ID)
 
 				if remaining, err := s.store.Pipelines().UnfinishedJobs(r.Context(), pipeline.ID); err == nil && remaining == 0 {
 					final := notifyContext{
@@ -768,26 +815,13 @@ func (s *Server) handleAppendJobLog(w http.ResponseWriter, r *http.Request) {
 		req.Stream = "out"
 	}
 
-	key := s.jobLogKey(job)
-	// Appending means reading what is there: object storage has no append, and a
-	// runner streams in pieces rather than holding a whole build's output in memory.
-	// Each line carries which stream it came from, so the log can be coloured
-	// later without the storage format becoming something only this program reads.
-	chunk := []byte(markStream(req.Stream, req.Text))
-	if previous, _, err := s.objects.Get(r.Context(), key); err == nil {
-		if existing, err := io.ReadAll(previous); err == nil {
-			chunk = append(existing, chunk...)
-		}
-		previous.Close()
-	}
-
-	if _, err := s.objects.Put(r.Context(), key, strings.NewReader(string(chunk)),
-		int64(len(chunk)), "text/plain"); err != nil {
+	appended, err := s.appendJobOutput(r.Context(), job, req.Stream, req.Text)
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 
-	s.writeJSON(w, r, http.StatusOK, map[string]any{"appended": len(req.Text)})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"appended": appended})
 }
 
 // handleJobLog returns a job's output.
@@ -853,7 +887,9 @@ func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request) {
 // are deliberately small: what happened, and enough to look the thing up. Anything
 // more and every subscriber would have to keep up with the shape of everybody
 // else's work.
-func (s *Server) publishPipeline(r *http.Request, projectID uuid.UUID, actor *models.User,
+// It takes a context rather than a request for the same reason minting a token does:
+// a deployment publishes its result long after the request that started it is gone.
+func (s *Server) publishPipeline(ctx context.Context, projectID uuid.UUID, actor *models.User,
 	kind models.EventKind, payload map[string]any) {
 
 	if s.events == nil {
@@ -867,7 +903,7 @@ func (s *Server) publishPipeline(r *http.Request, projectID uuid.UUID, actor *mo
 		id := actor.ID
 		actorID = &id
 	}
-	if err := s.events.Publish(r.Context(), kind, &projectID, actorID, payload); err != nil {
+	if err := s.events.Publish(ctx, kind, &projectID, actorID, payload); err != nil {
 		s.log.Debug("publish pipeline event", "kind", kind, "error", err)
 	}
 }
@@ -905,6 +941,40 @@ func (s *Server) cloneURL() string {
 }
 
 // jobLogKey is where a job's output lives.
+// appendJobOutput adds a line to a job's log and says how much was written.
+//
+// A runner appends through here, and so does a deployment the core carried out
+// itself: a deploy is part of the run that caused it, so it lands in the same log
+// the reader is already watching rather than somewhere they have to find.
+//
+// Appending means reading what is there: object storage has no append, and a
+// runner streams in pieces rather than holding a whole build's output in memory.
+// Each line carries which stream it came from, so the log can be coloured later
+// without the storage format becoming something only this program reads.
+func (s *Server) appendJobOutput(ctx context.Context, job *store.Job, stream, text string) (int, error) {
+	if stream != "err" {
+		stream = "out"
+	}
+	if text == "" {
+		return 0, nil
+	}
+
+	key := s.jobLogKey(job)
+	chunk := []byte(markStream(stream, text))
+	if previous, _, err := s.objects.Get(ctx, key); err == nil {
+		if existing, err := io.ReadAll(previous); err == nil {
+			chunk = append(existing, chunk...)
+		}
+		previous.Close()
+	}
+
+	if _, err := s.objects.Put(ctx, key, strings.NewReader(string(chunk)),
+		int64(len(chunk)), "text/plain"); err != nil {
+		return 0, err
+	}
+	return len(text), nil
+}
+
 func (s *Server) jobLogKey(job *store.Job) string {
 	return fmt.Sprintf("ci/%s/%d/job-%d.log", job.ProjectPath, job.PipelineID, job.IID)
 }

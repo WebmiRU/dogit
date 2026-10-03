@@ -30,7 +30,10 @@ RUN CGO_ENABLED=0 go build -trimpath \
         -o /out/module-runner ./cmd/module-runner \
  && CGO_ENABLED=0 go build -trimpath \
         -ldflags "-s -w" \
-        -o /out/module-notify-telegram ./cmd/module-notify-telegram
+        -o /out/module-notify-telegram ./cmd/module-notify-telegram \
+ && CGO_ENABLED=0 go build -trimpath \
+        -ldflags "-s -w" \
+        -o /out/module-deploy-kubernetes ./cmd/module-deploy-kubernetes
 
 # Runtime stage.
 FROM alpine:3.21
@@ -73,6 +76,7 @@ COPY --from=build /out/module-cache-demo /usr/local/bin/module-cache-demo
 COPY --from=build /out/module-registry /usr/local/bin/module-registry
 COPY --from=build /out/module-runner /usr/local/bin/module-runner
 COPY --from=build /out/module-notify-telegram /usr/local/bin/module-notify-telegram
+COPY --from=build /out/module-deploy-kubernetes /usr/local/bin/module-deploy-kubernetes
 COPY deploy/sshd_config          /etc/ssh/sshd_config.d/dogit.conf
 COPY deploy/sshd_entrypoint.sh   /usr/local/bin/dogit-sshd-entrypoint
 

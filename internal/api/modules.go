@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -95,6 +96,43 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("module registered",
 		"kind", integration.Kind, "name", integration.Name,
 		"version", integration.ModuleVersion, "endpoint", integration.Endpoint)
+
+	// A module that asks for a database gets one, here, and the credentials come back
+	// exactly once.
+	//
+	// Provisioning happens at registration rather than on first use because a module
+	// cannot work out for itself whether it has one: it has nothing to connect to and
+	// nothing to compare against, and "no database" and "not asked for" are the same
+	// silence from the other side. A module that declares it wants one and then
+	// crashes without keeping the credentials is a module with an empty database
+	// nobody will point it at again, which is why the names are also returned — a
+	// module that lost them can show an administrator what to restore.
+	var database any
+	if integration.Capabilities.Database {
+		provisioned, err := s.store.Integrations().ProvisionModuleDatabase(
+			r.Context(), s.cfg.DatabaseURL, integration.Kind)
+		if err != nil {
+			s.log.Error("could not provision a database for the module",
+				"kind", integration.Kind, "error", err)
+			s.writeError(w, r, err)
+			return
+		}
+
+		if err := s.store.Integrations().SetModuleDatabase(r.Context(), integration.ID,
+			provisioned.Name, provisioned.Role); err != nil {
+			s.log.Warn("the database was created but its name could not be recorded",
+				"kind", integration.Kind, "error", err)
+		}
+
+		database = map[string]any{
+			"url":  provisioned.URL,
+			"name": provisioned.Name,
+			"role": provisioned.Role,
+		}
+		s.log.Info("provisioned a database for the module",
+			"kind", integration.Kind, "database", provisioned.Name)
+	}
+
 	s.publishInstanceEvent(r, models.EventModuleRegistered, integration, map[string]any{
 		"enabled": integration.Enabled,
 	})
@@ -102,6 +140,7 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"integration":        s.integrationView(r, integration, nil, nil),
 		"token":              plaintext,
+		"database":           database,
 		"heartbeat_interval": moduleHeartbeatInterval.String(),
 		"expires_at":         time.Now().Add(maxHeartbeatWindow).Format(time.RFC3339),
 	})
@@ -586,6 +625,17 @@ func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Requ
 	}
 
 	for key, value := range req.Values {
+		// A secret inside a list comes back as a mask, and the form sends the mask
+		// back unchanged — the browser never had the value to send. Writing that
+		// through would replace somebody's kubeconfig with a row of asterisks, so
+		// the masked fields are put back to what is already stored.
+		value, err := s.restoreMaskedSecrets(r.Context(), integration.ID, scopeType, scopeID,
+			key, value)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+
 		if err := s.store.Integrations().SetSetting(r.Context(), integration.ID,
 			scopeType, scopeID, key, value); err != nil {
 			s.writeError(w, r, err)
@@ -601,6 +651,84 @@ func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"settings": settings})
+}
+
+// secretMask is what a secret comes back as, because it is stored but never returned.
+const secretMask = "********"
+
+// settingSpecAt is what the registered module declared about one setting.
+func (s *Server) settingSpecAt(ctx context.Context, integrationID uuid.UUID,
+	key string) (models.SettingSpec, bool) {
+
+	integration, err := s.store.Integrations().ByID(ctx, integrationID)
+	if err != nil {
+		return models.SettingSpec{}, false
+	}
+	return settingSpecOf(integration, key)
+}
+
+// restoreMaskedSecrets puts the stored values back into a list whose secrets arrived
+// masked.
+//
+// Only ever done for a masked field that is present and still holding the mask: an
+// operator who cleared the field means it, and one who typed a new value means that.
+// A single secret setting is not touched here, because it never comes back at all and
+// so is simply not part of the payload.
+func (s *Server) restoreMaskedSecrets(ctx context.Context, integrationID uuid.UUID,
+	scopeType string, scopeID *uuid.UUID, key string, value json.RawMessage) (json.RawMessage, error) {
+
+	spec, found := s.settingSpecAt(ctx, integrationID, key)
+	if !found || spec.Type != "list" || spec.Items == nil {
+		return value, nil
+	}
+
+	secret := map[string]bool{}
+	for _, field := range spec.Items.Fields {
+		if field.Secret {
+			secret[field.Key] = true
+		}
+	}
+	if len(secret) == 0 {
+		return value, nil
+	}
+
+	var rows []map[string]any
+	if err := json.Unmarshal(value, &rows); err != nil {
+		return value, nil
+	}
+
+	stored, err := s.store.Integrations().SettingAt(ctx, integrationID, scopeType, scopeID, key)
+	if err != nil || len(stored) == 0 {
+		return value, nil
+	}
+	var previous []map[string]any
+	if err := json.Unmarshal(stored, &previous); err != nil {
+		return value, nil
+	}
+
+	changed := false
+	for index, row := range rows {
+		for field := range secret {
+			if row[field] != secretMask {
+				continue
+			}
+			if index < len(previous) {
+				if kept, ok := previous[index][field]; ok {
+					row[field] = kept
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return value, nil
+	}
+
+	merged, err := json.Marshal(rows)
+	if err != nil {
+		return value, nil
+	}
+	return merged, nil
 }
 
 // checkSettingValue enforces whatever the module said about one value: its type,
@@ -676,7 +804,7 @@ func checkSettingType(spec models.SettingSpec, value json.RawMessage) error {
 		}
 		return errBadRequestf("%s must be true or false", spec.Label)
 
-	case "string", "url":
+	case "string", "text", "url":
 		if err := json.Unmarshal(value, &text); err == nil {
 			return nil
 		}
@@ -693,9 +821,53 @@ func checkSettingType(spec models.SettingSpec, value json.RawMessage) error {
 		}
 		return errBadRequestf("%s must be one of: %s", spec.Label, strings.Join(spec.Options, ", "))
 
+	case "list":
+		return checkListSetting(spec, value)
+
 	default:
 		return nil
 	}
+}
+
+// checkListSetting refuses a list that is not a list of the fields the module
+// declared.
+//
+// Checked at the door rather than left to the module: the module described these
+// fields precisely so that a row with a field nobody declared would be caught before
+// it was stored, and because a secret field inside an entry is only maskable while
+// the core knows which fields those are. A value of a different shape would defeat
+// both.
+func checkListSetting(spec models.SettingSpec, value json.RawMessage) error {
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(value, &rows); err != nil {
+		return errBadRequestf("%s must be a list", spec.Label)
+	}
+
+	if spec.Items == nil {
+		// A list that declares no fields is a module that has not described itself.
+		// Anything is refused rather than stored, because nothing could be rendered
+		// from it and no secret inside it could ever be masked.
+		return errBadRequestf("%s is a list but describes no fields", spec.Label)
+	}
+
+	byKey := map[string]models.SettingSpec{}
+	for _, field := range spec.Items.Fields {
+		byKey[field.Key] = field
+	}
+
+	for index, row := range rows {
+		for key, entry := range row {
+			field, known := byKey[key]
+			if !known {
+				return errBadRequestf(
+					"%s has no field called %q in entry %d", spec.Label, key, index+1)
+			}
+			if problem := checkSettingType(field, entry); problem != nil {
+				return problem
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleGetModuleSettings(w http.ResponseWriter, r *http.Request) {
@@ -732,11 +904,24 @@ func (s *Server) handleGetModuleSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Redacted here exactly as the module view redacts it, because this is the other
+	// way the same values leave the core and a secret masked on one path and not on
+	// the other is a secret that was never masked.
+	declared := map[string]bool{}
+	specs := map[string]models.SettingSpec{}
+	for _, spec := range integration.Capabilities.Settings {
+		declared[spec.Key] = spec.Secret
+		specs[spec.Key] = spec
+	}
+
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"scope":     scopeType,
-		"settings":  at,
-		"effective": effective,
-		"schema":    integration.Capabilities.Settings,
+		"scope":    scopeType,
+		"settings": at,
+		"effective": redactSettings(effective, declared, func(key string) (models.SettingSpec, bool) {
+			spec, ok := specs[key]
+			return spec, ok
+		}),
+		"schema": integration.Capabilities.Settings,
 	})
 }
 
@@ -818,7 +1003,7 @@ func (s *Server) handleMintModuleToken(w http.ResponseWriter, r *http.Request) {
 		ttl = moduleTokenTTL
 	}
 
-	plaintext, _, err := s.mintModuleToken(r, user, integration, projectID, scopes, ttl)
+	plaintext, _, err := s.mintModuleToken(r.Context(), user, integration, projectID, scopes, ttl)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -837,7 +1022,10 @@ func (s *Server) handleMintModuleToken(w http.ResponseWriter, r *http.Request) {
 // One place mints them, for every route that issues one, so a registry login and
 // an explicit token request cannot drift apart in how long a credential lasts or
 // what it carries.
-func (s *Server) mintModuleToken(r *http.Request, user *models.User, integration *models.Integration,
+// It takes a context rather than a request because not everything that needs a
+// credential has one: a deployment runs in the background, after the request that
+// asked for the pipeline has been answered, and it still needs to pull.
+func (s *Server) mintModuleToken(ctx context.Context, user *models.User, integration *models.Integration,
 	projectID *uuid.UUID, scopes []string, ttl time.Duration) (string, *models.IntegrationToken, error) {
 
 	plaintext, hash, err := auth.GenerateToken()
@@ -852,7 +1040,7 @@ func (s *Server) mintModuleToken(r *http.Request, user *models.User, integration
 		Scopes:        scopes,
 		ExpiresAt:     time.Now().Add(ttl),
 	}
-	if err := s.store.IntegrationTokens().Create(r.Context(), token, hash); err != nil {
+	if err := s.store.IntegrationTokens().Create(ctx, token, hash); err != nil {
 		return "", nil, err
 	}
 	return plaintext, token, nil

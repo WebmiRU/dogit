@@ -371,6 +371,30 @@ func (r *IntegrationRepo) SettingsAt(ctx context.Context, integrationID uuid.UUI
 	return out, rows.Err()
 }
 
+// SettingAt is one setting as it is stored at one scope.
+//
+// It returns nothing rather than an error when the setting was never set here,
+// because "not set at this scope" is the normal answer for a value that is inherited
+// — and the caller in this case is deciding whether to keep a masked value, which has
+// nothing stored to keep in the common case.
+func (r *IntegrationRepo) SettingAt(ctx context.Context, integrationID uuid.UUID,
+	scopeType string, scopeID *uuid.UUID, key string) (json.RawMessage, error) {
+
+	var value json.RawMessage
+	err := r.s.pool.QueryRow(ctx, `
+		SELECT value FROM integration_settings
+		WHERE integration_id = $1 AND scope_type = $2
+		  AND scope_id IS NOT DISTINCT FROM $3 AND key = $4`,
+		integrationID, scopeType, scopeID, key).Scan(&value)
+	if errors.Is(err, pgxNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read setting %s: %w", key, err)
+	}
+	return value, nil
+}
+
 // DeleteSettingAt removes one override, restoring the inherited value.
 func (r *IntegrationRepo) DeleteSettingAt(ctx context.Context, integrationID uuid.UUID, scopeType string, scopeID *uuid.UUID, key string) error {
 	tag, err := r.s.pool.Exec(ctx, `

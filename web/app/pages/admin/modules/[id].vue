@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** One module: what it is, what it uses, what it holds, and how to remove it. */
-import type { ModuleRow, ModuleStats, SettingSpec } from '~/types/module'
+import type { ModuleRow, ModuleStats } from '~/types/module'
 
 const route = useRoute()
 const { ensureLoaded } = useAuth()
@@ -100,113 +100,6 @@ async function setEnabled(enabled: boolean) {
   error.value = ''
   try {
     await api.put(`/modules/${moduleId.value}/state`, { enabled })
-    await load()
-  } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
-  } finally {
-    busy.value = false
-  }
-}
-
-/**
- * The settings form.
- *
- * One form with one button, not a button per row. A settings page where every line
- * is its own little action reads as a set of separate tasks, and saving four of
- * them means four requests that each reload the page under the operator's hands.
- * Everything is submitted in one request, checked in one go, and either lands or
- * does not.
- */
-const values = reactive<Record<string, string>>({})
-const saved = ref<Record<string, string>>({})
-
-watch(module, (current) => {
-  if (!current) return
-  for (const key of Object.keys(values)) delete values[key]
-  for (const key of Object.keys(saved)) delete saved[key]
-
-  for (const spec of current.manifest?.settings ?? []) {
-    const stored = current.settings?.[spec.key]
-    const value = stored === undefined || stored === null ? '' : String(stored)
-    values[spec.key] = value
-    saved[spec.key] = value
-  }
-}, { immediate: true })
-
-/** What the operator has changed since the last save. */
-const changed = computed(() => {
-  const dirty: Record<string, string> = {}
-  for (const [key, value] of Object.entries(values)) {
-    if (saved[key] !== value) dirty[key] = value
-  }
-  return dirty
-})
-
-const changedCount = computed(() => Object.keys(changed.value).length)
-
-/**
- * Puts one setting back to what the module declared.
- *
- * A separate action from discarding edits, because the two are not the same: this
- * one changes what is stored, and it is what an operator reaches for after
- * setting a value they did not mean.
- */
-async function resetSetting(spec: SettingSpec) {
-  busy.value = true
-  error.value = ''
-  try {
-    await api.del(`/modules/${moduleId.value}/settings?key=${encodeURIComponent(spec.key)}`)
-    await load()
-  } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
-  } finally {
-    busy.value = false
-  }
-}
-
-/** Returns the form to what is actually stored. */
-function revert() {
-  for (const [key, value] of Object.entries(saved)) values[key] = value
-}
-
-/** Coerces the typed string back into what the setting expects. */
-function settingValue(spec: { type: string; secret?: boolean }, raw: string): unknown {
-  if (spec.secret && raw === '********') return undefined
-  switch (spec.type) {
-    case 'bool':
-      return raw === 'true'
-    case 'int': {
-      const parsed = Number.parseInt(raw, 10)
-      return Number.isNaN(parsed) ? raw : parsed
-    }
-    default:
-      return raw
-  }
-}
-
-/**
- * Saves every change in one request.
- *
- * An unchanged secret is left out rather than written back: the API never returns
- * a secret, so submitting the placeholder would store the word "********" as the
- * password.
- */
-async function saveSettings() {
-  const dirty = changed.value
-  if (changedCount.value === 0) return
-
-  const payload: Record<string, unknown> = {}
-  for (const spec of module.value?.manifest?.settings ?? []) {
-    if (!(spec.key in dirty)) continue
-    const value = settingValue(spec, dirty[spec.key])
-    if (value === undefined) continue
-    payload[spec.key] = value
-  }
-
-  busy.value = true
-  error.value = ''
-  try {
-    await api.put(`/modules/${moduleId.value}/settings/bulk`, { values: payload })
     await load()
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
@@ -344,85 +237,19 @@ const storageFraction = computed(() => {
           This module declared no settings.
         </div>
 
-        <form v-else class="card" @submit.prevent="saveSettings">
+        <!-- The same form the group and project pages use.
+             It used to be a copy of it, which is how a type of setting one page could
+             render and the other could not — a list of clusters visible in one place
+             and an unusable empty box in another. One form, three scopes. -->
+        <div v-else class="card">
           <div class="card-body">
-            <p class="muted" style="margin-top: 0">
-              These are the instance-wide values. Group and project scopes override
-              them and are configured on the group or project page.
-            </p>
-
-            <div v-for="spec in module.manifest.settings" :key="spec.key" class="setting-row">
-              <div class="setting-label">
-                <div>{{ spec.label }}</div>
-                <div v-if="spec.description" class="muted">{{ spec.description }}</div>
-              </div>
-
-              <div class="setting-control">
-                <select v-if="spec.type === 'enum'" v-model="values[spec.key]">
-                  <option v-for="option in spec.options" :key="option" :value="option">{{ option }}</option>
-                </select>
-                <!-- A switch, not a list of two. "Enabled or disabled" is one question,
-                     and drawn as a list it takes twice the space and reads as though
-                     there were other answers. -->
-                <button
-                  v-else-if="spec.type === 'bool'"
-                  class="switch"
-                  :class="{ on: values[spec.key] === 'true' }"
-                  type="button"
-                  role="switch"
-                  :aria-checked="values[spec.key] === 'true'"
-                  :title="values[spec.key] === 'true' ? 'On' : 'Off'"
-                  @click="values[spec.key] = values[spec.key] === 'true' ? 'false' : 'true'"
-                >
-                  <span class="knob" />
-                </button>
-                <input
-                  v-else
-                  v-model="values[spec.key]"
-                  :type="spec.secret ? 'password' : 'text'"
-                  :placeholder="spec.default !== undefined ? String(spec.default) : ''"
-                />
-              </div>
-
-              <!-- Shown only when a value has actually been set: an operator looking
-                   at a form that matches the default needs nothing said about it. -->
-              <p
-                v-if="spec.default !== undefined && module.settings?.[spec.key] !== undefined"
-                class="setting-hint"
-              >
-                Set to <span class="mono">{{ String(spec.default) }}</span>
-                <template v-if="String(spec.default) !== String(module.settings?.[spec.key])">
-                  instead of the default.
-                </template>
-                <button
-                  class="link-button"
-                  type="button"
-                  :disabled="busy"
-                  @click="resetSetting(spec)"
-                >
-                  Reset to the default
-                </button>
-              </p>
-            </div>
-
-            <div class="form-actions">
-              <button class="btn btn-primary" type="submit" :disabled="busy || changedCount === 0">
-                {{ busy ? 'Saving…' : 'Save changes' }}
-              </button>
-              <button
-                class="btn"
-                type="button"
-                :disabled="busy || changedCount === 0"
-                @click="revert"
-              >
-                Discard
-              </button>
-              <span class="muted small">
-                {{ changedCount }} unsaved change{{ changedCount === 1 ? '' : 's' }}
-              </span>
-            </div>
+            <ModuleSettingsForm
+              :module="module"
+              scope="instance"
+              note="These are the instance-wide values. Group and project scopes override them and are configured on the group or project page."
+            />
           </div>
-        </form>
+        </div>
       </section>
 
       <section v-else>
@@ -479,65 +306,7 @@ const storageFraction = computed(() => {
   margin: 22px 0 10px;
 }
 
-.setting-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  row-gap: 4px;
-  gap: 12px;
-  align-items: center;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.setting-row:last-of-type {
-  border-bottom: none;
-}
-
-.setting-label {
-  font-size: 13px;
-}
-
-.setting-hint {
-  grid-column: 1 / -1;
-  margin: 0 0 10px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* A link rather than a button: it resets one setting, which reads as an action on
-   that line rather than as a fourth button in a row of controls. */
-.link-button {
-  background: none;
-  border: 0;
-  padding: 0;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 12px;
-  text-decoration: underline;
-}
-
-.link-button:disabled {
-  cursor: default;
-  opacity: 0.5;
-  text-decoration: none;
-}
-
-.form-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-
 .small {
   font-size: 12px;
-}
-
-@media (max-width: 800px) {
-  .setting-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 </style>

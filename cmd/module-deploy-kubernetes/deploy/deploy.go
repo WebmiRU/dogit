@@ -150,14 +150,23 @@ func (e ErrBusy) Error() string {
 type Deployer struct {
 	client  k8s.Client
 	history History
-	log     func(string, ...any)
+	// Log says what is happening as it happens, in the module's own words.
+	Log func(string, ...any)
 	// Now is the clock, so a test can say what time it is.
 	Now func() time.Time
 }
 
+// New builds a deployer over a cluster and a history.
+func New(client k8s.Client, history History, log func(string, ...any)) *Deployer {
+	if log == nil {
+		log = func(string, ...any) {}
+	}
+	return &Deployer{client: client, history: history, Log: log, Now: time.Now}
+}
+
 func (d *Deployer) logf(format string, args ...any) {
-	if d.log != nil {
-		d.log(format, args...)
+	if d.Log != nil {
+		d.Log(format, args...)
 	}
 }
 

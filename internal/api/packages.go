@@ -158,7 +158,7 @@ func (s *Server) issuePackageToken(r *http.Request, user *models.User, integrati
 		return "", err
 	}
 
-	token, _, err := s.mintModuleToken(r, user, integration, projectID, scopes, packageTokenTTL)
+	token, _, err := s.mintModuleToken(r.Context(), user, integration, projectID, scopes, packageTokenTTL)
 	if err != nil {
 		return "", err
 	}

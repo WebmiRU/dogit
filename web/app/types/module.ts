@@ -1,15 +1,34 @@
 /** Shapes of the module API, as the interface sees them. */
 
+/**
+ * What one entry of a "list" setting is made of.
+ *
+ * The fields are described rather than guessed, for two reasons: the form renders from
+ * this instead of inventing inputs, and a secret field inside an entry can be marked so
+ * it is masked on the way out. A password inside a list stored as one piece of JSON
+ * cannot be masked at all — the blob comes back whole or not at all.
+ */
+export interface SettingItems {
+  fields: SettingSpec[]
+  /** What the button to add another entry says, in the module's words. */
+  add_label?: string
+}
+
 export interface SettingSpec {
   key: string
   label: string
-  /** string | bool | int | enum | url */
+  /** string | bool | int | enum | url | list */
   type: string
   default?: unknown
   options?: string[]
   description?: string
   secret?: boolean
+  /** Present when the type is "list": what one row of it is made of. */
+  items?: SettingItems
 }
+
+/** One row of a list setting: its fields, keyed by their own keys. */
+export type SettingEntry = Record<string, unknown>
 
 /**
  * One switch in a module's removal dialog.

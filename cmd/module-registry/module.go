@@ -176,6 +176,10 @@ func handler(core *coreClient, registry *registry) *http.ServeMux {
 	mux.Handle("/packages/delete", cors(registry.deletePackage))
 	// Everything the registry holds, for an administrator's page on the module.
 	mux.Handle("/catalog", cors(registry.catalog))
+	// What a tag currently points at. A deployment asks for this so it can roll out a
+	// digest: a tag can be re-pushed between the build and the rollout, and a
+	// rollback that went back to a tag could return to a different image.
+	mux.Handle("/resolve", cors(resolve(registry)))
 
 	mux.HandleFunc("/-/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

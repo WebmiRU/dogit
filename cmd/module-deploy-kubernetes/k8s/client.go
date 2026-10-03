@@ -15,6 +15,8 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -131,9 +133,15 @@ func Connect(ctx context.Context, access Access) (Client, error) {
 
 // Access is how to reach one cluster.
 type Access struct {
-	// Kubeconfig is a path to a kubeconfig file. Used when the module runs outside the
-	// cluster.
-	Kubeconfig string
+	// Kubeconfig is the contents of a kubeconfig, not a path to one.
+	//
+	// The contents rather than a path because a path is only true until the file
+	// moves. It is deleted during an upgrade, it is a different path in the next
+	// container image, and it needs a volume mount somebody has to remember to add to
+	// a compose file. What the operator configured is the credential itself, and
+	// keeping it means this module deployed anywhere can use it with nothing else
+	// arranged first.
+	Kubeconfig []byte
 	// Context names which context in that file to use. Empty means the current one.
 	Context string
 	// InCluster asks for the ServiceAccount of the pod this is running in.
@@ -150,15 +158,25 @@ func restConfig(access Access) (*rest.Config, error) {
 		}
 		return config, nil
 
-	case access.Kubeconfig != "":
-		rules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: access.Kubeconfig}
-		overrides := &clientcmd.ConfigOverrides{}
+	case len(access.Kubeconfig) > 0:
+		// Straight from the bytes somebody pasted into a settings page.
+		//
+		// The context is honoured by rewriting the document in memory rather than by
+		// editing what is stored: one cluster row can be used by two projects that
+		// name different contexts, and a stored value that one of them had rewritten
+		// would quietly break the other.
+		document := access.Kubeconfig
 		if access.Context != "" {
-			overrides.CurrentContext = access.Context
+			chosen, err := withCurrentContext(document, access.Context)
+			if err != nil {
+				return nil, err
+			}
+			document = chosen
 		}
-		config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+
+		config, err := clientcmd.RESTConfigFromKubeConfig(document)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", access.Kubeconfig, err)
+			return nil, fmt.Errorf("the kubeconfig could not be read: %w", err)
 		}
 		return config, nil
 
@@ -433,4 +451,34 @@ func (c *clusterClient) Revisions(ctx context.Context, namespace, name string) (
 
 	sortRevisions(out)
 	return out, nil
+}
+
+// withCurrentContext returns the kubeconfig with a different context selected.
+//
+// Said rather than assumed: a context that is not in the document is refused with the
+// contexts that are, because the alternative is a connection attempt against whatever
+// happens to be current, and "it connected to the wrong cluster" is not a failure
+// anybody can diagnose from a log line.
+func withCurrentContext(document []byte, context string) ([]byte, error) {
+	parsed, err := clientcmd.Load(document)
+	if err != nil {
+		return nil, fmt.Errorf("the kubeconfig could not be read: %w", err)
+	}
+
+	if _, found := parsed.Contexts[context]; !found {
+		available := make([]string, 0, len(parsed.Contexts))
+		for name := range parsed.Contexts {
+			available = append(available, name)
+		}
+		sort.Strings(available)
+		if len(available) == 0 {
+			return nil, fmt.Errorf(
+				"this kubeconfig has no contexts at all, so there is nothing to connect to")
+		}
+		return nil, fmt.Errorf("this kubeconfig has no context called %q; it has: %s",
+			context, strings.Join(available, ", "))
+	}
+
+	parsed.CurrentContext = context
+	return clientcmd.Write(*parsed)
 }

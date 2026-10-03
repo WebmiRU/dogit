@@ -240,6 +240,31 @@ services:
       DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
       DOGIT_PUBLIC_URL: ${DOGIT_PUBLIC_URL:-}
 
+  # Deploys a project's built image onto a Kubernetes cluster.
+  #
+  # It is a module rather than part of the core because the core has no idea
+  # Kubernetes exists: the day something deploys to Nomad, or unpacks an archive over
+  # SSH, that is another module rather than another branch in the core.
+  #
+  # Clusters are configured in its own settings: a row per place, each either the
+  # contents of a kubeconfig or "this module runs inside that cluster and uses its own
+  # service account". Nothing to mount and nothing to point at a file, so the same
+  # settings work in every deployment.
+  module-deploy-kubernetes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-deploy-kubernetes"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-deploy:8094
+      DOGIT_MODULE_NAME: ${DOGIT_MODULE_DEPLOY_NAME:-kubernetes}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+
   # Reference implementation of the module protocol. It has no product
   # behaviour: it exists to prove that registration, heartbeats and
   # introspection work before the real modules are built.
