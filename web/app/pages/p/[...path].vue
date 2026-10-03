@@ -261,6 +261,10 @@ const tabs = computed(() => {
     // module is there cannot introduce the idea: somebody who has never seen one has
     // no reason to go looking for it.
     { label: 'Notifications', to: `${base}/-/notifications`, match: 'notifications' },
+    // Deployments sit outside the repository for the same reason images do: a commit
+    // is not what runs, and a branch has nothing to say about which cluster it went
+    // to. So no ref on this one either.
+    { label: 'Deploy', to: `${base}/-/deploy`, match: 'deploy' },
     { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
   ]
 })
@@ -448,6 +452,12 @@ async function copyCloneUrl() {
         />
         <ProjectNotifications
           v-else-if="view.name === 'notifications'"
+          :project-id="projectId"
+          :project-path="project.path"
+          :can-manage="canManage"
+        />
+        <ProjectDeploy
+          v-else-if="view.name === 'deploy'"
           :project-id="projectId"
           :project-path="project.path"
           :can-manage="canManage"
