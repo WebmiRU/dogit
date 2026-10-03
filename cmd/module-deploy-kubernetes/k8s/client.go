@@ -282,7 +282,15 @@ func (c *clusterClient) Delete(ctx context.Context, ref Object) error {
 		return err
 	}
 
-	err = resource.Namespace(ref.Namespace).Delete(ctx, ref.Name, metav1.DeleteOptions{})
+	// Background propagation, and the reason is a warning the cluster prints:
+	// deleting a Job keeps its pods by default. Those pods then linger with their
+	// owner gone, holding the names a re-created Job wants for its own — so the next
+	// deploy of the same Job fails on pods that already exist, in a namespace nothing
+	// appears to have touched.
+	background := metav1.DeletePropagationBackground
+	err = resource.Namespace(ref.Namespace).Delete(ctx, ref.Name, metav1.DeleteOptions{
+		PropagationPolicy: &background,
+	})
 	if apierrors.IsNotFound(err) {
 		// Already gone is what was asked for. Saying otherwise would make a deploy fail
 		// over cleanup that had nothing left to do.
