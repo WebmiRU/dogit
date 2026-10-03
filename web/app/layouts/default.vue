@@ -93,8 +93,8 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
         <div v-if="adminMenuOpen" class="menu">
           <NuxtLink to="/admin" class="menu-item">Overview</NuxtLink>
           <NuxtLink to="/admin/modules" class="menu-item">Modules</NuxtLink>
-          <NuxtLink to="/admin/users" class="menu-item menu-item-disabled">Users</NuxtLink>
-          <NuxtLink to="/admin/runners" class="menu-item menu-item-disabled">Runners</NuxtLink>
+          <NuxtLink to="/admin/users" class="menu-item">Users</NuxtLink>
+          <NuxtLink to="/admin/runners" class="menu-item">Runners</NuxtLink>
           <NuxtLink to="/admin/settings" class="menu-item menu-item-disabled">Settings</NuxtLink>
         </div>
       </div>

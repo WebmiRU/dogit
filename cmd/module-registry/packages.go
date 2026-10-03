@@ -27,10 +27,13 @@ type registryRepository struct {
 }
 
 type registryTag struct {
-	Name      string    `json:"name"`
-	Digest    string    `json:"digest"`
-	Size      int64     `json:"size_bytes"`
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+	Size   int64  `json:"size_bytes"`
+	// Created is when the image says it was built, read from its own config. It is
+	// absent when that cannot be read, and the page says so: a date of 1970 is a
+	// claim, and nothing here is willing to make one.
+	Created time.Time `json:"created_at,omitempty"`
 }
 
 // The page cannot be served from the core's database — the core stores hashes, not
@@ -161,6 +164,7 @@ func (registry *registry) describe(ctx context.Context, name string) ([]registry
 		if !seen[digest] {
 			seen[digest] = true
 			entry.Size, _ = manifestSize(ctx, client, name, digest)
+			entry.Created = manifestCreated(ctx, client, name, digest)
 			repository.Size += entry.Size
 		}
 		repository.Tags = append(repository.Tags, entry)

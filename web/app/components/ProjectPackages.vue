@@ -26,6 +26,8 @@ interface ImageTag {
   name: string
   digest: string
   size_bytes: number
+  /** When the image says it was built. Absent when the registry will not say. */
+  created_at?: string
 }
 
 interface ImageRepository {
@@ -150,7 +152,20 @@ async function removeTag(repository: string, tag: string) {
   }
 }
 
-onMounted(load)
+let stopWatching: (() => void) | undefined
+
+onMounted(() => {
+  void load()
+  // Images arrive because something was pushed, which happens on a machine
+  // somebody else is sitting at.
+  stopWatching = watchEvents({
+    kinds: ['pipeline.updated', 'job.updated'],
+    project: () => props.projectPath,
+    onChange: () => void loadImages(),
+  })
+})
+
+onBeforeUnmount(() => stopWatching?.())
 watch(() => props.projectPath, load)
 
 const tagCount = computed(() =>
@@ -175,6 +190,18 @@ const registryHost = computed(() => {
 })
 
 /** Short enough to recognise, long enough to compare. */
+/**
+ * When the image says it was built.
+ *
+ * Taken from the image's own config, which is the moment the build ran — not when
+ * it was pushed, which the registry does not record. An image whose config cannot
+ * be read says so rather than showing a date from nowhere.
+ */
+function builtAt(tag: ImageTag): string {
+  if (!tag.created_at) return 'not reported'
+  return new Date(tag.created_at).toLocaleString()
+}
+
 function shortDigest(digest: string) {
   return digest.replace(/^sha256:/, '').slice(0, 12)
 }
@@ -200,9 +227,6 @@ function shortDigest(digest: string) {
             <span v-else>Nothing pushed yet.</span>
           </p>
         </div>
-        <button class="btn" type="button" :disabled="loadingImages" @click="loadImages">
-          {{ loadingImages ? 'Loading…' : 'Refresh' }}
-        </button>
       </div>
 
       <div v-if="imageError" class="alert alert-error">{{ imageError }}</div>
@@ -237,6 +261,7 @@ function shortDigest(digest: string) {
             <tr>
               <th>Tag</th>
               <th>Digest</th>
+              <th>Built</th>
               <th>Size</th>
               <th v-if="answer.can_delete" />
             </tr>
@@ -245,6 +270,7 @@ function shortDigest(digest: string) {
             <tr v-for="tag in repository.tags" :key="tag.name">
               <td class="mono">{{ tag.name }}</td>
               <td class="mono muted small">{{ shortDigest(tag.digest) }}</td>
+              <td class="muted small">{{ builtAt(tag) }}</td>
               <td class="small">{{ formatBytes(tag.size_bytes) }}</td>
               <td v-if="answer.can_delete" class="right">
                 <button
