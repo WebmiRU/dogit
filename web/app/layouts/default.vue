@@ -45,7 +45,6 @@ interface NavItem {
   icon: string
   /** Prefix used to highlight the entry, so project pages keep Projects lit. */
   match?: string
-  disabled?: boolean
 }
 
 const navItems = computed<NavItem[]>(() => [
@@ -53,7 +52,6 @@ const navItems = computed<NavItem[]>(() => [
   { label: 'Projects', to: '/projects', icon: '▤', match: '/projects' },
   { label: 'Groups', to: '/groups', icon: '◫', match: '/groups' },
   { label: 'Merge requests', to: '/merge-requests', icon: '⑂', match: '/merge-requests' },
-  { label: 'CI/CD', to: '/pipelines', icon: '▷', disabled: true },
   { label: 'Activity', to: '/activity', icon: '≡', match: '/activity' },
 ])
 
@@ -127,23 +125,21 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
 
     <div class="body">
       <aside v-if="user" class="sidebar">
+        <!-- Every item here leads somewhere. A link that does not work yet was
+             promising something the instance cannot do, and the promise was the only
+             thing about it: pipelines are reached from the project they belong to,
+             which is also where a person looking for one actually is. -->
         <nav>
-          <template v-for="item in navItems" :key="item.label">
-            <NuxtLink
-              v-if="!item.disabled"
-              :to="item.to"
-              class="nav-item"
-              :class="{ active: isActive(item) && !(item.match === '/projects' && onRepository) }"
-            >
-              <span class="nav-icon">{{ item.icon }}</span>
-              {{ item.label }}
-            </NuxtLink>
-            <span v-else class="nav-item nav-item-disabled" :title="`${item.label} is not available yet`">
-              <span class="nav-icon">{{ item.icon }}</span>
-              {{ item.label }}
-              <span class="badge badge-soon">soon</span>
-            </span>
-          </template>
+          <NuxtLink
+            v-for="item in navItems"
+            :key="item.label"
+            :to="item.to"
+            class="nav-item"
+            :class="{ active: isActive(item) && !(item.match === '/projects' && onRepository) }"
+          >
+            <span class="nav-icon">{{ item.icon }}</span>
+            {{ item.label }}
+          </NuxtLink>
         </nav>
 
         <div class="sidebar-footer">

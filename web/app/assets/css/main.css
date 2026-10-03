@@ -884,17 +884,6 @@ label {
   opacity: 0.8;
 }
 
-.nav-item-disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.badge-soon {
-  margin-left: auto;
-  font-size: 10px;
-  padding: 0 6px;
-}
-
 .sidebar-footer {
   margin-top: auto;
   padding-top: 16px;
