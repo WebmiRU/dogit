@@ -235,6 +235,63 @@ func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, 
 	return pipeline, nil
 }
 
+// PipelineByID returns one pipeline by its internal id.
+//
+// For the places that hold that id rather than a project's own numbering of it: a
+// runner reporting on a job, for instance, knows which job it was given and not
+// what number the job is to the people watching.
+func (r *PipelineRepo) PipelineByID(ctx context.Context, id int64) (*Pipeline, error) {
+	var pipeline Pipeline
+	err := r.s.pool.QueryRow(ctx, `
+		SELECT id, iid, project_id, ref, sha, source, status, variables, created_by_id,
+		       commit_title, commit_author_name, commit_author_email,
+		       created_at, started_at, finished_at
+		FROM pipelines WHERE id = $1`, id,
+	).Scan(&pipeline.ID, &pipeline.IID, &pipeline.ProjectID, &pipeline.Ref, &pipeline.SHA,
+		&pipeline.Source, &pipeline.Status, &pipeline.Variables, &pipeline.CreatedBy,
+		&pipeline.CommitTitle, &pipeline.CommitAuthorName, &pipeline.CommitAuthorEmail,
+		&pipeline.CreatedAt, &pipeline.StartedAt, &pipeline.FinishedAt)
+	if errors.Is(err, pgxNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read pipeline: %w", err)
+	}
+	return &pipeline, nil
+}
+
+// SetJobBuild writes down what a job produces, when the core learns it.
+//
+// The definition starts out as what the configuration said and becomes what was
+// actually built: a resolved name, once the registry's own rule has been applied.
+func (r *PipelineRepo) SetJobBuild(ctx context.Context, id int64, build map[string]any) error {
+	raw, err := jsonbOf(build)
+	if err != nil {
+		return err
+	}
+	if _, err := r.s.pool.Exec(ctx, `UPDATE jobs SET build = $2 WHERE id = $1`, id, raw); err != nil {
+		return fmt.Errorf("record a job's build: %w", err)
+	}
+	return nil
+}
+
+// UnfinishedJobs is how many jobs of a pipeline are still to run.
+//
+// What a pipeline "finished" means: not that its last job did, but that nothing of
+// it is left waiting. A notification that says a pipeline passed while a second
+// job is still queued is worse than none, and this is the question that decides it.
+func (r *PipelineRepo) UnfinishedJobs(ctx context.Context, pipelineID int64) (int, error) {
+	var count int
+	err := r.s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM jobs
+		WHERE pipeline_id = $1 AND status IN ($2, $3)`,
+		pipelineID, JobPending, JobRunning).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count unfinished jobs: %w", err)
+	}
+	return count, nil
+}
+
 // PipelineByIID returns one pipeline of a project.
 func (r *PipelineRepo) PipelineByIID(ctx context.Context, projectID uuid.UUID, iid int) (*Pipeline, error) {
 	var pipeline Pipeline

@@ -38,20 +38,32 @@ type Notification struct {
 const notificationRetention = 30 * 24 * time.Hour
 
 // Record queues one notification for the modules that asked for notifications.
-func (r *NotificationRepo) Record(ctx context.Context, kind, text, url string,
+// Record queues one notification.
+//
+// The level is stored rather than left for a module to work out from the text: a
+// module that has to read English sentences to decide whether something is worth
+// waking somebody for is a module that will get it wrong in a language its author
+// does not read. The facts travel alongside the sentence in `data`, so a module
+// can ignore the sentence entirely.
+func (r *NotificationRepo) Record(ctx context.Context, kind, text, level string,
 	data map[string]any) (int64, error) {
 
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && len(data) == 0 {
 		return 0, nil
 	}
 	if data == nil {
 		data = map[string]any{}
 	}
 
+	levels := []string{}
+	if level = strings.TrimSpace(level); level != "" {
+		levels = []string{level}
+	}
+
 	var id int64
 	err := r.s.pool.QueryRow(ctx, `
-		INSERT INTO notifications (kind, text, url, data)
-		VALUES ($1, $2, $3, $4) RETURNING id`, kind, text, url, data).Scan(&id)
+		INSERT INTO notifications (kind, text, levels, data)
+		VALUES ($1, $2, $3, $4) RETURNING id`, kind, text, levels, data).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("record notification: %w", err)
 	}
@@ -66,8 +78,14 @@ func (r *NotificationRepo) Record(ctx context.Context, kind, text, url string,
 	return id, nil
 }
 
-// Since returns notifications a module of the given kind prefix has not seen.
-func (r *NotificationRepo) Since(ctx context.Context, kindPrefix string, after int64, limit int) ([]Notification, error) {
+// Since returns what a module has not been told yet.
+//
+// Everything, not a filtered slice: the kinds here are what happened —
+// "job.finished", "pipeline.finished" — and a filter by module kind was filtering
+// on a word that appears in none of them, so modules were handed an empty queue and
+// only ever delivered the test message. What each module does with a notification
+// is its own decision, made from the facts in it.
+func (r *NotificationRepo) Since(ctx context.Context, after int64, limit int) ([]Notification, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -75,8 +93,8 @@ func (r *NotificationRepo) Since(ctx context.Context, kindPrefix string, after i
 	rows, err := r.s.pool.Query(ctx, `
 		SELECT id, kind, text, url, levels, data, created_at
 		FROM notifications
-		WHERE id > $1 AND kind LIKE $2 || '%'
-		ORDER BY id LIMIT $3`, after, kindPrefix, limit)
+		WHERE id > $1
+		ORDER BY id LIMIT $2`, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read notifications: %w", err)
 	}

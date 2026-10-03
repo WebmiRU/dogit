@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -44,7 +45,7 @@ func (s *Server) handleModuleNotifications(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	notes, err := s.store.Notifications().Since(r.Context(), notifyKindPrefix, req.After, 100)
+	notes, err := s.store.Notifications().Since(r.Context(), req.After, 100)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -103,7 +104,7 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 		text = "This is dogit. If you are reading this in Telegram, the module works."
 	}
 
-	if _, err := s.store.Notifications().Record(r.Context(), "test", text, "/admin/modules", nil); err != nil {
+	if _, err := s.store.Notifications().Record(r.Context(), "test", text, "", nil); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -122,14 +123,14 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 //
 // A queue nobody is reading is not an error: most installations have no
 // notification module at all, and the table is pruned on its own.
-func (s *Server) notify(r *http.Request, projectPath, kind, text, url string, data map[string]any) {
-	if strings.TrimSpace(text) == "" {
+func (s *Server) notify(ctx context.Context, kind, text, level string, data map[string]any) {
+	if strings.TrimSpace(text) == "" && len(data) == 0 {
 		return
 	}
 
-	if _, err := s.store.Notifications().Record(r.Context(), kind, text, url, data); err != nil {
+	if _, err := s.store.Notifications().Record(ctx, kind, text, level, data); err != nil {
 		// A notification that could not be queued is worth a line in the log and
-		// nothing more: failing the push because a notification did not fit would
+		// nothing more: failing the build because a notification did not fit would
 		// make the two worse things worse.
 		s.log.Warn("could not queue a notification", "kind", kind, "error", err)
 	}

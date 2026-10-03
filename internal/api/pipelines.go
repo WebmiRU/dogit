@@ -118,9 +118,16 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		"ref":          ref,
 		"sha":          sha,
 	})
-	s.notify(r, project.Path, "pipeline.started", fmt.Sprintf(
-		"Pipeline #%d started on %s in %s", pipeline.IID, ref, project.Path),
-		fmt.Sprintf("/p/%s/-/pipelines/%d", project.Path, pipeline.IID), nil)
+	// Queued with the facts, not with a sentence: what a channel says about this is
+	// that channel's business. The text here is only for a module with nothing of
+	// its own to say.
+	started := notifyContext{
+		Event:    "pipeline.started",
+		Project:  projectContext(project),
+		Pipeline: pipelineContext(pipeline, project, store.PipelineRunning),
+	}
+	s.notifyEvent(r.Context(), "pipeline.started", started,
+		notificationSummary(started, project))
 
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{"pipeline": s.pipelineView(r, pipeline, nil)})
 }
@@ -311,9 +318,13 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 		"job_name":    job.Name,
 		"status":      store.JobPending,
 	})
-	s.notify(r, project.Path, "pipeline.started", fmt.Sprintf(
-		"Retrying %s in pipeline #%d (%s)", job.Name, pipeline.IID, project.Path),
-		fmt.Sprintf("/p/%s/-/pipelines/%d", project.Path, pipeline.IID), nil)
+	retried := notifyContext{
+		Event:    "job.retried",
+		Project:  projectContext(project),
+		Pipeline: pipelineContext(pipeline, project, store.PipelineRunning),
+		Job:      jobContext(job),
+	}
+	s.notifyEvent(r.Context(), "job.retried", retried, notificationSummary(retried, project))
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"job": jobView(r, job)})
 }
@@ -377,6 +388,19 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		answer["registry"] = credentials
+
+		// The name the image was given is written back onto the job.
+		//
+		// It is worked out here rather than kept only in this answer because the job
+		// is the thing that produced the image: everything said about it afterwards
+		// — a notification, a page, an audit — has to be able to name it, and a name
+		// that only exists in a reply the runner will never see is no name at all.
+		if image, ok := credentials["image"].(string); ok && image != "" {
+			job.Build["image"] = image
+			if err := s.store.Pipelines().SetJobBuild(r.Context(), job.ID, job.Build); err != nil {
+				s.log.Warn("record what a job produces", "job", job.ID, "error", err)
+			}
+		}
 	}
 
 	// Where the logs go: object storage, not a file on the machine that ran the
@@ -612,6 +636,14 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The job as it now is, not as it was when it was claimed.
+	//
+	// The copy in hand was read before the finish was recorded, so it still says
+	// "running": a notification about a job that has just passed, saying it is
+	// running, is worse than no notification at all.
+	job.Status = status
+	job.DurationMS = duration.Milliseconds()
+
 	// The key goes with the job. A credential that outlived the build it was made
 	// for would be a credential nobody is watching.
 	if err := s.revokeJobKey(r, job.ProjectID, jobID); err != nil {
@@ -626,28 +658,47 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	// Something changed about a pipeline this project can see, so a page watching
 	// one re-reads it. The event is the signal only: what the pipeline now looks
 	// like is fetched again through the endpoint that already knows how.
+	// Two facts, and they are not the same one. A job finishing says something about
+	// that job; the run is finished only when nothing of it is left waiting, which
+	// on a pipeline of three jobs is a different moment. Confusing the two is how a
+	// "build passed" message goes out while two jobs are still queued.
 	if job.ProjectPath != "" {
 		project, err := s.store.Projects().ByPath(r.Context(), job.ProjectPath)
 		if err == nil {
-			s.publishPipeline(r, project.ID, nil, models.EventPipelineUpdated, map[string]any{
-				"pipeline_id": job.PipelineID,
-				"job_name":    job.Name,
-				"status":      status,
-			})
-		}
+			pipeline, perr := s.store.Pipelines().PipelineByID(r.Context(), job.PipelineID)
+			if perr != nil {
+				// Without the run there is nothing to describe, and a notification
+				// about a job with no pipeline is a link to nowhere.
+				pipeline = nil
+			}
+			if pipeline != nil {
+				s.publishPipeline(r, project.ID, nil, models.EventPipelineUpdated, map[string]any{
+					"pipeline_id": pipeline.ID,
+					"job_name":    job.Name,
+					"status":      status,
+				})
 
-		emoji := "✅"
-		switch status {
-		case store.JobFailed:
-			emoji = "❌"
-		case store.JobCanceled:
-			emoji = "🚫"
-		case store.JobInterrupted:
-			emoji = "⚠️"
+				jobEvent := notifyContext{
+					Event:    "job.finished",
+					Project:  projectContext(project),
+					Pipeline: pipelineContext(pipeline, project, store.PipelineRunning),
+					Job:      jobContext(job),
+					Images:   imageContext(job),
+				}
+				s.notifyEvent(r.Context(), "job.finished", jobEvent,
+					notificationSummary(jobEvent, project))
+
+				if remaining, err := s.store.Pipelines().UnfinishedJobs(r.Context(), pipeline.ID); err == nil && remaining == 0 {
+					final := notifyContext{
+						Event:    "pipeline.finished",
+						Project:  projectContext(project),
+						Pipeline: pipelineContext(pipeline, project, pipelineFinishedStatus(r.Context(), s, pipeline.ID)),
+					}
+					s.notifyEvent(r.Context(), "pipeline.finished", final,
+						notificationSummary(final, project))
+				}
+			}
 		}
-		s.notify(r, job.ProjectPath, "pipeline."+status, fmt.Sprintf(
-			"%s Job %q %s in %s", emoji, job.Name, status, job.ProjectPath),
-			fmt.Sprintf("/p/%s/-/pipelines/%d", job.ProjectPath, job.PipelineID), nil)
 	}
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"job_id": jobID, "status": status})
