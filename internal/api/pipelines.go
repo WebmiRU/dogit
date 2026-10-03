@@ -252,6 +252,59 @@ func (s *Server) handleGetPipeline(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRetryJob puts one job of a finished run back in the queue.
+//
+// Retrying is a separate call rather than a new pipeline because the point is to
+// run the same thing again: a different pipeline would be a different build of a
+// different commit's configuration, and would answer a question nobody asked.
+func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
+	project, _, err := s.projectWithAccess(r, store.ActionTriggerCI)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	pipelineIID, err := strconv.Atoi(pathParam(r, "pipelineIID"))
+	if err != nil {
+		s.writeError(w, r, errBadRequest("a pipeline number is required"))
+		return
+	}
+	jobIID, err := strconv.Atoi(pathParam(r, "jobIID"))
+	if err != nil {
+		s.writeError(w, r, errBadRequest("a job number is required"))
+		return
+	}
+
+	pipeline, err := s.store.Pipelines().PipelineByIID(r.Context(), project.ID, pipelineIID)
+	if err != nil {
+		s.writeError(w, r, errNotFoundf("pipeline %d does not exist", pipelineIID))
+		return
+	}
+
+	job, err := s.store.Pipelines().JobByIID(r.Context(), pipeline.ID, jobIID)
+	if err != nil {
+		s.writeError(w, r, errNotFoundf("job %d does not exist", jobIID))
+		return
+	}
+
+	if job.Status == store.JobRunning || job.Status == store.JobPending {
+		s.writeError(w, r, errBadRequestf("%s is already %s", job.Name, job.Status))
+		return
+	}
+
+	if err := s.store.Pipelines().RetryJob(r.Context(), job.ID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	s.log.Info("job retried", "project", project.Path, "pipeline", pipeline.IID, "job", job.Name)
+	s.notify(r, project.Path, "pipeline.started", fmt.Sprintf(
+		"Retrying %s in pipeline #%d (%s)", job.Name, pipeline.IID, project.Path),
+		fmt.Sprintf("/p/%s/-/pipelines/%d", project.Path, pipeline.IID), nil)
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"job": jobView(r, job)})
+}
+
 // handleClaimJob hands the next pending job to a runner module.
 //
 // The endpoint is module-authenticated, so a runner needs no user token and no

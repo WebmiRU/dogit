@@ -10,7 +10,7 @@
  * Every run has its own page, where the log is — watching a build is what people
  * come here for, and a table that also did that would do neither well.
  */
-import type { ModulePipeline, PipelineStage } from '~/types/pipeline'
+import type { ModulePipeline, PipelineStage, PipelineStageJob } from '~/types/pipeline'
 import { formatDuration, statusClass, statusText } from '~/types/pipeline'
 
 const props = defineProps<{
@@ -92,6 +92,63 @@ async function start() {
     notify(message, { type: 'error', timer: 0 })
   } finally {
     starting.value = false
+  }
+}
+
+/**
+ * Which stage is opened, as "run number:stage name".
+ *
+ * The stage's jobs are not in the list itself: a pipeline of thirty jobs would
+ * make the table unreadable, and the mark in the Stages column says which stages
+ * exist. What a mark opens is a small list of names — enough to know which job to
+ * go to, and to retry the one that failed.
+ */
+const openStage = ref<string | null>(null)
+
+function stageKey(run: ModulePipeline, name: string) {
+  return `${run.iid}:${name}`
+}
+
+/** Which stage this row has open, or null. The row asks for itself rather than
+ *  for the opened stage, so two rows can never show each other's jobs. */
+const openStageRef = ref<ModulePipeline | null>(null)
+const openStageName = ref('')
+
+/** The stage's jobs for one row, or null when nothing of that row is open. */
+function openedStage(run: ModulePipeline) {
+  if (!openStage.value || openStageRef.value !== run) return null
+  return run.stages?.find((one) => one.name === openStageName.value) ?? null
+}
+
+function toggleStage(run: ModulePipeline, name: string) {
+  const key = stageKey(run, name)
+  if (openStage.value === key) {
+    openStage.value = null
+    openStageRef.value = null
+    openStageName.value = ''
+    return
+  }
+  openStage.value = key
+  openStageRef.value = run
+  openStageName.value = name
+}
+
+function closeStage() {
+  openStage.value = null
+  openStageRef.value = null
+  openStageName.value = ''
+}
+
+async function retry(run: ModulePipeline, job: PipelineStageJob) {
+  error.value = ''
+  try {
+    await api.post(`/projects/${encodeURIComponent(props.projectPath)}/pipelines/${run.iid}/jobs/${job.iid}/retry`, {})
+    notify(`Retrying ${job.name} in pipeline #${run.iid}`, { type: 'success' })
+    await load()
+  } catch (caught) {
+    const message = caught instanceof ApiError ? caught.message : 'the request failed'
+    error.value = message
+    notify(message, { type: 'error', timer: 0 })
   }
 }
 
@@ -236,19 +293,43 @@ watch(() => props.projectPath, load)
             </NuxtLink>
           </td>
 
-          <td class="col-stages">
-            <NuxtLink
-              :to="`/p/${projectPath}/-/pipelines/${run.iid}`"
-              class="cell-link stages"
-            >
-              <span
+          <td class="col-stages" @mouseleave="closeStage">
+            <div class="stages">
+              <button
                 v-for="stage in stageMarks(run.stages)"
                 :key="stage.name"
-                class="stage-dot"
-                :class="statusClass[stage.status] ?? 'badge-neutral'"
-                :title="stage.title"
+                type="button"
+                class="stage-mark"
+                :class="[statusClass[stage.status] ?? 'badge-neutral', { open: openStage === stageKey(run, stage.name) }]"
+                :aria-label="stage.title"
+                :aria-expanded="openStage === stageKey(run, stage.name)"
+                @click="toggleStage(run, stage.name)"
               />
-            </NuxtLink>
+            </div>
+
+            <!-- The stage's jobs. Kept out of the row because a pipeline of thirty
+                 jobs would make the table unreadable; what a mark opens is the
+                 names, and a way to run the failed one again. -->
+            <div v-if="openedStage(run)" class="stage-pop">
+              <div class="stage-pop-head">Stage: {{ openedStage(run)!.name }}</div>
+              <div v-for="entry in openedStage(run)!.jobs" :key="entry.iid" class="stage-pop-job">
+                <span class="pop-dot" :class="statusClass[entry.status] ?? 'badge-neutral'" />
+                <NuxtLink
+                  :to="`/p/${projectPath}/-/pipelines/${run.iid}/jobs/${entry.iid}`"
+                  class="pop-name"
+                >
+                  {{ entry.name }}
+                </NuxtLink>
+                <button
+                  type="button"
+                  class="pop-retry"
+                  :title="`Retry ${entry.name}`"
+                  :aria-label="`Retry ${entry.name}`"
+                  :disabled="entry.status === 'running' || entry.status === 'pending'"
+                  @click="retry(run, entry)"
+                >↻</button>
+              </div>
+            </div>
           </td>
         </tr>
       </tbody>
@@ -307,13 +388,19 @@ watch(() => props.projectPath, load)
   vertical-align: top;
 }
 
+/* The stage column holds the only thing on a row that opens over it, so it is
+   the only one allowed out of the cell to do so. */
+.pipeline-table td.col-stages {
+  position: relative;
+}
+
 .pipeline-table tr:hover td {
   background: var(--bg-subtle, rgba(255, 255, 255, 0.03));
 }
 
 .col-status { width: 132px; }
 .col-by { width: 190px; }
-.col-stages { width: 120px; }
+.col-stages { width: 150px; }
 
 /* One column holds one fact, and the fact is the whole cell — no underlines
    under text that is a link, no hover affordance pretending to be a button. */
@@ -394,24 +481,129 @@ td a:hover {
 }
 
 /* Stages as marks in a row, no names: how far it got, read at a glance. The
-   names are on the run's own page, where there is room for them. */
+   names are one click away, where there is room for them. */
 .stages {
-  gap: 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
-.stage-dot {
-  width: 14px;
-  height: 14px;
+/* The mark itself is small — it is a dot in a column of dots — but what takes the
+   click is the padding around it. A fourteen-pixel target has to be hit exactly,
+   and asking somebody to do that to see a job's name is asking too much. */
+.stage-mark {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  position: relative;
+}
+
+.stage-mark::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
   border-radius: 50%;
-  border: 1px solid currentColor;
-  display: inline-block;
+  background: currentColor;
 }
 
-.stage-dot.badge-green { background: #3fb950; }
-.stage-dot.badge-danger { background: #f85149; }
-.stage-dot.badge-warning { background: #d29922; }
-.stage-dot.badge-neutral { background: #6e7681; }
-.stage-dot.badge-private { background: #a371f7; }
+.stage-mark:hover {
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.stage-mark.open {
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.12));
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.stage-mark.badge-green { color: #3fb950; }
+.stage-mark.badge-danger { color: #f85149; }
+.stage-mark.badge-warning { color: #d29922; }
+.stage-mark.badge-neutral { color: #6e7681; }
+.stage-mark.badge-private { color: #a371f7; }
+
+/* The stage's jobs, under the mark that opened them. Positioned rather than in
+   the row so that opening one does not push the table about under the pointer. */
+.stage-pop {
+  position: absolute;
+  z-index: 20;
+  /* Right-aligned to the cell so that a mark near the edge of the table opens
+     its list inwards rather than off the screen: the last stage of a pipeline is
+     the rightmost mark, and its jobs are the ones people look for. */
+  right: 12px;
+  top: 100%;
+  width: 260px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px;
+  background: var(--bg-elevated, #1f2126);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.stage-pop-head {
+  padding: 4px 8px 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stage-pop-job {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.stage-pop-job:hover {
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.05));
+}
+
+.pop-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.pop-dot.badge-green { background: #3fb950; }
+.pop-dot.badge-danger { background: #f85149; }
+.pop-dot.badge-warning { background: #d29922; }
+.pop-dot.badge-neutral { background: #6e7681; }
+.pop-dot.badge-private { background: #a371f7; }
+
+.pop-name {
+  flex: 1;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Run it again. Small, because it is offered on every job and used once. */
+.pop-retry {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.pop-retry:hover:not(:disabled) {
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.1));
+  color: var(--text);
+}
+
+.pop-retry:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
 
 .small {
   font-size: 12px;

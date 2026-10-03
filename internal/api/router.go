@@ -226,6 +226,7 @@ func (s *Server) projectRoutes() chi.Router {
 	projects.Get(base+"/pipelines", s.handleListPipelines)
 	projects.Get(base+"/pipelines/{pipelineIID}", s.handleGetPipeline)
 	projects.Get(base+"/pipelines/{pipelineIID}/jobs/{jobIID}/log", s.handleJobLog)
+	projects.Post(base+"/pipelines/{pipelineIID}/jobs/{jobIID}/retry", s.handleRetryJob)
 
 	projects.Get(base+"/repository/tree", s.handleTree)
 	projects.Get(base+"/repository/file", s.handleFile)

@@ -18,6 +18,14 @@ import { formatDuration, statusClass, statusText } from '~/types/pipeline'
 const props = defineProps<{
   projectPath: string
   runIid: number
+  /**
+   * Which job the address names, or 0 for none.
+   *
+   * The job is in the address because somebody arrived here by clicking its name:
+   * a link that opened some other job's log would be a link that lied, and the
+   * back button would go somewhere the reader was not.
+   */
+  jobIid?: number
   defaultBranch?: string
 }>()
 
@@ -113,7 +121,13 @@ async function load() {
     // the one running, or the last one. Somebody opening a finished run is almost
     // always after a specific job, and the one they want is the one that went
     // wrong.
-    if (selectedIID.value === null || !answer.jobs.some((job) => job.iid === selectedIID.value)) {
+    // The address wins: it is where the reader asked to be. Without one, the run
+    // itself chooses — the job that failed, else the one running, else the last,
+    // which is the job somebody opening a run is almost always after.
+    const asked = props.jobIid ?? 0
+    if (asked && answer.jobs.some((job) => job.iid === asked)) {
+      selectedIID.value = asked
+    } else if (selectedIID.value === null || !answer.jobs.some((job) => job.iid === selectedIID.value)) {
       const failed = answer.jobs.find((job) => job.status === 'failed')
       const live = answer.jobs.find((job) => job.status === 'running')
       const last = answer.jobs[answer.jobs.length - 1]
@@ -179,10 +193,10 @@ async function follow() {
     pipeline.value = answer.pipeline
     jobs.value = answer.jobs
 
-    // If a job started, move to it: the person watching a run is watching the job
-    // that is happening, and making them click it every time it changes would be
-    // asking them to do the page's job.
-    if (selectedJob.value && selectedJob.value.status === 'pending') {
+    // A page opened for a particular job stays on it: somebody who followed a link
+    // to one job's output is reading that job, not browsing the run. Only a page
+    // with no job named follows the run along.
+    if (!props.jobIid && selectedJob.value && selectedJob.value.status === 'pending') {
       const live = answer.jobs.find((job) => job.status === 'running')
       if (live) selectedIID.value = live.iid
     }
@@ -237,10 +251,21 @@ function toggleStage(name: string) {
   foldedStages.value = { ...foldedStages.value, [name]: !foldedStages.value[name] }
 }
 
-/** Shows one job's log. */
+/**
+ * Shows one job's log.
+ *
+ * The address changes with it, so this page can be linked to and the browser's
+ * back button walks the jobs that were read.
+ */
 async function select(job: PipelineJob) {
   selectedIID.value = job.iid
   await fetchLog(job)
+
+  if (props.jobIid !== job.iid) {
+    await navigateTo(`/p/${props.projectPath}/-/pipelines/${props.runIid}/jobs/${job.iid}`, {
+      replace: true,
+    })
+  }
 }
 
 async function rerun() {
@@ -263,6 +288,15 @@ async function rerun() {
 onMounted(async () => {
   await load()
   if (running.value) await follow()
+})
+
+watch(() => props.jobIid, async (asked) => {
+  const iid = asked ?? 0
+  if (!iid || selectedIID.value === iid) return
+  const job = jobByIID.value.get(iid)
+  if (!job) return
+  selectedIID.value = iid
+  await fetchLog(job)
 })
 
 watch(() => props.runIid, async () => {

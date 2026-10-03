@@ -431,6 +431,51 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 	return nil
 }
 
+// RetryJob puts one job back in the queue.
+//
+// The same row, not a copy: a job that is being run again is the same job, and a
+// copy would leave two rows with one name, of which the pipeline counts both. The
+// times and the runner are cleared because what they meant was the last attempt.
+func (r *PipelineRepo) RetryJob(ctx context.Context, id int64) error {
+	_, err := r.s.pool.Exec(ctx, `
+		UPDATE jobs
+		SET status = $2, runner_id = NULL, started_at = NULL, finished_at = NULL, duration_ms = 0
+		WHERE id = $1`, id, JobPending)
+	if err != nil {
+		return fmt.Errorf("retry job: %w", err)
+	}
+
+	// The pipeline is unfinished again: it has work waiting, and until it does the
+	// status it showed was a conclusion about a run that is no longer the last one.
+	if _, err := r.s.pool.Exec(ctx, `
+		UPDATE pipelines
+		SET status = $2, started_at = coalesce(started_at, now()), finished_at = NULL
+		WHERE id = (SELECT pipeline_id FROM jobs WHERE id = $1)`, id, PipelineRunning); err != nil {
+		return fmt.Errorf("retry pipeline: %w", err)
+	}
+	return nil
+}
+
+// JobByIID returns one job of a pipeline by the number the interface shows.
+func (r *PipelineRepo) JobByIID(ctx context.Context, pipelineID int64, iid int) (*Job, error) {
+	var job Job
+
+	err := r.s.pool.QueryRow(ctx, `
+		SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.image, j.script,
+		       j.allow_failure, j.started_at, j.finished_at, j.duration_ms, j.created_at
+		FROM jobs j WHERE j.pipeline_id = $1 AND j.iid = $2`, pipelineID, iid,
+	).Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
+		&job.Image, &job.Script, &job.AllowFailure, &job.StartedAt, &job.FinishedAt,
+		&job.DurationMS, &job.CreatedAt)
+	if errors.Is(err, pgxNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read job: %w", err)
+	}
+	return &job, nil
+}
+
 // pipelineStatusFor is how one finished job leaves the pipeline it is in.
 //
 // A failure is the pipeline's state whatever else is true, and a job that was

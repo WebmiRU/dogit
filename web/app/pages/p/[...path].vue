@@ -407,6 +407,7 @@ async function copyCloneUrl() {
           v-else-if="view.name === 'pipelines' && view.rest[0]"
           :project-path="project.path"
           :run-iid="Number(view.rest[0])"
+          :job-iid="view.rest[1] === 'jobs' && view.rest[2] ? Number(view.rest[2]) : 0"
           :default-branch="project.default_branch"
         />
         <ProjectPipelines
