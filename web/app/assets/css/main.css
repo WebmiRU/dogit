@@ -1112,3 +1112,56 @@ label {
   letter-spacing: 0.5px;
   color: var(--text-muted);
 }
+
+/* A switch for "is it on".
+   A list of two options is not a choice — it is a yes or a no wearing a costume.
+   Wherever a setting is either on or off, it is drawn as this, so that "what is on"
+   can be read down a column without reading a word. */
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 38px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #262b36;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.switch.on {
+  background: #1d4227;
+  border-color: #2ea043;
+}
+
+.switch .knob {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.switch.on .knob {
+  transform: translateX(18px);
+  background: #7ee29a;
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--accent, #58a6ff);
+  outline-offset: 2px;
+}
+
+.btn-small {
+  padding: 3px 9px;
+  font-size: 12px;
+}

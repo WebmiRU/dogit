@@ -59,6 +59,29 @@ type Manifest struct {
 	// that a page can say "one of four slots is free" without the core guessing at
 	// it, and zero means the module did not say — which is not the same as none.
 	Capacity int `json:"capacity,omitempty"`
+
+	// Target says this module can be pointed at more than one place, and which of
+	// its settings make one. A notification module is asked to send to two chats or
+	// to a chat and a mailbox, and one flat set of settings cannot say that; a set
+	// per destination can.
+	Target TargetSpec `json:"target,omitempty"`
+}
+
+// TargetSpec describes a recipient, in the module's own terms.
+//
+// The core stores rows of these settings, inherits them down the instance-group-
+// project hierarchy and shows them in a list, and knows nothing about what any of
+// them mean. What it needs from the module is which settings name a destination —
+// so a list can say "-100…a chat" rather than "row 1" — and a word for what such a
+// row is.
+type TargetSpec struct {
+	// Identify lists the settings that name a recipient, best first: a chat id, an
+	// address. They are shown as the row's name when nobody gave it one.
+	Identify []string `json:"identify,omitempty"`
+	// Title and Description are what the settings page calls this, in the module's
+	// own words — "Which chats", "SMTP servers".
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // RoutingSpec is a module's request to be served on an address of its own.

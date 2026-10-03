@@ -25,13 +25,26 @@ const busy = ref(false)
  */
 const moduleKind = ref('')
 
-const tabNames = computed(() =>
-  ['overview', ...(moduleKind.value === 'registry:docker' ? ['images'] : []), 'settings', 'removal'],
-)
+/**
+ * Which tabs this module has.
+ *
+ * A module that announces things gets one more, called Notify, and it holds the list
+ * of places it writes to — one row per destination. Those rows are what the module's
+ * settings mean here: a Telegram module's settings are the address of one chat, so
+ * asking for "two chats" means asking for two rows rather than for another setting.
+ */
+const tabNames = computed(() => [
+  'overview',
+  ...(moduleKind.value === 'registry:docker' ? ['images'] : []),
+  ...(moduleKind.value.startsWith('notify:') ? ['notify'] : []),
+  'settings',
+  'removal',
+])
 
 const tabTitles: Record<string, string> = {
   overview: 'Overview',
   images: 'Images',
+  notify: 'Notify',
   settings: 'Settings',
   removal: 'Removal',
 }
@@ -310,6 +323,21 @@ const storageFraction = computed(() => {
       <!-- What the module holds. Only a registry has images, and it knows what they
            are: the core stores digests in passing and nothing else. -->
       <ModuleRegistryImages v-else-if="tab === 'images'" />
+
+      <!-- Where this module writes. On the instance, and so inherited by every group
+           and project that has not said otherwise. -->
+      <section v-else-if="tab === 'notify'">
+        <p class="muted">
+          {{ module.manifest?.target?.description
+            || 'One row per place this module writes to. Everything here is inherited by every group and project that has not changed it.' }}
+        </p>
+
+        <NotificationRecipients
+          scope="instance"
+          :only-module="module.id"
+          :default-module="module.id"
+        />
+      </section>
 
       <section v-else-if="tab === 'settings'">
         <div v-if="!module.manifest?.settings?.length" class="card empty">

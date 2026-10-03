@@ -237,6 +237,10 @@ const tabs = computed(() => {
     // and a tag that was never built has no page to show. So this one carries no ref.
     { label: 'Pipelines', to: `${base}/-/pipelines`, match: 'pipelines' },
     { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
+    // Present whether or not anything is installed. A tab that only exists once a
+    // module is there cannot introduce the idea: somebody who has never seen one has
+    // no reason to go looking for it.
+    { label: 'Notifications', to: `${base}/-/notifications`, match: 'notifications' },
     { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
   ]
 })
@@ -422,6 +426,12 @@ async function copyCloneUrl() {
           :project-id="projectId"
           :project-path="project.path"
         />
+        <ProjectNotifications
+          v-else-if="view.name === 'notifications'"
+          :project-id="projectId"
+          :project-path="project.path"
+          :can-manage="canManage"
+        />
         <RepositorySettings
           v-else-if="view.name === 'settings'"
           :project="project"
@@ -431,10 +441,8 @@ async function copyCloneUrl() {
         />
         <div v-else class="card empty">Unknown view “{{ view.name }}”.</div>
       </div>
-    
-</template>
+    </template>
   </div>
-
 </template>
 
 <style>

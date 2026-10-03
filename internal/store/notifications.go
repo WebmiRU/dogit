@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // NotificationRepo is the queue notification modules read from.
@@ -28,6 +30,24 @@ type Notification struct {
 	Levels []string
 	Data   map[string]any
 	At     time.Time
+
+	// TargetID is the recipient row this was addressed to, and TargetValues are its
+	// settings as they were when it was queued.
+	//
+	// The values travel with the record rather than being looked up on delivery: a
+	// module working through a queue written an hour ago must send to the chat the
+	// message was meant for, and a recipient deleted in the meantime must not leave
+	// the message with nowhere to go.
+	TargetID     uuid.UUID
+	TargetValues map[string]any
+}
+
+// NotificationAddress is one recipient, in the shape the queue stores it. It is
+// separate from NotificationTarget because the queue keeps a snapshot rather than a
+// reference: see TargetValues.
+type NotificationAddress struct {
+	ID     uuid.UUID
+	Values map[string]any
 }
 
 // retention is how long notifications stay readable.
@@ -37,8 +57,10 @@ type Notification struct {
 // ever wanted a notification they did not get.
 const notificationRetention = 30 * 24 * time.Hour
 
-// Record queues one notification for the modules that asked for notifications.
 // Record queues one notification.
+//
+// One event may be queued more than once, once per recipient it is meant for: each
+// record then names the row it is for and carries that row's settings with it.
 //
 // The level is stored rather than left for a module to work out from the text: a
 // module that has to read English sentences to decide whether something is worth
@@ -46,7 +68,7 @@ const notificationRetention = 30 * 24 * time.Hour
 // does not read. The facts travel alongside the sentence in `data`, so a module
 // can ignore the sentence entirely.
 func (r *NotificationRepo) Record(ctx context.Context, kind, moduleKind, text, level string,
-	data map[string]any) (int64, error) {
+	data map[string]any, target *NotificationAddress) (int64, error) {
 
 	if strings.TrimSpace(text) == "" && len(data) == 0 {
 		return 0, nil
@@ -60,10 +82,22 @@ func (r *NotificationRepo) Record(ctx context.Context, kind, moduleKind, text, l
 		levels = []string{level}
 	}
 
+	var (
+		targetID     uuid.UUID
+		targetValues = map[string]any{}
+	)
+	if target != nil {
+		targetID = target.ID
+		if target.Values != nil {
+			targetValues = target.Values
+		}
+	}
+
 	var id int64
 	err := r.s.pool.QueryRow(ctx, `
-		INSERT INTO notifications (kind, module_kind, text, levels, data)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`, kind, moduleKind, text, levels, data).Scan(&id)
+		INSERT INTO notifications (kind, module_kind, text, levels, data, target_id, target_values)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6::uuid, '00000000-0000-0000-0000-000000000000'::uuid), $7)
+		RETURNING id`, kind, moduleKind, text, levels, data, targetID, targetValues).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("record notification: %w", err)
 	}
@@ -91,7 +125,7 @@ func (r *NotificationRepo) Since(ctx context.Context, moduleKind string, after i
 	}
 
 	rows, err := r.s.pool.Query(ctx, `
-		SELECT id, kind, text, url, levels, data, created_at
+		SELECT id, kind, text, url, levels, data, created_at, target_id, target_values
 		FROM notifications
 		WHERE id > $1 AND module_kind = $2
 		ORDER BY id LIMIT $3`, after, moduleKind, limit)
@@ -104,7 +138,7 @@ func (r *NotificationRepo) Since(ctx context.Context, moduleKind string, after i
 	for rows.Next() {
 		var note Notification
 		if err := rows.Scan(&note.ID, &note.Kind, &note.Text, &note.URL,
-			&note.Levels, &note.Data, &note.At); err != nil {
+			&note.Levels, &note.Data, &note.At, &note.TargetID, &note.TargetValues); err != nil {
 			return nil, fmt.Errorf("scan notification: %w", err)
 		}
 		notes = append(notes, note)

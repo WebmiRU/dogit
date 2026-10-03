@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -111,7 +112,8 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 
 	// A test goes to the module that pressed the button, whichever it is: the point
 	// is to check that this particular channel works.
-	if _, err := s.store.Notifications().Record(r.Context(), "test", integration.Kind, text, "test", nil); err != nil {
+	if _, err := s.store.Notifications().Record(r.Context(), "test", integration.Kind,
+		text, "test", nil, nil); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -122,101 +124,148 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 	s.writeJSON(w, r, http.StatusAccepted, map[string]any{"queued": true})
 }
 
-// notificationTargets is which notification module is in use for a project.
+// notificationTarget is one recipient, resolved, and the module that delivers it.
+type notificationTarget struct {
+	store.EffectiveTarget
+	// ModuleKind is the module that owns the row. The core does not know what any of
+	// them are; it only needs to know which queue a message belongs in.
+	ModuleKind string
+	// Label is the row's name as somebody would say it out loud: a chat id, an
+	// address. It comes from the settings the module asked about, so it is whatever
+	// the channel calls its destination.
+	Label string
+}
+
+// notificationTargets is who gets told about a project's events.
 //
-// Only ever one. Two modules sending every build to two chats is not a feature,
-// it is the reason people stop reading either — and it happens by accident, from
-// installing a second channel and forgetting the first. So the modules are
-// resolved most-specific-first, and two answering at the same level is an
-// administrator's mistake that is reported rather than guessed at.
-func (s *Server) notificationTargets(ctx context.Context, projectPath string) []*models.Integration {
+// Any number of them, from any number of modules: a deployment may want the shared
+// chat, its own topic and a mailing list, and none of those is any more or less
+// correct than the others. What is not allowed is guessing, so a recipient that
+// cannot make up its mind about its own settings is reported rather than delivered
+// to on a hunch.
+//
+// The rows are inherited from the instance down through the group to the project,
+// and each is switched on or off by the most specific level that said anything.
+func (s *Server) notificationTargets(ctx context.Context, projectPath string) []notificationTarget {
+	project, err := s.store.Projects().ByPath(ctx, projectPath)
+	if err != nil {
+		// Nothing to inherit from without a project, and a project that does not
+		// exist cannot be notified about anyway.
+		s.log.Warn("could not read the project to resolve its recipients", "project", projectPath, "error", err)
+		return nil
+	}
+
 	integrations, err := s.store.Integrations().List(ctx)
 	if err != nil {
 		s.log.Warn("read installed modules", "error", err)
 		return nil
 	}
 
-	var notify []*models.Integration
+	var groupID, projectID *uuid.UUID
+	if project.GroupID != nil {
+		groupID = project.GroupID
+	}
+	projectID = &project.ID
+
+	out := []notificationTarget{}
 	for _, integration := range integrations {
-		if strings.HasPrefix(integration.Kind, notifyKindPrefix) && integration.Enabled {
-			notify = append(notify, integration)
+		if !strings.HasPrefix(integration.Kind, notifyKindPrefix) || !integration.Enabled {
+			continue
 		}
-	}
-	if len(notify) == 0 {
-		return nil
-	}
 
-	project, err := s.store.Projects().ByPath(ctx, projectPath)
-	if err != nil {
-		project = nil
-	}
+		s.adoptLegacySettings(ctx, integration)
 
-	// Most specific scope first: a project that picked a channel has said so over
-	// whatever the instance set for everybody.
-	scopes := []struct {
-		groupID   *uuid.UUID
-		projectID *uuid.UUID
-	}{
-		{nil, nil},
-		{nil, &project.ID},
-	}
-	if project != nil && project.GroupID != nil {
-		scopes = append([]struct {
-			groupID   *uuid.UUID
-			projectID *uuid.UUID
-		}{{project.GroupID, nil}}, scopes...)
-	}
+		resolved, err := s.store.NotificationTargets().Effective(ctx, integration.ID, groupID, projectID)
+		if err != nil {
+			s.log.Warn("read notification recipients", "module", integration.Kind, "error", err)
+			continue
+		}
+		if len(resolved.Stale) > 0 {
+			s.log.Info("notification settings that no longer apply were dropped",
+				"project", projectPath, "module", integration.Kind, "dropped", len(resolved.Stale))
+		}
 
-	for _, scope := range scopes {
-		var chosen []*models.Integration
-		for _, integration := range notify {
-			settings, err := s.store.Integrations().SettingsFor(ctx, integration.ID,
-				scope.groupID, scope.projectID)
-			if err != nil {
+		for _, row := range resolved.Targets {
+			if !row.Enabled {
 				continue
 			}
-			if settingTrue(settings, notifyActiveKey) {
-				chosen = append(chosen, integration)
-			}
-		}
-
-		switch len(chosen) {
-		case 0:
-			continue
-		case 1:
-			return chosen
-		default:
-			kinds := make([]string, 0, len(chosen))
-			for _, one := range chosen {
-				kinds = append(kinds, one.Kind)
-			}
-			s.log.Warn("more than one notification module is switched on; none of them is used",
-				"modules", strings.Join(kinds, ", "),
-				"project", projectPath)
-			return nil
+			out = append(out, notificationTarget{
+				EffectiveTarget: row,
+				ModuleKind:      integration.Kind,
+				Label:           s.targetLabel(integration, row),
+			})
 		}
 	}
-	return nil
+	return out
 }
 
-// notifyActiveKey is the setting that says a module is the one to notify through.
+// adoptLegacySettings moves a module's flat settings into a recipient row.
 //
-// Declared by the module, because it is the module's own question: a channel that
-// has been given an address but not been switched on is configured and idle, which
-// is a normal state during installation.
-const notifyActiveKey = "notify_active"
+// Modules used to keep everything in one set of settings, which cannot express "two
+// chats". An installation that has one set of settings gets one row out of it, once,
+// so that upgrading turns its configuration into a recipient rather than losing it.
+//
+// Only for a module that has not said what a recipient of it is. A module that has —
+// which is every module written against the recipients list — keeps its own
+// recipients, and inventing one beside them would leave somebody receiving the same
+// message twice.
+func (s *Server) adoptLegacySettings(ctx context.Context, integration *models.Integration) {
+	if len(integration.Capabilities.Target.Identify) > 0 || integration.Capabilities.Target.Title != "" {
+		return
+	}
 
-// settingTrue reads a boolean setting, absent meaning no.
-func settingTrue(settings map[string]json.RawMessage, key string) bool {
-	raw, ok := settings[key]
-	if !ok {
-		return false
+	targets := s.store.NotificationTargets()
+	existing, err := targets.At(ctx, integration.ID, store.ScopeInstance, nil)
+	if err != nil || len(existing) > 0 {
+		return
 	}
-	var value bool
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return false
+
+	settings, err := s.store.Integrations().SettingsAt(ctx, integration.ID, store.ScopeInstance, nil)
+	if err != nil {
+		return
 	}
-	return value
+	values := map[string]json.RawMessage{}
+	for _, setting := range settings {
+		values[setting.Key] = setting.Value
+	}
+	if len(values) == 0 {
+		return
+	}
+
+	if _, err := targets.Create(ctx, &store.NotificationTarget{
+		IntegrationID: integration.ID,
+		ScopeType:     store.ScopeInstance,
+		Label:         integration.Name,
+		Values:        values,
+	}); err != nil {
+		s.log.Warn("could not turn the module's settings into a recipient",
+			"module", integration.Kind, "error", err)
+		return
+	}
+	s.log.Info("the module's existing settings became a notification recipient",
+		"module", integration.Kind, "settings", len(values))
+}
+
+// targetLabel is what to call a recipient in a list.
+//
+// The module says which of its settings identify one — a chat id, an address —
+// rather than the core guessing from a column name, because only the module knows
+// what its settings mean. A module that names none gets its own row name.
+func (s *Server) targetLabel(integration *models.Integration, row store.EffectiveTarget) string {
+	if row.Own.Label != "" {
+		return row.Own.Label
+	}
+	for _, key := range integration.Capabilities.Target.Identify {
+		raw, ok := row.Values[key]
+		if !ok {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil && value != "" {
+			return value
+		}
+	}
+	return row.Root.Label
 }
 
 // notify queues a message for whoever asked to be told.
@@ -232,20 +281,125 @@ func (s *Server) notify(ctx context.Context, projectPath, kind, text, level stri
 		return
 	}
 
-	// Addressed to the module that is in use here, if there is one. A test message
-	// is addressed to nobody and read by whoever asked for it.
-	moduleKind := ""
-	if projectPath != "" {
-		for _, target := range s.notificationTargets(ctx, projectPath) {
-			moduleKind = target.Kind
-		}
+	targets := s.notificationTargets(ctx, projectPath)
+	if len(targets) == 0 {
+		// Nobody asked to be told. That is the ordinary state of an installation
+		// with no notification module, so it is not a thing to complain about.
+		return
 	}
 
-	if _, err := s.store.Notifications().Record(ctx, kind, moduleKind, text, level, data); err != nil {
-		// A notification that could not be queued is worth a line in the log and
-		// nothing more: failing the build because a notification did not fit would
-		// make the two worse things worse.
-		s.log.Warn("could not queue a notification", "kind", kind, "error", err)
+	for _, target := range targets {
+		address := target.Address()
+		if _, err := s.store.Notifications().Record(ctx, kind, target.ModuleKind, text,
+			level, data, &address); err != nil {
+			// A message that could not be queued is worth a line in the log and
+			// nothing more: failing the build because a notification did not fit
+			// would make the two worse things worse.
+			s.log.Warn("could not queue a notification",
+				"kind", kind, "recipient", target.Label, "error", err)
+		}
+	}
+}
+
+// handleModuleOwnTarget is how a module records the destination its deployment
+// named for it.
+//
+// A deployment that is given a chat id in its environment is telling dogit where
+// notifications go, and the only honest place for that is a recipient row like any
+// other — otherwise the chat lives in module settings where it cannot be listed,
+// inherited, overridden or switched off. The core takes the row and the label it is
+// given: an administrator is expected to add a second row by hand, so a module
+// cannot quietly take over a list.
+//
+// Only the module's own instance-level rows are writable here. A project or a group
+// belongs to whoever manages it, not to a module that happens to be installed.
+func (s *Server) handleModuleOwnTarget(w http.ResponseWriter, r *http.Request) {
+	if !s.isNotificationModule(r) {
+		s.writeError(w, r, errForbidden("this module does not receive notifications"))
+		return
+	}
+
+	var req struct {
+		Label  string            `json:"label"`
+		Values map[string]string `json:"values"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	req.Label = strings.TrimSpace(req.Label)
+	if req.Label == "" {
+		s.writeError(w, r, errBadRequest("a recipient needs a name"))
+		return
+	}
+
+	integration := integrationFrom(r.Context())
+	values := map[string]json.RawMessage{}
+	for key, value := range req.Values {
+		values[key] = json.RawMessage(strconv.Quote(value))
+	}
+
+	rows, err := s.store.NotificationTargets().At(r.Context(), integration.ID, store.ScopeInstance, nil)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	// Same name, same row: a module restarting must not add a second recipient every
+	// time it comes up.
+	for _, row := range rows {
+		if row.Label != req.Label {
+			continue
+		}
+		merged := map[string]json.RawMessage{}
+		for key, value := range row.Values {
+			merged[key] = value
+		}
+		for key, value := range values {
+			merged[key] = value
+		}
+		row.Values = merged
+		if _, err := s.store.NotificationTargets().Update(r.Context(), &row); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"target": targetView(row)})
+		return
+	}
+
+	created, err := s.store.NotificationTargets().Create(r.Context(), &store.NotificationTarget{
+		IntegrationID: integration.ID,
+		ScopeType:     store.ScopeInstance,
+		Label:         req.Label,
+		Position:      len(rows),
+		Values:        values,
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	s.log.Info("the module recorded the destination its deployment named",
+		"module", integration.Kind, "recipient", req.Label)
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"target": targetView(*created)})
+}
+
+// targetView is one recipient as the interface sees it: its name, whether it is
+// switched on, and its values.
+func targetView(row store.NotificationTarget) map[string]any {
+	values := map[string]any{}
+	for key, raw := range row.Values {
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			continue
+		}
+		values[key] = value
+	}
+	return map[string]any{
+		"id": row.ID, "label": row.Label, "enabled": row.Enabled,
+		"position": row.Position, "values": values, "scope_type": row.ScopeType,
+		"scope_id": row.ScopeID, "overrides": row.Overrides,
 	}
 }
 

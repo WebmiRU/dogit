@@ -116,6 +116,8 @@ func (s *Server) Register(r chi.Router) {
 	// What happened, for the modules that were asked to be told.
 	moduleRoutes.Post("/notifications", s.handleModuleNotifications)
 	moduleRoutes.Post("/notifications/ack", s.handleAcknowledgeNotifications)
+	// A module recording the destination its deployment named for it.
+	moduleRoutes.Put("/targets", s.handleModuleOwnTarget)
 
 	moduleRoutes.Post("/registry/access", s.handleRegistryAccess)
 	moduleRoutes.Post("/registry/resolve", s.handleRegistryResolve)
@@ -153,6 +155,15 @@ func (s *Server) Register(r chi.Router) {
 		// Asks for one message to be sent, so settings can be checked before anything
 		// is relied on.
 		authenticated.Post("/modules/{integrationID}/notify-test", s.handleTestNotification)
+
+		// Where notifications go: the recipients list, at the instance, for a group
+		// or for a project. The same rows at three levels, because a recipient is
+		// settings and settings are inherited.
+		authenticated.Get("/notification-targets", s.handleListNotificationTargets)
+		authenticated.Post("/notification-targets", s.handleCreateNotificationTarget)
+		authenticated.Patch("/notification-targets/{targetID}", s.handleUpdateNotificationTarget)
+		authenticated.Delete("/notification-targets/{targetID}", s.handleDeleteNotificationTarget)
+		authenticated.Post("/notification-targets/{targetID}/test", s.handleTestNotificationTarget)
 		// Every image on the instance, for the registry module's own page. Only an
 		// administrator may ask: the answer spans every project, and a member of one
 		// project has no business knowing what another project's images are called.

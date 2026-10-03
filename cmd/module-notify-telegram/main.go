@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -95,11 +95,13 @@ func main() {
 	if err != nil {
 		log.Printf("module-notify: could not read settings yet: %v", err)
 	}
-	if err := verifyChat(ctx, settings); err != nil {
-		// Not fatal: a chat that has not been set up yet is a thing an administrator
-		// fixes from the page, and a module that refuses to start would show a
-		// registration failure instead of the reason.
-		log.Printf("module-notify: not sending yet: %v", err)
+	// Not checking anything here on purpose. Which chats are configured changes over
+	// time and is answered by the notifications page, and a module that refuses to
+	// start because one chat is not set up would show a registration failure instead
+	// of the reason. A message that cannot be delivered says so in the log and is
+	// offered again by the button on the module page.
+	if len(settings) == 0 {
+		log.Printf("module-notify: no settings yet; nothing will be delivered until a chat is configured")
 	}
 
 	go heartbeat(ctx, core, cfg.interval, register)
@@ -144,21 +146,10 @@ func manifest() map[string]any {
 		"description": "Sends notifications to a Telegram chat",
 		"scopes":      []string{},
 
+		// Everything below makes one destination. A module pointed at two chats is
+		// two rows of these settings, not two settings, and the core keeps them
+		// separate so the two messages do not become one.
 		"settings": []map[string]any{
-			{
-				// The switch that makes this the channel dogit writes to.
-				//
-				// Separate from whether the module is allowed to run at all: a channel
-				// can be configured and idle while somebody installs a second one and
-				// decides between them. Two modules switched on at the same level is
-				// reported rather than guessed at — every build going to two chats is
-				// how people stop reading either.
-				"key":         "notify_active",
-				"label":       "Send notifications",
-				"type":        "bool",
-				"default":     false,
-				"description": "Whether this module is the one notifications go through. Only one may be switched on at a level; a project can override what the group or the instance set.",
-			},
 			{
 				"key":         "bot_token",
 				"label":       "Bot token",
@@ -178,21 +169,14 @@ func manifest() map[string]any {
 				"type":        "string",
 				"description": "Optional. For a group with topics on, which one these go to.",
 			},
-			{
-				"key":         "events",
-				"label":       "What to send",
-				"type":        "enum",
-				"options":     []string{"everything", "pipelines", "merge_requests", "none"},
-				"default":     "everything",
-				"description": "Which events are worth a message. Testing messages are sent whatever this says.",
-			},
-			{
-				"key":         "send_test",
-				"label":       "Test button",
-				"type":        "bool",
-				"default":     true,
-				"description": "Show a button on the module page that sends one message, so the settings can be checked before anything is relied on.",
-			},
+		},
+
+		// What a row in the recipients list is, in this module's words: a chat id
+		// names one, and the core is told so rather than guessing from a column name.
+		"target": map[string]any{
+			"identify":    []string{"chat_id", "thread_id"},
+			"title":       "Which chats",
+			"description": "One row per chat this bot writes to. The same bot can write to as many as you add, and every row is a separate message.",
 		},
 	}
 }
@@ -205,21 +189,55 @@ type notification struct {
 	URL    string         `json:"url,omitempty"`
 	Levels []string       `json:"levels,omitempty"`
 	Data   map[string]any `json:"data,omitempty"`
+
+	// Where this particular message is for. The core can be pointed at more than
+	// one chat and says so per record, because the core is what knows which of them
+	// this event was meant for.
+	TargetID     string         `json:"target_id,omitempty"`
+	TargetValues map[string]any `json:"target_values,omitempty"`
+}
+
+// recipient is where one record goes: the recipient row the core addressed it to,
+// on top of the module's own settings.
+//
+// The bot is the module and the chat is the recipient, so the token is a property of
+// this module and the chat id is a property of the row. That split is why a token
+// written once covers every chat the bot writes to, and why a project can point its
+// own row at another chat without having to know the token at all.
+//
+// A record that names no row falls back entirely to the module's settings: a
+// message queued before recipients existed names no row, and a queue written an hour
+// ago must go to the chat it was meant for even if the settings have changed since.
+func recipient(note notification, settings map[string]any) map[string]any {
+	out := make(map[string]any, len(settings)+len(note.TargetValues))
+	for key, value := range settings {
+		out[key] = value
+	}
+	for key, value := range note.TargetValues {
+		out[key] = value
+	}
+	return out
 }
 
 // seed writes what the deployment knows and the module has not been told yet.
 //
-// The bot token comes from the environment because a secret in a settings page is a
-// secret somebody pastes into a chat. The chat is found by looking at what the bot
-// has been sent: a bot cannot message a group it has not been added to, so the
-// group has to have spoken first, and the only honest way to find it is to read
-// what Telegram says.
+// The bot token is a setting: it is the bot, and one bot serves every chat. The chat
+// is a recipient, because a destination is a row like any other — listed,
+// inherited, switched off by a project that does not want it. A deployment that is
+// given a chat in its environment gets that one row and no others: adding another is
+// somebody's decision, made where they can see what it will do.
+//
+// The chat is found by looking at what the bot has been sent: a bot cannot message a
+// group it has not been added to, so the group has to have spoken first, and the only
+// honest way to find it is to read what Telegram says.
 func seed(ctx context.Context, core *coreClient) (bool, error) {
-	_ = core.integrationID
-	values := map[string]any{}
+	wrote := false
 
 	if token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")); token != "" {
-		values["bot_token"] = token
+		if _, err := writeSettings(ctx, core, map[string]any{"bot_token": token}); err != nil {
+			return wrote, err
+		}
+		wrote = true
 	}
 
 	chatID := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID"))
@@ -232,24 +250,57 @@ func seed(ctx context.Context, core *coreClient) (bool, error) {
 			chatID = discovered
 		}
 	}
-	if chatID != "" {
-		values["chat_id"] = chatID
+	if chatID == "" {
+		return wrote, nil
 	}
 
-	if len(values) == 0 {
-		return false, errors.New("nothing to seed")
+	values := map[string]string{"chat_id": chatID}
+	if thread := strings.TrimSpace(os.Getenv("TELEGRAM_THREAD_ID")); thread != "" {
+		values["thread_id"] = thread
 	}
 
+	body, err := json.Marshal(map[string]any{
+		// The name is the chat itself, so a deployment that changes its chat gets a
+		// second row an administrator can look at and delete, rather than a row that
+		// silently changed what every inherited message goes to.
+		"label":  "chat " + chatID,
+		"values": values,
+	})
+	if err != nil {
+		return wrote, err
+	}
+
+	// Written through the module's own endpoint: this is the module recording what it
+	// was told, not an administrator configuring it.
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		core.baseURL+"/api/v1/module/targets", bytes.NewReader(body))
+	if err != nil {
+		return wrote, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+core.token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return wrote, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return wrote, fmt.Errorf("core said %d", response.StatusCode)
+	}
+	return true, nil
+}
+
+// writeSettings records what the module's own deployment knows.
+func writeSettings(ctx context.Context, core *coreClient, values map[string]any) (bool, error) {
 	body, err := json.Marshal(map[string]any{"values": values})
 	if err != nil {
 		return false, err
 	}
 
-	// Written through the module's own endpoint: this is the module recording what
-	// it was told, not an administrator configuring it.
 	request, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		core.baseURL+"/api/v1/module/settings",
-		strings.NewReader(string(body)))
+		core.baseURL+"/api/v1/module/settings", bytes.NewReader(body))
 	if err != nil {
 		return false, err
 	}
@@ -352,15 +403,12 @@ func poll(ctx context.Context, core *coreClient, settings map[string]any) {
 			continue
 		}
 
+		// Every record is sent to the place it names. What is worth saying at all is
+		// decided by the pipeline that said it, not here: a module that filtered
+		// events would be deciding on the project's behalf, from a list it would have
+		// to keep up to date.
 		for _, note := range answer.Notifications {
-			// The test button sends whether or not the module is configured to send
-			// anything: somebody is checking that it works, and filtering their check
-			// by their own settings is a small betrayal.
-			if note.Kind != "test" && !wanted(note, settings) {
-				cursor = max64(cursor, note.ID)
-				continue
-			}
-			if err := send(ctx, settings, note); err != nil {
+			if err := send(ctx, recipient(note, settings), note); err != nil {
 				log.Printf("module-notify: could not send: %v", err)
 				continue
 			}
@@ -379,26 +427,6 @@ func poll(ctx context.Context, core *coreClient, settings map[string]any) {
 			log.Printf("module-notify: could not record progress: %v", err)
 		}
 	}
-}
-
-func wanted(note notification, settings map[string]any) bool {
-	switch eventFilter(settings) {
-	case "none":
-		return false
-	case "pipelines":
-		return strings.HasPrefix(note.Kind, "pipeline") || strings.HasPrefix(note.Kind, "job")
-	case "merge_requests":
-		return strings.HasPrefix(note.Kind, "merge_request")
-	default:
-		return true
-	}
-}
-
-func eventFilter(settings map[string]any) string {
-	if value, ok := settings["events"].(string); ok && value != "" {
-		return value
-	}
-	return "everything"
 }
 
 // botTokenOf says which token to call Telegram with.
@@ -427,6 +455,10 @@ const redactedSetting = "********"
 // The text is HTML with the parts that came from a branch or a commit name escaped,
 // because those are things people push: an unescaped "&" in a tag name is a
 // notification that fails to send with a message about parse errors.
+// send delivers one record to the recipient it names.
+//
+// The settings it is given are that recipient's, already resolved by the core: this
+// module knows how Telegram works and where to send, not who should be told.
 func send(ctx context.Context, settings map[string]any, note notification) error {
 	botToken := botTokenOf(settings)
 	chatID, _ := settings["chat_id"].(string)
@@ -537,50 +569,6 @@ func callTelegram(ctx context.Context, botToken, method string, payload map[stri
 		}
 		return fmt.Errorf("telegram said %d: %s", response.StatusCode, problem.Description)
 	}
-	return nil
-}
-
-// verifyChat checks that the bot can actually post, before anything is relied on.
-func verifyChat(ctx context.Context, settings map[string]any) error {
-	botToken := botTokenOf(settings)
-	chatID, _ := settings["chat_id"].(string)
-	if botToken == "" || chatID == "" {
-		return errors.New("the bot token or the chat id is not set yet")
-	}
-
-	// getChat does not post anything, so checking where messages will land does not
-	// itself leave a test message behind.
-	var answer struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-		Result      struct {
-			ID    int64  `json:"id"`
-			Title string `json:"title"`
-			Type  string `json:"type"`
-		} `json:"result"`
-	}
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://api.telegram.org/bot"+botToken+"/getChat?chat_id="+url.QueryEscape(chatID), nil)
-	if err != nil {
-		return err
-	}
-
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-
-	if err := json.NewDecoder(response.Body).Decode(&answer); err != nil {
-		return err
-	}
-	if !answer.OK {
-		return fmt.Errorf("telegram: %s", answer.Description)
-	}
-
-	log.Printf("module-notify: messages go to %s (%s, id %d)",
-		answer.Result.Title, answer.Result.Type, answer.Result.ID)
 	return nil
 }
 

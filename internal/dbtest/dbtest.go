@@ -122,6 +122,24 @@ func NewProject(t *testing.T, st *store.Store, prefix string, groupID *uuid.UUID
 	return project
 }
 
+// NewGroup creates a group and removes it when the test ends.
+//
+// Groups hold projects of their own, so anything about how a group passes settings
+// down to them needs one.
+func NewGroup(t *testing.T, st *store.Store, prefix string) *models.Group {
+	t.Helper()
+
+	group, err := st.Groups().Create(context.Background(), Unique(prefix), prefix)
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = st.Pool().Exec(context.Background(), `DELETE FROM groups WHERE id = $1`, group.ID)
+	})
+	return group
+}
+
 // GrantRole gives a user a role on a project.
 func GrantRole(t *testing.T, st *store.Store, projectID, userID uuid.UUID, level int, name string) {
 	t.Helper()
