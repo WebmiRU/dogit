@@ -321,6 +321,13 @@ func isNameConflict(stderr string) bool {
 		strings.Contains(stderr, "is already in use")
 }
 
+// Available reports whether this machine can run a job at all.
+//
+// A runner exposes it on its readiness endpoint, because "ready" is a claim: a
+// container that says it is ready while its Docker is down will be handed work it
+// cannot start.
+func (d *Docker) Available(ctx context.Context) error { return d.available(ctx) }
+
 func (d *Docker) available(ctx context.Context) error {
 	if _, err := exec.LookPath(d.binary); err != nil {
 		return fmt.Errorf("runner: docker binary %q is not available: %w", d.binary, err)

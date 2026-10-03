@@ -18,6 +18,7 @@ import (
 	"github.com/ewolf/dogit/internal/events"
 	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/objects"
 	"github.com/ewolf/dogit/internal/repos"
 	"github.com/ewolf/dogit/internal/store"
 )
@@ -30,14 +31,21 @@ type Server struct {
 	git    *gitx.Git
 	repos  *repos.Service
 	events *events.Bus
+	// objects holds job logs and artifacts. It lives here rather than being read
+	// from the database because a runner on another machine streams its output to
+	// this process, and the bytes belong somewhere a browser can fetch them from.
+	objects objects.Store
 }
 
 // New creates the API server.
 func New(
 	cfg *config.Config, log *slog.Logger, st *store.Store,
-	git *gitx.Git, repoSvc *repos.Service, bus *events.Bus,
+	git *gitx.Git, repoSvc *repos.Service, bus *events.Bus, objectStore objects.Store,
 ) *Server {
-	return &Server{cfg: cfg, log: log, store: st, git: git, repos: repoSvc, events: bus}
+	return &Server{
+		cfg: cfg, log: log, store: st, git: git,
+		repos: repoSvc, events: bus, objects: objectStore,
+	}
 }
 
 // contextUserKey and contextIntegrationKey hold the authenticated caller on the
@@ -94,6 +102,11 @@ func (s *Server) Register(r chi.Router) {
 	moduleRoutes.Post("/heartbeat", s.handleModuleHeartbeat)
 	moduleRoutes.Get("/me", s.handleModuleSelf)
 	moduleRoutes.Get("/settings", s.handleModuleSelfSettings)
+	// What a runner module is for: taking work, and saying what happened to it.
+	moduleRoutes.Post("/runner/claim", s.handleClaimJob)
+	moduleRoutes.Post("/runner/jobs/{jobID}/log", s.handleAppendJobLog)
+	moduleRoutes.Post("/runner/jobs/{jobID}/finish", s.handleFinishJob)
+
 	moduleRoutes.Post("/registry/access", s.handleRegistryAccess)
 	moduleRoutes.Post("/registry/resolve", s.handleRegistryResolve)
 	moduleRoutes.Post("/registry/authenticate", s.handleRegistryAuthenticate)
@@ -197,6 +210,13 @@ func (s *Server) projectRoutes() chi.Router {
 	// them and hands out a short credential the registry module recognises, and the
 	// page then asks the module at the address it published.
 	projects.Get(base+"/packages", s.handleProjectImages)
+
+	// Pipelines. A run is a run whether it came from a push or from a person, and
+	// both end up here.
+	projects.Post(base+"/pipelines", s.handleCreatePipeline)
+	projects.Get(base+"/pipelines", s.handleListPipelines)
+	projects.Get(base+"/pipelines/{pipelineIID}", s.handleGetPipeline)
+	projects.Get(base+"/pipelines/{pipelineIID}/jobs/{jobIID}/log", s.handleJobLog)
 
 	projects.Get(base+"/repository/tree", s.handleTree)
 	projects.Get(base+"/repository/file", s.handleFile)
