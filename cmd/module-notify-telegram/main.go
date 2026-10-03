@@ -187,6 +187,14 @@ func manifest() map[string]any {
 }
 
 // notification is one thing that happened, as the core describes it.
+// notificationAnswer is what the core hands over.
+type notificationAnswer struct {
+	Notifications []notification `json:"notifications"`
+	Cursor        int64          `json:"cursor"`
+	// ResumeFrom is where this module was last time it asked.
+	ResumeFrom int64 `json:"resume_from"`
+}
+
 type notification struct {
 	ID     int64          `json:"id"`
 	Kind   string         `json:"kind"`
@@ -387,7 +395,13 @@ func discoverChat(ctx context.Context, botToken, wanted string) (string, error) 
 // again from now: a notification system that loses what happened while it was
 // broken is worse than no notification system, because it is trusted.
 func poll(ctx context.Context, core *coreClient, settings map[string]any) {
-	cursor := int64(0)
+	// Starting at zero would mean a redeploy replays the whole queue, which is how a
+	// notification channel ends up sending the same build three times in an evening.
+	// The core remembers what this module was told, so the first poll asks from there.
+	cursor := core.resumeFrom(ctx)
+	if cursor > 0 {
+		log.Printf("module-notify: resuming after record %d", cursor)
+	}
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -431,11 +445,9 @@ func poll(ctx context.Context, core *coreClient, settings map[string]any) {
 			cursor = max64(cursor, note.ID)
 		}
 
-		// Remember where we were even on a run with nothing to send, so a restart
-		// does not ask for everything since the beginning of time.
-		if answer.Cursor > cursor {
-			cursor = answer.Cursor
-		}
+		// The batch's last id is not proof that the batch was sent: taking it would
+		// step over a record whose delivery failed, and a gap is a worse lie than a
+		// repeat. The cursor moved only over what went out.
 		if err := core.acknowledge(ctx, cursor); err != nil {
 			// Progress is not recorded. The next poll asks again and re-sends what was
 			// already delivered, which is better than skipping a message because a
@@ -715,19 +727,24 @@ func (c *coreClient) settings(ctx context.Context) (map[string]any, error) {
 }
 
 // notifications is what the core has that this module has not sent yet.
-func (c *coreClient) notifications(ctx context.Context, after int64) (struct {
-	Notifications []notification `json:"notifications"`
-	Cursor        int64          `json:"cursor"`
-}, error) {
-	var answer struct {
-		Notifications []notification `json:"notifications"`
-		Cursor        int64          `json:"cursor"`
-	}
+func (c *coreClient) notifications(ctx context.Context, after int64) (notificationAnswer, error) {
+	var answer notificationAnswer
 	if err := c.post(ctx, "/api/v1/module/notifications",
 		map[string]any{"after": after}, &answer); err != nil {
 		return answer, err
 	}
 	return answer, nil
+}
+
+// resumeFrom asks where this module was last time it looked, so a restart carries
+// on instead of starting again. A core that has never been asked answers zero, which
+// is the right answer for a module being installed for the first time.
+func (c *coreClient) resumeFrom(ctx context.Context) int64 {
+	answer, err := c.notifications(ctx, 0)
+	if err != nil {
+		return 0
+	}
+	return answer.ResumeFrom
 }
 
 func (c *coreClient) acknowledge(ctx context.Context, cursor int64) error {

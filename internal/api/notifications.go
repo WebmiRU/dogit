@@ -49,9 +49,22 @@ func (s *Server) handleModuleNotifications(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	kind := integrationFrom(r.Context()).Kind
+
 	// Only what was meant for this module. Reading everything would turn a second
 	// installed channel into a second copy of every message.
-	notes, err := s.store.Notifications().Since(r.Context(), integrationFrom(r.Context()).Kind, req.After, 100)
+	notes, err := s.store.Notifications().Since(r.Context(), kind, req.After, 100)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	// Where this module got to, so a restart resumes instead of starting again.
+	//
+	// Without it every redeploy replays the whole queue: a module that cannot say
+	// what it has already sent will send all of it again, and the messages a person
+	// has seen arrive twice are the reason people stop trusting a notifier.
+	resume, err := s.store.Notifications().Cursor(r.Context(), kind)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -60,6 +73,7 @@ func (s *Server) handleModuleNotifications(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"notifications": viewsOf(notes),
 		"cursor":        cursorAfter(notes),
+		"resume_from":   resume,
 	})
 }
 
@@ -81,7 +95,11 @@ func (s *Server) handleAcknowledgeNotifications(w http.ResponseWriter, r *http.R
 		s.writeError(w, r, err)
 		return
 	}
-	if err := s.store.Notifications().Acknowledge(r.Context(), notifyKindPrefix, req.Cursor); err != nil {
+	// Keyed by the module's own kind: one shared cursor would mean the second
+	// channel to be installed is told about nothing, because the first one has
+	// already read past it.
+	if err := s.store.Notifications().Acknowledge(r.Context(),
+		integrationFrom(r.Context()).Kind, req.Cursor); err != nil {
 		s.writeError(w, r, err)
 		return
 	}

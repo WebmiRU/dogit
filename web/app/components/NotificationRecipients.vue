@@ -355,7 +355,11 @@ onMounted(load)
                 <span class="knob" />
               </button>
             </td>
-            <td class="actions">
+            <td>
+              <!-- The buttons live in a div inside the cell rather than being the
+                   cell: a table cell styled as a flex row stops being a table cell,
+                   and the row's edges stop lining up with the row above it. -->
+              <div class="actions">
               <button class="btn btn-small" type="button" :disabled="busy === row.id" @click="test(row)">
                 Test
               </button>
@@ -385,6 +389,7 @@ onMounted(load)
               >
                 Delete
               </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -476,7 +481,11 @@ onMounted(load)
   border-bottom: 1px solid var(--border);
 }
 
+/* Height 1px on the cell is what makes every cell in a row take the height of the
+   tallest one — which is the whole of what keeps a row of buttons from pushing its
+   own border out of line with the row above. */
 .table td {
+  height: 1px;
   padding: 10px 12px;
   vertical-align: middle;
   border-bottom: 1px solid var(--border);
@@ -490,6 +499,8 @@ onMounted(load)
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
   white-space: nowrap;
 }
 
