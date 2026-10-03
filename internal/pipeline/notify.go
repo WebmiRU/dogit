@@ -221,11 +221,8 @@ func parseNotifyEntry(node *yaml.Node) (NotifyEntry, error) {
 		}
 	}
 
-	// An entry with nothing to say is not an announcement. It is more likely a
-	// half-written one, and sending an empty message teaches people that messages
-	// can be empty.
-	if strings.TrimSpace(entry.Title) == "" && strings.TrimSpace(entry.Text) == "" {
-		return entry, fmt.Errorf("a notify entry has neither a title nor text, so it has nothing to say")
-	}
+	// An entry with neither a title nor text is not a half-written one: it says
+	// "announce this, and let whoever it goes to say it". The recipient's own wording
+	// fills the gap, and where it does not, the core's line of facts does.
 	return entry, nil
 }

@@ -142,27 +142,69 @@ func (s *Server) notifyEvent(ctx context.Context, kind string, context notifyCon
 	if !announces {
 		return
 	}
-	s.announce(ctx, kind, entry, context, text)
+
+	s.announceTo(ctx, entry, context, text)
 }
 
-// announce writes one notification, in the words the pipeline asked for.
+// announceTo writes what a pipeline said, once per recipient, each in that recipient's
+// own words.
 //
-// Split out from the decision so that the writing is testable on its own: whether a
-// run speaks is a question about its configuration, and what it says is a question
-// about the template, and neither should only be reachable through a live database.
-func (s *Server) announce(ctx context.Context, kind string, entry pipelineNotifyEntry,
+// Split out from the decision so that the writing can be reached without a
+// configuration on disk: whether a run speaks is a question about its file, and what
+// it says is a question about these words, and neither should only be testable
+// together.
+func (s *Server) announceTo(ctx context.Context, entry pipelineNotifyEntry,
 	context notifyContext, fallback string) {
+
+	project, _ := context.Project["path"].(string)
+	targets := s.notificationTargets(ctx, project)
+
+	// Filled in per recipient, because what a recipient says when the pipeline said
+	// nothing is a property of the recipient. Two rows can describe the same build in
+	// two different ways, and a message that arrived in the wrong words is a message
+	// somebody has to read twice.
+	for _, target := range targets {
+		s.deliver(ctx, target, context, target.withDefaults(entry, fallback))
+	}
+}
+
+// withDefaults is what this recipient says when the pipeline said nothing itself.
+//
+// A default fills in and never speaks first: a run whose configuration says nothing is
+// still silent, and these two settings change what a message looks like rather than
+// whether there is one. They are the module's own — its wording, in its formatting —
+// which is why they live on the recipient rather than in the core.
+func (t notificationTarget) withDefaults(entry pipelineNotifyEntry, fallback string) pipelineNotifyEntry {
+	out := entry
+
+	if out.Title == "" {
+		out.Title = t.value("default_title")
+	}
+	if out.Text == "" {
+		if own := t.value("default_text"); own != "" {
+			out.Text = own
+		} else {
+			out.Text = fallback
+		}
+	}
+	return out
+}
+
+// deliver writes one notification to one recipient.
+func (s *Server) deliver(ctx context.Context, target notificationTarget,
+	context notifyContext, entry pipelineNotifyEntry) {
 
 	project, _ := context.Project["path"].(string)
 	level := notificationLevel(context)
 
-	title, text, missing := renderNotification(entry, context, fallback)
+	title, text, missing := renderNotification(entry, context, "")
 	if len(missing) > 0 {
 		// Not sent, and said out loud. A message with a hole in it reads as delivered
 		// while telling nobody anything, and the reason belongs where the author of the
 		// template will look.
-		s.log.Error("a notification was not sent because its template asks for something that does not exist",
-			"project", project, "event", kind, "unknown", strings.Join(missing, ", "))
+		s.log.Error("a notification was not sent because its wording asks for something that does not exist",
+			"project", project, "event", context.Event, "recipient", target.Label,
+			"unknown", strings.Join(missing, ", "))
 		return
 	}
 
@@ -171,7 +213,12 @@ func (s *Server) announce(ctx context.Context, kind string, entry pipelineNotify
 		facts["title"] = title
 	}
 
-	s.notify(ctx, project, kind, text, level, facts)
+	address := target.Address()
+	if _, err := s.store.Notifications().Record(ctx, context.Event, target.ModuleKind,
+		text, level, facts, &address); err != nil {
+		s.log.Warn("could not queue a notification",
+			"event", context.Event, "recipient", target.Label, "error", err)
+	}
 }
 
 // pipelineAnnounces reads what a pipeline said it would announce.

@@ -26,6 +26,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/ewolf/dogit/internal/notifymarkup"
 )
 
 const (
@@ -170,6 +172,24 @@ func manifest() map[string]any {
 				"type":        "string",
 				"description": "Optional. For a group with topics on, which one these go to.",
 			},
+			{
+				// What this recipient says when the pipeline had nothing of its own to
+				// say. It fills in and it never speaks first: a run whose configuration
+				// says nothing is still silent.
+				"key":   "default_title",
+				"label": "Default title",
+				"type":  "string",
+				"description": "Used when a pipeline announces itself without writing a title. " +
+					"${…} is filled in as usual.",
+			},
+			{
+				"key":   "default_text",
+				"label": "Default text",
+				"type":  "string",
+				"description": "Used when a pipeline announces itself without writing any text. " +
+					"Bold, _italic_, `code` and links are understood and translated; " +
+					"${…} is filled in as usual.",
+			},
 		},
 
 		// What a row in the recipients list is, in this module's words: a chat id
@@ -178,7 +198,7 @@ func manifest() map[string]any {
 			// The token is deliberately not here. It is the bot, and one bot serves
 			// every chat; a repository given a row of its own must never be shown a
 			// secret that belongs to the module.
-			"settings":    []string{"chat_id", "thread_id"},
+			"settings":    []string{"chat_id", "thread_id", "default_title", "default_text"},
 			"identify":    []string{"chat_id", "thread_id"},
 			"title":       "Which chats",
 			"description": "One row per chat this bot writes to. The same bot can write to as many as you add, and every row is a separate message.",
@@ -552,31 +572,85 @@ func send(ctx context.Context, settings map[string]any, note notification) error
 
 // render is what one message looks like here.
 //
-// The title is the pipeline's own, when it wrote one: somebody who wrote "The
+// The title is the pipeline's own when it wrote one: somebody who wrote "The
 // deployment failed" in their configuration means that, and this module has no
-// business improving on it. Without one, the title is composed here from the facts,
-// because a Telegram message that begins mid-sentence is a message nobody reads.
+// business improving on it. Without one it is composed here from the facts, because a
+// Telegram message that begins mid-sentence is a message nobody reads.
+//
+// The body is the shared markup, translated into what Telegram can show — and a mark
+// Telegram cannot show is dropped rather than printed, because a message with `**` in
+// it reads as a message that arrived broken.
 func render(note notification) string {
-	var out strings.Builder
+	blocks := notifymarkup.Parse(note.Text)
 
 	title := titleOf(note)
 	if title != "" {
+		// Bold, then a blank line: a headline pressed against its own text reads as one
+		// long sentence, and the blank line is what makes it a headline.
+		var out strings.Builder
 		out.WriteString("<b>")
 		out.WriteString(escapeHTML(title))
 		out.WriteString("</b>")
-		if note.Text != "" {
-			out.WriteString("\n")
+		if len(blocks) > 0 {
+			out.WriteString("\n\n")
+		}
+		out.WriteString(toTelegramHTML(blocks))
+
+		return trim(out.String())
+	}
+	return trim(toTelegramHTML(blocks))
+}
+
+// toTelegramHTML writes the markup as Telegram's own.
+//
+// Every mark is opened and closed inside its own span, because Telegram's HTML is not
+// a general markup language: an unclosed tag is rejected outright, and a message
+// rejected outright is a message nobody sees.
+func toTelegramHTML(blocks []notifymarkup.Block) string {
+	var out strings.Builder
+
+	for index, block := range blocks {
+		if index > 0 {
+			out.WriteString("\n\n")
+		}
+		for _, span := range block.Spans {
+			out.WriteString(spanToHTML(span))
 		}
 	}
-	out.WriteString(escapeHTML(note.Text))
-
-	if len(out.String()) > maxMessage {
-		trimmed := []rune(out.String())
-		out.Reset()
-		out.WriteString(string(trimmed[:maxMessage-64]))
-		out.WriteString("\n…")
-	}
 	return out.String()
+}
+
+func spanToHTML(span notifymarkup.Span) string {
+	text := escapeHTML(span.Text)
+
+	switch {
+	case span.Link != "":
+		return `<a href="` + escapeHTML(span.Link) + `">` + text + `</a>`
+	case span.Code:
+		return "<code>" + text + "</code>"
+	case span.Bold:
+		text = "<b>" + text + "</b>"
+	}
+	if span.Italic {
+		text = "<i>" + text + "</i>"
+	}
+	if span.Underline {
+		text = "<u>" + text + "</u>"
+	}
+	if span.Strike {
+		text = "<s>" + text + "</s>"
+	}
+	return text
+}
+
+// trim keeps the message inside Telegram's limit with its end marked rather than
+// refusing it: a notification that does not arrive is worse than a short one.
+func trim(text string) string {
+	if len(text) <= maxMessage {
+		return text
+	}
+	runes := []rune(text)
+	return string(runes[:maxMessage-64]) + "\n…"
 }
 
 // titleOf is the title to show, and where it came from.
@@ -647,14 +721,21 @@ func nameOf(note notification, group, key string) string {
 }
 
 // escapeHTML keeps a branch name or a commit message from breaking the message.
+// escapeHTML is applied to text this module did not write the markup for.
+//
+// Every message goes through it exactly once, inside spanToHTML: a branch name
+// containing an ampersand must not become an HTML entity the reader sees, and Telegram
+// rejects a message whose tags do not balance.
 func escapeHTML(text string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-	)
-	return replacer.Replace(text)
+	return htmlEscaper.Replace(text)
 }
+
+var htmlEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	`"`, "&quot;",
+)
 
 // absoluteURL makes a link from the instance, because whoever reads the message is
 // not on this network and a relative link opens nothing.

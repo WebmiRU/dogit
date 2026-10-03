@@ -421,6 +421,19 @@ func targetView(row store.NotificationTarget) map[string]any {
 	}
 }
 
+// value is one of this recipient's settings, read as text.
+func (t notificationTarget) value(key string) string {
+	raw, ok := t.Values[key]
+	if !ok {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return value
+}
+
 // notificationModule finds the module that receives notifications.
 func (s *Server) notificationModule(r *http.Request) (*models.Integration, error) {
 	integrations, err := s.store.Integrations().List(r.Context())

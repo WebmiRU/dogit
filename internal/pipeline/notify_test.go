@@ -150,12 +150,20 @@ func TestAnUnknownLevelIsRefused(t *testing.T) {
 	}
 }
 
-// An entry with nothing to say is a half-written one, and sending it would teach
-// people that messages can be empty.
-func TestAnEntryWithNothingToSayIsRefused(t *testing.T) {
-	_, err := Parse([]byte("notify:\n  - on: [failure]\nimage:\n  script: [true]\n"))
-	if err == nil {
-		t.Fatal("an empty entry was accepted")
+// An entry with no words of its own is not half-written: it says "announce this, and
+// let whoever it goes to say it". The recipient's own wording fills the gap.
+func TestAnEntryWithNoWordsIsARequestToSpeak(t *testing.T) {
+	config, err := Parse([]byte("notify:\n  - on: [failure]\nimage:\n  script: [true]\n"))
+	if err != nil {
+		t.Fatalf("an entry with no words was refused: %v", err)
+	}
+
+	entry, announced := config.Notify.Announces(EventJobFinished, "failure")
+	if !announced {
+		t.Fatal("an entry with no words announced nothing")
+	}
+	if entry.Title != "" || entry.Text != "" {
+		t.Errorf("the entry carries words somebody did not write: %+v", entry)
 	}
 }
 

@@ -56,7 +56,7 @@ func TestABlockThatSpeaksProducesOneMessagePerRecipient(t *testing.T) {
 		Job:      map[string]any{"name": "build", "status": "success"},
 	}
 	entry := pipelineNotifyEntry{Title: "It worked", Text: "all good"}
-	f.server.announce(t.Context(), "job.finished", entry, context, "build succeeded")
+	f.server.announceTo(t.Context(), entry, context, "build succeeded")
 
 	got := forThese(queuedSince(t, f, "notify:telegram", before), target.ID)
 	if len(got) != 1 {
@@ -88,7 +88,7 @@ func TestTheMessagesOwnWordsAreUsedAndFilledIn(t *testing.T) {
 		Title: "Deploy failed",
 		Text:  "${project.path} #${pipeline.iid}: ${job.name} failed, image ${image.name}:${image.tag}\n${pipeline.url}",
 	}
-	f.server.announce(t.Context(), "job.finished", entry, context, "the core's own words")
+	f.server.announceTo(t.Context(), entry, context, "the core's own words")
 
 	got := forThese(queuedSince(t, f, "notify:telegram", before), target.ID)
 	if len(got) != 1 {
@@ -116,7 +116,7 @@ func TestAnUnknownNameStopsTheMessage(t *testing.T) {
 		Job:      map[string]any{"name": "deploy", "status": "failure"},
 	}
 	entry := pipelineNotifyEntry{Text: "${job.nmae} failed"}
-	f.server.announce(t.Context(), "job.finished", entry, context, "deploy failed")
+	f.server.announceTo(t.Context(), entry, context, "deploy failed")
 
 	if got := queuedSince(t, f, "notify:telegram", before); len(got) != 0 {
 		t.Errorf("a message asking for something that does not exist was sent: %q", got[0].Text)
@@ -156,7 +156,7 @@ func TestABlockWithNoTextKeepsTheFallback(t *testing.T) {
 		Pipeline: map[string]any{"iid": 1, "ref": "main", "status": "success"},
 		Job:      map[string]any{"name": "build", "status": "success"},
 	}
-	f.server.announce(t.Context(), "job.finished", pipelineNotifyEntry{}, context, "the core's own words")
+	f.server.announceTo(t.Context(), pipelineNotifyEntry{}, context, "the core's own words")
 
 	got := forThese(queuedSince(t, f, "notify:telegram", before), target.ID)
 	if len(got) != 1 || got[0].Text != "the core's own words" {
@@ -212,7 +212,7 @@ func TestAMessageWithNothingToSayIsNotSent(t *testing.T) {
 	}
 	// No job, so there is no job name and no image.
 	entry := pipelineNotifyEntry{Text: "${project.path} #${pipeline.iid} — ${image.name}:${image.tag}"}
-	f.server.announce(t.Context(), "pipeline.finished", entry, context, "the core's own words")
+	f.server.announceTo(t.Context(), entry, context, "the core's own words")
 
 	if got := forThese(queuedSince(t, f, "notify:telegram", before), target.ID); len(got) != 0 {
 		t.Errorf("a message with nothing to say was sent: %q", got[0].Text)
@@ -238,4 +238,70 @@ func TestSubstitutionRefusesWhatItCannotFill(t *testing.T) {
 	if got, missing := substitute("${a", map[string]string{}); len(missing) != 1 || !strings.Contains(missing[0], "${a") {
 		t.Errorf("an unclosed ${ was accepted: %q %v", got, missing)
 	}
+}
+
+// A recipient's own wording is used when the pipeline said nothing about it.
+//
+// This is the whole point of the two settings: a project sets them once and every
+// pipeline in it stops repeating itself.
+func TestARecipientSaysItOwnWayWhenThePipelineDidNot(t *testing.T) {
+	f := newModuleFixture(t)
+	project := dbtest.NewProject(t, f.store, "words-default", nil)
+	target := withRecipientDefaults(t, f, "**${job.name}** failed on ${pipeline.ref}")
+
+	before := lastID(t, f)
+	context := notifyContext{
+		Event:    "job.finished",
+		Project:  map[string]any{"path": project.Path},
+		Pipeline: map[string]any{"iid": 7, "ref": "main", "status": "failure"},
+		Job:      map[string]any{"name": "deploy", "status": "failure"},
+	}
+	// The pipeline announced itself and wrote only a title.
+	f.server.announceTo(t.Context(), pipelineNotifyEntry{Title: "Run failed"}, context, "the core's words")
+
+	got := forThese(queuedSince(t, f, "notify:telegram", before), target.ID)
+	if len(got) != 1 {
+		t.Fatalf("the message was written %d times", len(got))
+	}
+	if want := "**deploy** failed on main"; got[0].Text != want {
+		t.Errorf("the recipient's own wording was %q, want %q", got[0].Text, want)
+	}
+}
+
+// And it still never speaks first: a pipeline that says nothing is silent however
+// much a recipient has to say.
+func TestADefaultNeverSpeaksFirst(t *testing.T) {
+	f := newModuleFixture(t)
+	project := dbtest.NewProject(t, f.store, "quiet-default", nil)
+	target := withRecipientDefaults(t, f, "something happened")
+
+	before := lastID(t, f)
+	context := notifyContext{
+		Event:    "job.finished",
+		Project:  map[string]any{"path": project.Path},
+		Pipeline: map[string]any{"iid": 8, "ref": "main", "status": "failure", "sha": strings.Repeat("a", 40)},
+		Job:      map[string]any{"name": "deploy", "status": "failure"},
+	}
+	// No configuration on disk, so no run to read a decision from.
+	f.server.notifyEvent(t.Context(), "job.finished", context, "the core's words")
+
+	if got := forThese(queuedSince(t, f, "notify:telegram", before), target.ID); len(got) != 0 {
+		t.Errorf("a default spoke on its own: %q", got[0].Text)
+	}
+}
+
+// withRecipientDefaults adds a recipient that has something of its own to say.
+func withRecipientDefaults(t *testing.T, f *moduleFixture, text string) store.NotificationAddress {
+	t.Helper()
+
+	address := withRecipients(t, f)
+	row, err := f.store.NotificationTargets().ByID(t.Context(), address.ID)
+	if err != nil {
+		t.Fatalf("read the recipient: %v", err)
+	}
+	row.Values["default_text"] = json.RawMessage(mustJSON(text))
+	if _, err := f.store.NotificationTargets().Update(t.Context(), row); err != nil {
+		t.Fatalf("set its wording: %v", err)
+	}
+	return address
 }
