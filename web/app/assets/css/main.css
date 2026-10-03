@@ -309,6 +309,15 @@ label {
   color: #ffb4ae;
 }
 
+/* Waiting. Blue, not grey.
+   Grey is what a canceled or skipped build wears, and a build waiting for a runner
+   has not failed and will not: it is the one state where nothing is wrong yet.
+   Using the same colour for both makes a quiet queue look like a pile of trouble. */
+.badge-blue {
+  background: #23384f;
+  color: #9ec7f0;
+}
+
 .btn-danger {
   background: #8e2b28;
   border-color: #8e2b28;

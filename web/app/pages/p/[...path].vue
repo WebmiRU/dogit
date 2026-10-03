@@ -425,6 +425,7 @@ async function copyCloneUrl() {
         <RepositorySettings
           v-else-if="view.name === 'settings'"
           :project="project"
+          :project-id="projectId"
           :can-manage="canManage"
           @saved="project = $event"
         />

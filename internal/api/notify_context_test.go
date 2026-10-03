@@ -162,12 +162,12 @@ func TestNotificationKeepsWhatItKnows(t *testing.T) {
 
 	context := f.contextFor(t, store.JobSuccess)
 	id, err := f.store.Notifications().Record(t.Context(), "job.finished",
-		"something happened", notificationLevel(context), context.asMap())
+		"notify:telegram", "something happened", notificationLevel(context), context.asMap())
 	if err != nil {
 		t.Fatalf("record: %v", err)
 	}
 
-	notes, err := f.store.Notifications().Since(t.Context(), id-1, 10)
+	notes, err := f.store.Notifications().Since(t.Context(), "notify:telegram", id-1, 10)
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}

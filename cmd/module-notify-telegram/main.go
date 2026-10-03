@@ -146,6 +146,20 @@ func manifest() map[string]any {
 
 		"settings": []map[string]any{
 			{
+				// The switch that makes this the channel dogit writes to.
+				//
+				// Separate from whether the module is allowed to run at all: a channel
+				// can be configured and idle while somebody installs a second one and
+				// decides between them. Two modules switched on at the same level is
+				// reported rather than guessed at — every build going to two chats is
+				// how people stop reading either.
+				"key":         "notify_active",
+				"label":       "Send notifications",
+				"type":        "bool",
+				"default":     false,
+				"description": "Whether this module is the one notifications go through. Only one may be switched on at a level; a project can override what the group or the instance set.",
+			},
+			{
 				"key":         "bot_token",
 				"label":       "Bot token",
 				"type":        "string",
@@ -467,13 +481,30 @@ func escapeHTML(text string) string {
 	return replacer.Replace(text)
 }
 
-// absoluteURL makes a link from the instance, because a Telegram client is not on
-// this network and a relative link opens nothing.
+// absoluteURL makes a link from the instance, because whoever reads the message is
+// not on this network and a relative link opens nothing.
+//
+// The separator between the host and the path is the part that is easy to lose: a
+// path arrives as "/p/group/project/-/pipelines/12", and trimming the slash off it
+// before gluing it to a host produces "localhostp/group/..." — a link that is
+// silently wrong in a way nobody notices until somebody clicks it.
 func absoluteURL(path string) string {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		return path
 	}
-	return "https://" + envOr("DOGIT_PUBLIC_HOST", "localhost") + strings.TrimPrefix(path, "/")
+
+	// A base that already carries a scheme and a port wins over a bare host name,
+	// because an installation behind a port is otherwise unlinkable.
+	base := strings.TrimRight(envOr("DOGIT_PUBLIC_URL", ""), "/")
+	if base == "" {
+		host := envOr("DOGIT_PUBLIC_HOST", "localhost")
+		if strings.Contains(host, "://") {
+			base = strings.TrimRight(host, "/")
+		} else {
+			base = "https://" + host
+		}
+	}
+	return base + "/" + strings.TrimLeft(path, "/")
 }
 
 // callTelegram is one call to the Bot API.

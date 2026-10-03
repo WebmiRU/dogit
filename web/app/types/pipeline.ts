@@ -97,15 +97,40 @@ export const statusText: Record<PipelineStatus | JobStatus, string> = {
   skipped: 'Skipped',
 }
 
-/** The colour a status is drawn in. */
+/**
+ * The colour a status is drawn in.
+ *
+ * One set for every state, and the same one the notification text uses: green for
+ * success, yellow for running, red for failure, grey for canceled and skipped,
+ * blue for waiting. Blue rather than grey for waiting, because grey already means
+ * something did not happen and a queued build has not gone wrong — it simply has
+ * not started.
+ */
 export const statusClass: Record<string, string> = {
   success: 'badge-green',
   failed: 'badge-danger',
   running: 'badge-warning',
   canceled: 'badge-neutral',
-  pending: 'badge-private',
-  interrupted: 'badge-warning',
+  pending: 'badge-blue',
+  interrupted: 'badge-neutral',
   skipped: 'badge-neutral',
+}
+
+/**
+ * The sign for a state in a message.
+ *
+ * A message cannot be coloured, so it carries a character instead — the same one
+ * the badge wears, so that a green tick on the page and a green tick in the chat
+ * mean one thing.
+ */
+export const statusMark: Record<string, string> = {
+  success: '✅',
+  failed: '❌',
+  running: '🟡',
+  pending: '🔵',
+  canceled: '⚪',
+  interrupted: '⚪',
+  skipped: '⚪',
 }
 
 /**

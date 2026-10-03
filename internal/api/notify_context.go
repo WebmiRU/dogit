@@ -131,7 +131,8 @@ func imageContext(job *store.Job) []map[string]any {
 // shape whatever happened and whoever caused it. The text is a fallback for a
 // module with nothing of its own to say: a module is not obliged to use it.
 func (s *Server) notifyEvent(ctx context.Context, kind string, context notifyContext, text string) {
-	s.notify(ctx, kind, text, notificationLevel(context), context.asMap())
+	project, _ := context.Project["path"].(string)
+	s.notify(ctx, project, kind, text, notificationLevel(context), context.asMap())
 }
 
 // notificationLevel is how serious a thing is, in the few words everybody already
@@ -140,16 +141,8 @@ func notificationLevel(context notifyContext) string {
 	// The words are the ones everybody already uses for a build. The pipeline and
 	// the job spell their states the same way, so one switch covers both — and the
 	// state words are shared constants rather than two vocabularies.
-	switch contextLevelStatus(context) {
-	case store.PipelineSuccess:
-		return "success"
-	case store.PipelineCanceled, store.PipelineInterrupted:
-		return "canceled"
-	case store.PipelineFailed:
-		return "failure"
-	default:
-		return "running"
-	}
+	_, _, level := statusMark(contextLevelStatus(context))
+	return level
 }
 
 func contextLevelStatus(context notifyContext) string {
@@ -178,20 +171,49 @@ func pipelineFinishedStatus(ctx context.Context, s *Server, pipelineID int64) st
 	return store.PipelineStatus(&store.Pipeline{ID: pipelineID}, jobs)
 }
 
+// statusMark is the one sign for one state, everywhere.
+//
+// The interface draws a colour and a notification carries a character, and the two
+// were chosen separately for years and disagreed: a message that said "success" in
+// one place and showed a green tick in another meant somebody had to learn which
+// page they were on. A state has one mark; how it is drawn is the reader's
+// business.
+//
+// Colour is decided where something is rendered, not here: a message cannot be
+// green. What belongs to the state is the character and the severity.
+func statusMark(status string) (mark, colour string, level string) {
+	switch status {
+	case store.PipelineSuccess:
+		return "✅", "green", "success"
+	case store.PipelineFailed:
+		return "❌", "red", "failure"
+	case store.PipelineRunning:
+		return "🟡", "yellow", "running"
+	case store.PipelinePending:
+		return "🔵", "blue", "running"
+	case store.PipelineCanceled, store.PipelineInterrupted:
+		return "⚪", "grey", "canceled"
+	default:
+		return "•", "grey", "running"
+	}
+}
+
 // notificationSummary is the sentence a module falls back to.
 //
 // Deliberately plain: what happened and where to look, nothing else. Anything
 // prettier is the module's business, and a prettier sentence here would be a
 // sentence every channel is stuck with.
 func notificationSummary(context notifyContext, project *models.Project) string {
+	mark, _, _ := statusMark(contextLevelStatus(context))
+
 	switch {
 	case context.Job != nil:
-		return fmt.Sprintf("Job %q %s in %s",
-			context.Job["name"], context.Job["status"], project.Path)
+		return fmt.Sprintf("%s Job %q %s in %s",
+			mark, context.Job["name"], context.Job["status"], project.Path)
 	case context.Pipeline != nil:
-		return fmt.Sprintf("Pipeline #%v %s in %s",
-			context.Pipeline["iid"], context.Pipeline["status"], project.Path)
+		return fmt.Sprintf("%s Pipeline #%v %s in %s",
+			mark, context.Pipeline["iid"], context.Pipeline["status"], project.Path)
 	default:
-		return fmt.Sprintf("%s in %s", context.Event, project.Path)
+		return fmt.Sprintf("%s %s in %s", mark, context.Event, project.Path)
 	}
 }

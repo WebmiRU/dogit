@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/store"
@@ -45,7 +48,9 @@ func (s *Server) handleModuleNotifications(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	notes, err := s.store.Notifications().Since(r.Context(), req.After, 100)
+	// Only what was meant for this module. Reading everything would turn a second
+	// installed channel into a second copy of every message.
+	notes, err := s.store.Notifications().Since(r.Context(), integrationFrom(r.Context()).Kind, req.After, 100)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -104,7 +109,9 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 		text = "This is dogit. If you are reading this in Telegram, the module works."
 	}
 
-	if _, err := s.store.Notifications().Record(r.Context(), "test", text, "", nil); err != nil {
+	// A test goes to the module that pressed the button, whichever it is: the point
+	// is to check that this particular channel works.
+	if _, err := s.store.Notifications().Record(r.Context(), "test", integration.Kind, text, "test", nil); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -115,6 +122,103 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 	s.writeJSON(w, r, http.StatusAccepted, map[string]any{"queued": true})
 }
 
+// notificationTargets is which notification module is in use for a project.
+//
+// Only ever one. Two modules sending every build to two chats is not a feature,
+// it is the reason people stop reading either — and it happens by accident, from
+// installing a second channel and forgetting the first. So the modules are
+// resolved most-specific-first, and two answering at the same level is an
+// administrator's mistake that is reported rather than guessed at.
+func (s *Server) notificationTargets(ctx context.Context, projectPath string) []*models.Integration {
+	integrations, err := s.store.Integrations().List(ctx)
+	if err != nil {
+		s.log.Warn("read installed modules", "error", err)
+		return nil
+	}
+
+	var notify []*models.Integration
+	for _, integration := range integrations {
+		if strings.HasPrefix(integration.Kind, notifyKindPrefix) && integration.Enabled {
+			notify = append(notify, integration)
+		}
+	}
+	if len(notify) == 0 {
+		return nil
+	}
+
+	project, err := s.store.Projects().ByPath(ctx, projectPath)
+	if err != nil {
+		project = nil
+	}
+
+	// Most specific scope first: a project that picked a channel has said so over
+	// whatever the instance set for everybody.
+	scopes := []struct {
+		groupID   *uuid.UUID
+		projectID *uuid.UUID
+	}{
+		{nil, nil},
+		{nil, &project.ID},
+	}
+	if project != nil && project.GroupID != nil {
+		scopes = append([]struct {
+			groupID   *uuid.UUID
+			projectID *uuid.UUID
+		}{{project.GroupID, nil}}, scopes...)
+	}
+
+	for _, scope := range scopes {
+		var chosen []*models.Integration
+		for _, integration := range notify {
+			settings, err := s.store.Integrations().SettingsFor(ctx, integration.ID,
+				scope.groupID, scope.projectID)
+			if err != nil {
+				continue
+			}
+			if settingTrue(settings, notifyActiveKey) {
+				chosen = append(chosen, integration)
+			}
+		}
+
+		switch len(chosen) {
+		case 0:
+			continue
+		case 1:
+			return chosen
+		default:
+			kinds := make([]string, 0, len(chosen))
+			for _, one := range chosen {
+				kinds = append(kinds, one.Kind)
+			}
+			s.log.Warn("more than one notification module is switched on; none of them is used",
+				"modules", strings.Join(kinds, ", "),
+				"project", projectPath)
+			return nil
+		}
+	}
+	return nil
+}
+
+// notifyActiveKey is the setting that says a module is the one to notify through.
+//
+// Declared by the module, because it is the module's own question: a channel that
+// has been given an address but not been switched on is configured and idle, which
+// is a normal state during installation.
+const notifyActiveKey = "notify_active"
+
+// settingTrue reads a boolean setting, absent meaning no.
+func settingTrue(settings map[string]json.RawMessage, key string) bool {
+	raw, ok := settings[key]
+	if !ok {
+		return false
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false
+	}
+	return value
+}
+
 // notify queues a message for whoever asked to be told.
 //
 // It writes to the queue and returns. Nothing here waits for a module to answer,
@@ -123,12 +227,21 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 //
 // A queue nobody is reading is not an error: most installations have no
 // notification module at all, and the table is pruned on its own.
-func (s *Server) notify(ctx context.Context, kind, text, level string, data map[string]any) {
+func (s *Server) notify(ctx context.Context, projectPath, kind, text, level string, data map[string]any) {
 	if strings.TrimSpace(text) == "" && len(data) == 0 {
 		return
 	}
 
-	if _, err := s.store.Notifications().Record(ctx, kind, text, level, data); err != nil {
+	// Addressed to the module that is in use here, if there is one. A test message
+	// is addressed to nobody and read by whoever asked for it.
+	moduleKind := ""
+	if projectPath != "" {
+		for _, target := range s.notificationTargets(ctx, projectPath) {
+			moduleKind = target.Kind
+		}
+	}
+
+	if _, err := s.store.Notifications().Record(ctx, kind, moduleKind, text, level, data); err != nil {
 		// A notification that could not be queued is worth a line in the log and
 		// nothing more: failing the build because a notification did not fit would
 		// make the two worse things worse.

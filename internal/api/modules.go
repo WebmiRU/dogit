@@ -488,11 +488,6 @@ func (s *Server) handleSetModuleSettings(w http.ResponseWriter, r *http.Request)
 // is no DELETE on the settings endpoint itself, because deleting the row and
 // deleting the setting are different things and only the first is meaningful here.
 func (s *Server) handleResetModuleSetting(w http.ResponseWriter, r *http.Request) {
-	if !userFrom(r.Context()).IsAdmin {
-		s.writeError(w, r, errForbidden("administrator rights are required"))
-		return
-	}
-
 	integration, err := s.moduleFromPath(r)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -512,6 +507,11 @@ func (s *Server) handleResetModuleSetting(w http.ResponseWriter, r *http.Request
 
 	scopeType, scopeID, err := s.settingScope(r)
 	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	if err := s.allowSettingScope(r, scopeType, scopeID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -541,11 +541,6 @@ func (s *Server) handleResetModuleSetting(w http.ResponseWriter, r *http.Request
 // one decision — every value is checked before any is stored, so a form with one
 // wrong value changes nothing rather than half of it.
 func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Request) {
-	if !userFrom(r.Context()).IsAdmin {
-		s.writeError(w, r, errForbidden("administrator rights are required"))
-		return
-	}
-
 	integration, err := s.moduleFromPath(r)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -566,6 +561,10 @@ func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Requ
 
 	scopeType, scopeID, err := s.settingScope(r)
 	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := s.allowSettingScope(r, scopeType, scopeID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -1215,19 +1214,83 @@ func (s *Server) moduleFromPath(r *http.Request) (*models.Integration, error) {
 	return s.store.Integrations().ByID(r.Context(), id)
 }
 
-// settingScope reads ?scope=instance|group|project and, for the latter two, the
-// scope id from the path.
+// settingScope is whose settings are being written.
+//
+// The ids come from the query rather than only from the path, because the same
+// operation is done from three places — the instance, a group and a project — and
+// giving each its own route to one handler would be three spellings of one thing.
+// A path id still wins when there is one, so a caller that already has it is not
+// surprised by an id in the query.
+// allowSettingScope decides who may write settings at this level.
+//
+// The instance is the administrator's alone. Below it, somebody who can manage the
+// thing the settings belong to may write them: a project maintainer choosing which
+// channel their builds are announced in is not a decision that needs an
+// administrator, and making it one would leave projects on the wrong channel until
+// somebody remembered to ask.
+func (s *Server) allowSettingScope(r *http.Request, scopeType string, scopeID *uuid.UUID) error {
+	user := userFrom(r.Context())
+	if user.IsAdmin {
+		return nil
+	}
+
+	switch scopeType {
+	case store.ScopeInstance:
+		return errForbidden("administrator rights are required")
+
+	case store.ScopeGroup:
+		if scopeID == nil {
+			return errForbidden("a group id is required for this scope")
+		}
+		allowed, err := s.store.Permissions().CanGroup(r.Context(), user, *scopeID, store.ActionManageGroup)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errForbidden("managing this group is required")
+		}
+		return nil
+
+	case store.ScopeProject:
+		if scopeID == nil {
+			return errForbidden("a project id is required for this scope")
+		}
+		project, err := s.store.Projects().ByID(r.Context(), *scopeID)
+		if err != nil {
+			return errNotFound("project does not exist")
+		}
+		allowed, err := s.store.Permissions().Can(r.Context(), user, project, store.ActionManageProject)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errForbidden("managing this project is required")
+		}
+		return nil
+
+	default:
+		return errBadRequest("scope must be instance, group or project")
+	}
+}
+
 func (s *Server) settingScope(r *http.Request) (string, *uuid.UUID, error) {
 	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
 	if scope == "" {
 		scope = store.ScopeInstance
 	}
 
+	ref := func(name string) string {
+		if raw := strings.TrimSpace(pathParam(r, name)); raw != "" {
+			return raw
+		}
+		return strings.TrimSpace(r.URL.Query().Get(name))
+	}
+
 	switch scope {
 	case store.ScopeInstance:
 		return scope, nil, nil
 	case store.ScopeGroup:
-		id, err := uuid.Parse(pathParam(r, "groupID"))
+		id, err := uuid.Parse(ref("groupID"))
 		if err != nil {
 			return "", nil, errBadRequest("a group id is required for this scope")
 		}
@@ -1236,7 +1299,7 @@ func (s *Server) settingScope(r *http.Request) (string, *uuid.UUID, error) {
 		}
 		return scope, &id, nil
 	case store.ScopeProject:
-		id, err := uuid.Parse(pathParam(r, "projectID"))
+		id, err := uuid.Parse(ref("projectID"))
 		if err != nil {
 			return "", nil, errBadRequest("a project id is required for this scope")
 		}

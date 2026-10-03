@@ -238,6 +238,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
+      DOGIT_PUBLIC_URL: ${DOGIT_PUBLIC_URL:-}
 
   # Reference implementation of the module protocol. It has no product
   # behaviour: it exists to prove that registration, heartbeats and

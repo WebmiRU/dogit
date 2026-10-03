@@ -45,7 +45,7 @@ const notificationRetention = 30 * 24 * time.Hour
 // waking somebody for is a module that will get it wrong in a language its author
 // does not read. The facts travel alongside the sentence in `data`, so a module
 // can ignore the sentence entirely.
-func (r *NotificationRepo) Record(ctx context.Context, kind, text, level string,
+func (r *NotificationRepo) Record(ctx context.Context, kind, moduleKind, text, level string,
 	data map[string]any) (int64, error) {
 
 	if strings.TrimSpace(text) == "" && len(data) == 0 {
@@ -62,8 +62,8 @@ func (r *NotificationRepo) Record(ctx context.Context, kind, text, level string,
 
 	var id int64
 	err := r.s.pool.QueryRow(ctx, `
-		INSERT INTO notifications (kind, text, levels, data)
-		VALUES ($1, $2, $3, $4) RETURNING id`, kind, text, levels, data).Scan(&id)
+		INSERT INTO notifications (kind, module_kind, text, levels, data)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`, kind, moduleKind, text, levels, data).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("record notification: %w", err)
 	}
@@ -85,7 +85,7 @@ func (r *NotificationRepo) Record(ctx context.Context, kind, text, level string,
 // on a word that appears in none of them, so modules were handed an empty queue and
 // only ever delivered the test message. What each module does with a notification
 // is its own decision, made from the facts in it.
-func (r *NotificationRepo) Since(ctx context.Context, after int64, limit int) ([]Notification, error) {
+func (r *NotificationRepo) Since(ctx context.Context, moduleKind string, after int64, limit int) ([]Notification, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -93,8 +93,8 @@ func (r *NotificationRepo) Since(ctx context.Context, after int64, limit int) ([
 	rows, err := r.s.pool.Query(ctx, `
 		SELECT id, kind, text, url, levels, data, created_at
 		FROM notifications
-		WHERE id > $1
-		ORDER BY id LIMIT $2`, after, limit)
+		WHERE id > $1 AND module_kind = $2
+		ORDER BY id LIMIT $3`, after, moduleKind, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read notifications: %w", err)
 	}
