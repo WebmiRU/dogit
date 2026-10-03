@@ -102,6 +102,10 @@ func (s *Server) Register(r chi.Router) {
 	moduleRoutes.Post("/heartbeat", s.handleModuleHeartbeat)
 	moduleRoutes.Get("/me", s.handleModuleSelf)
 	moduleRoutes.Get("/settings", s.handleModuleSelfSettings)
+	// A module saying it changed something of its own. The core cannot watch for
+	// this: the browser asks the module directly, with a credential the core minted
+	// and cannot present.
+	moduleRoutes.Post("/report", s.handleModuleReport)
 	moduleRoutes.Put("/settings", s.handleModuleSelfSettingsWrite)
 	// What a runner module is for: taking work, and saying what happened to it.
 	moduleRoutes.Post("/runner/claim", s.handleClaimJob)
@@ -153,6 +157,10 @@ func (s *Server) Register(r chi.Router) {
 		// administrator may ask: the answer spans every project, and a member of one
 		// project has no business knowing what another project's images are called.
 		authenticated.Get("/registry/catalog", s.handleRegistryCatalog)
+		// A module saying it changed something of its own. The core cannot watch for
+		// this: the browser asked the module directly, with a credential the core
+		// minted and cannot present.
+
 		// The two lists an administrator needs to answer "who is on here" and "which
 		// machine is doing the work". Both are admin-only: one enumerates accounts,
 		// the other says what every machine is occupied with.

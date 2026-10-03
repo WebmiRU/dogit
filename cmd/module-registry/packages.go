@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -126,6 +127,16 @@ func (registry *registry) deletePackage(w http.ResponseWriter, r *http.Request) 
 	if err := deleteByDigest(r.Context(), defaultClient(), repository, "manifests", digest); err != nil {
 		registryError(w, http.StatusBadGateway, "registry_unavailable", err.Error())
 		return
+	}
+
+	// Said to the core, so that a page looking at this module knows without being
+	// asked. Before this, a deleted tag stayed on screen until the next full load,
+	// which is a page quietly lying about what is stored.
+	if err := registry.core.report(context.WithoutCancel(r.Context()), "deleted",
+		body.Project, map[string]any{"repository": repository, "tag": tag}); err != nil {
+		// The deletion has happened either way. The core not hearing about it costs
+		// a stale page, and refusing to delete because of a report would be worse.
+		log.Printf("module-registry: could not report the deletion: %v", err)
 	}
 
 	writeJSON(w, map[string]any{"removed": repository + ":" + tag})

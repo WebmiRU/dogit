@@ -361,6 +361,50 @@ func (s *Server) publishInstanceEvent(r *http.Request, kind models.EventKind,
 	}
 }
 
+// handleModuleReport records a change a module made to something the core does not
+// hold.
+//
+// The core knows what it has: pipelines, jobs, projects, permissions. It does not
+// know what is inside a module — which images a registry holds, what a cache
+// evicted. Yet a page has to be able to say "this changed", and the honest way for
+// it to be told is by the module that did the changing.
+//
+// A module can be believed about itself because it authenticates with the token it
+// was given at registration, and the core never asks anybody else to vouch for it.
+// It is believed about nothing else: the payload is recorded as the module's own
+// account of what it did, and nothing reads it as anything more.
+func (s *Server) handleModuleReport(w http.ResponseWriter, r *http.Request) {
+	integration := integrationFrom(r.Context())
+
+	var req struct {
+		// What happened, in the module's own words: "deleted", "pushed", whatever
+		// that module calls it. Nobody here interprets it.
+		Change string `json:"change"`
+		// Subject is what it happened to — a project path, a repository name. Also
+		// not interpreted, only carried, so that a page can decide what to re-read.
+		Subject string `json:"subject"`
+		Detail  any    `json:"detail,omitempty"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	change := strings.TrimSpace(req.Change)
+	if change == "" {
+		s.writeError(w, r, errBadRequest("a module must say what it changed"))
+		return
+	}
+
+	s.publishInstanceEvent(r, models.EventModuleReported, integration, map[string]any{
+		"change":  change,
+		"subject": strings.TrimSpace(req.Subject),
+		"detail":  req.Detail,
+	})
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"recorded": true})
+}
+
 func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
 	integration, err := s.moduleFromPath(r)
 	if err != nil {

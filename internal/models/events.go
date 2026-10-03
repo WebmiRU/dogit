@@ -25,6 +25,14 @@ const (
 	EventModuleRegistered EventKind = "module.registered"
 	EventModuleUpdated    EventKind = "module.updated"
 	EventModuleRemoved    EventKind = "module.removed"
+	// EventModuleReported is a module saying that something it owns changed.
+	//
+	// Most changes travel through the core and are announced by it. This one cannot:
+	// the module is asked by a browser directly, with a credential the core minted
+	// and the core cannot present. So the module reports it — it holds its own token
+	// and can therefore be believed about itself, which is the only thing it is
+	// believed about.
+	EventModuleReported EventKind = "module.reported"
 )
 
 // Event is a row in the durable event log. The post-receive hook writes events

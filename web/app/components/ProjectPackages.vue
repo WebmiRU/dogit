@@ -161,19 +161,37 @@ async function removeTag(repository: string, tag: string) {
 }
 
 let stopWatching: (() => void) | undefined
+let stopWatchingModule: (() => void) | undefined
 
 onMounted(() => {
   void load()
-  // Images arrive because something was pushed, which happens on a machine
-  // somebody else is sitting at.
+  // Both directions. A push travels through the core and is announced by a job
+  // finishing; a deletion goes from whichever page asked for it straight to the
+  // module, and the module reports it afterwards — it holds its own token, so the
+  // core can believe it about itself. This page is open whichever one happened.
   stopWatching = watchEvents({
     kinds: ['pipeline.updated', 'job.updated'],
     project: () => props.projectPath,
     onChange: () => void loadImages(),
   })
+
+  // A second look, without the project filter.
+  //
+  // A tag deleted from the registry module's own page reaches the core as an
+  // instance-wide event: a module is not inside any project, so there is no project
+  // to file it under. The filtered feed above cannot see those by design — it is
+  // what keeps one project's events off another project's page — so this one is
+  // asked for separately and only watches that single kind.
+  stopWatchingModule = watchEvents({
+    kinds: ['module.reported'],
+    onChange: () => void loadImages(),
+  })
 })
 
-onBeforeUnmount(() => stopWatching?.())
+onBeforeUnmount(() => {
+  stopWatching?.()
+  stopWatchingModule?.()
+})
 watch(() => props.projectPath, load)
 
 const tagCount = computed(() =>

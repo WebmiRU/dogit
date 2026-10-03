@@ -248,6 +248,21 @@ type registrationResponse struct {
 	Token string `json:"token"`
 }
 
+// report tells the core that something this module holds has changed.
+//
+// The core cannot watch for it. A browser deletes an image by asking this module
+// directly, with a credential the core minted and cannot present, so the core never
+// sees the request. Without this, an administrator's page would keep showing an
+// image that is already gone until somebody pressed something.
+//
+// It is said as this module's own account of what it did. The core records that and
+// nothing else: it does not learn what an image is, only that something changed.
+func (c *coreClient) report(ctx context.Context, change, subject string, detail any) error {
+	return c.post(ctx, "/api/v1/module/report", map[string]any{
+		"change": change, "subject": subject, "detail": detail,
+	}, c.token, nil)
+}
+
 func (c *coreClient) post(ctx context.Context, path string, body any, token string, out any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {

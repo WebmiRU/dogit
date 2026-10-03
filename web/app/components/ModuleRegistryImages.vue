@@ -257,11 +257,16 @@ let stopWatching: (() => void) | undefined
 
 onMounted(() => {
   void load()
+
   // Images appear because something was pushed, which happens on a machine
   // somebody else is sitting at. This page says so by itself rather than waiting to
   // be asked whether anything changed.
+  // Both directions are covered by this one feed. A push travels through the core
+  // and is announced as a job finishing; a deletion goes straight from the browser
+  // to this module, and the module reports it afterwards — it holds its own token,
+  // so the core can believe it about itself.
   stopWatching = watchEvents({
-    kinds: ['pipeline.updated', 'job.updated'],
+    kinds: ['pipeline.updated', 'job.updated', 'module.reported'],
     onChange: () => void load(true),
   })
 })
