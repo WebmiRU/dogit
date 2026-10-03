@@ -550,9 +550,26 @@ func send(ctx context.Context, settings map[string]any, note notification) error
 	return callTelegram(ctx, botToken, "sendMessage", payload)
 }
 
+// render is what one message looks like here.
+//
+// The title is the pipeline's own, when it wrote one: somebody who wrote "The
+// deployment failed" in their configuration means that, and this module has no
+// business improving on it. Without one, the title is composed here from the facts,
+// because a Telegram message that begins mid-sentence is a message nobody reads.
 func render(note notification) string {
 	var out strings.Builder
+
+	title := titleOf(note)
+	if title != "" {
+		out.WriteString("<b>")
+		out.WriteString(escapeHTML(title))
+		out.WriteString("</b>")
+		if note.Text != "" {
+			out.WriteString("\n")
+		}
+	}
 	out.WriteString(escapeHTML(note.Text))
+
 	if len(out.String()) > maxMessage {
 		trimmed := []rune(out.String())
 		out.Reset()
@@ -560,6 +577,73 @@ func render(note notification) string {
 		out.WriteString("\n…")
 	}
 	return out.String()
+}
+
+// titleOf is the title to show, and where it came from.
+func titleOf(note notification) string {
+	if title, ok := note.Data["title"].(string); ok && strings.TrimSpace(title) != "" {
+		return title
+	}
+	return titleFromFacts(note)
+}
+
+// titleFromFacts composes a headline from what the core knows.
+//
+// Every field is optional and a missing one drops out rather than printing an empty
+// label: "Deploy failed" is a better headline than "Job deploy failed" when there is
+// no job, and "Failed" is better than nothing at all.
+func titleFromFacts(note notification) string {
+	level := ""
+	if len(note.Levels) > 0 {
+		level = note.Levels[0]
+	}
+
+	subject, detail := "", ""
+	switch {
+	case note.Kind == "pipeline.started":
+		subject, detail, level = "Pipeline", branchOf(note), "running"
+	case note.Kind == "pipeline.finished":
+		subject, detail = "Pipeline", branchOf(note)
+	case note.Kind == "job.finished":
+		subject, detail = "Job", nameOf(note, "job", "name")
+	case note.Kind == "job.retried":
+		subject, detail, level = "Job", nameOf(note, "job", "name"), "retried"
+	}
+
+	// A test has no history to compose from, and says so in its own words.
+	if subject == "" {
+		if note.Kind == "test" {
+			return "Test message"
+		}
+		return ""
+	}
+
+	title := subject
+	if detail != "" {
+		title += " " + detail
+	}
+	if level != "" {
+		title += " " + level
+	}
+	return title
+}
+
+func branchOf(note notification) string {
+	if branch, ok := note.Data["pipeline"].(map[string]any); ok {
+		if ref, ok := branch["ref"].(string); ok && ref != "" {
+			return ref
+		}
+	}
+	return ""
+}
+
+func nameOf(note notification, group, key string) string {
+	if section, ok := note.Data[group].(map[string]any); ok {
+		if name, ok := section[key].(string); ok {
+			return name
+		}
+	}
+	return ""
 }
 
 // escapeHTML keeps a branch name or a commit message from breaking the message.

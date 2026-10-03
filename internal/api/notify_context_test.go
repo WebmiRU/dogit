@@ -206,16 +206,24 @@ func TestNotificationFactsAreNamedLikeThePageNamesThem(t *testing.T) {
 	}
 }
 
-// The text is a fallback, so it names what happened without dressing it up.
-func TestTheFallbackSaysWhatHappened(t *testing.T) {
+// The fallback is facts, not a sentence.
+//
+// What ran, in which run, in which project — and nothing else. The status word and the
+// tick are the channel's: a Telegram message opens with a bold headline, an email
+// subject does not, and a webhook has neither. A module that has words of its own
+// ignores this line entirely.
+func TestTheFallbackSaysWhatRanAndWhere(t *testing.T) {
 	f := setupNotify(t)
 
 	text := notificationSummary(f.contextFor(t, store.JobFailed), f.project)
-	if !strings.Contains(text, "build") || !strings.Contains(text, "failed") {
-		t.Errorf("the fallback says %q, which does not say what happened", text)
+	if !strings.Contains(text, "build") {
+		t.Errorf("the fallback %q does not name the job", text)
 	}
-	if strings.Contains(text, f.project.Path) == false {
+	if !strings.Contains(text, f.project.Path) {
 		t.Errorf("the fallback %q does not say where", text)
+	}
+	if strings.Contains(text, "failed") || strings.Contains(text, "✅") {
+		t.Errorf("the fallback %q dresses the facts up as a sentence for one channel", text)
 	}
 }
 

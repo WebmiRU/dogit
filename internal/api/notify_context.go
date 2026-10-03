@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/store"
@@ -125,14 +126,95 @@ func imageContext(job *store.Job) []map[string]any {
 	return []map[string]any{image}
 }
 
-// notifyEvent queues a notification with its facts.
+// notifyEvent queues a notification with its facts — if the pipeline said anything.
 //
 // It is the one way notifications are written, so that every module gets the same
 // shape whatever happened and whoever caused it. The text is a fallback for a
 // module with nothing of its own to say: a module is not obliged to use it.
+//
+// Whether there is a notification at all is the pipeline's own decision, read from its
+// configuration in the commit that is running. A run with no `notify` block is silent
+// however many channels are switched on: a project has a hundred pipelines and the
+// person who wants to hear about the deployment does not want to hear about every
+// experiment that was run on a branch nobody reads.
 func (s *Server) notifyEvent(ctx context.Context, kind string, context notifyContext, text string) {
+	entry, announces := s.pipelineAnnounces(ctx, context, context.Event, notificationLevel(context))
+	if !announces {
+		return
+	}
+	s.announce(ctx, kind, entry, context, text)
+}
+
+// announce writes one notification, in the words the pipeline asked for.
+//
+// Split out from the decision so that the writing is testable on its own: whether a
+// run speaks is a question about its configuration, and what it says is a question
+// about the template, and neither should only be reachable through a live database.
+func (s *Server) announce(ctx context.Context, kind string, entry pipelineNotifyEntry,
+	context notifyContext, fallback string) {
+
 	project, _ := context.Project["path"].(string)
-	s.notify(ctx, project, kind, text, notificationLevel(context), context.asMap())
+	level := notificationLevel(context)
+
+	title, text, missing := renderNotification(entry, context, fallback)
+	if len(missing) > 0 {
+		// Not sent, and said out loud. A message with a hole in it reads as delivered
+		// while telling nobody anything, and the reason belongs where the author of the
+		// template will look.
+		s.log.Error("a notification was not sent because its template asks for something that does not exist",
+			"project", project, "event", kind, "unknown", strings.Join(missing, ", "))
+		return
+	}
+
+	facts := context.asMap()
+	if title != "" {
+		facts["title"] = title
+	}
+
+	s.notify(ctx, project, kind, text, level, facts)
+}
+
+// pipelineAnnounces reads what a pipeline said it would announce.
+//
+// The configuration is read at the commit that is running, not from the branch: a
+// pipeline is a claim about code, and asking the working tree what it thinks now would
+// have yesterday's run speaking with today's words.
+func (s *Server) pipelineAnnounces(ctx context.Context, context notifyContext,
+	event, level string) (pipelineNotifyEntry, bool) {
+
+	project, _ := context.Project["path"].(string)
+	sha, _ := context.Pipeline["sha"].(string)
+
+	entry := pipelineNotifyEntry{}
+	if project == "" || sha == "" {
+		// Nothing to read the configuration from. Silence, and a line in the log: a
+		// message about something the core cannot describe is worse than none.
+		return entry, false
+	}
+
+	record, err := s.store.Projects().ByPath(ctx, project)
+	if err != nil {
+		s.log.Warn("could not find the project to read its notifications from",
+			"project", project, "error", err)
+		return entry, false
+	}
+
+	config, err := s.pipelineConfig(ctx, s.repos.PathFor(record), sha)
+	if err != nil {
+		// No configuration, or one that could not be read. A broken file is refused
+		// when the pipeline is created, so this is mostly a project with nothing to say.
+		s.log.Debug("no notification decision from the configuration", "project", project, "error", err)
+		return entry, false
+	}
+
+	found, ok := config.Notify.Announces(event, level)
+	return pipelineNotifyEntry{Title: found.Title, Text: found.Text}, ok
+}
+
+// pipelineNotifyEntry is what a pipeline said, with its ${…} not yet filled in.
+type pipelineNotifyEntry = struct {
+	Title string
+	Text  string
 }
 
 // notificationLevel is how serious a thing is, in the few words everybody already
@@ -203,17 +285,47 @@ func statusMark(status string) (mark, colour string, level string) {
 // Deliberately plain: what happened and where to look, nothing else. Anything
 // prettier is the module's business, and a prettier sentence here would be a
 // sentence every channel is stuck with.
+// notificationSummary is the fallback text: what happened, and where.
+//
+// Facts rather than a sentence, and no mark and no status word. The headline and the
+// green tick belong to the channel — a Telegram message opens with a bold line, an
+// email subject does not, and a webhook has neither — so what is left here is the one
+// line every channel needs and none of them would write differently: what ran, in
+// which run, in which project.
+//
+// A module with words of its own ignores this entirely, which is the point.
 func notificationSummary(context notifyContext, project *models.Project) string {
-	mark, _, _ := statusMark(contextLevelStatus(context))
+	where := ""
+	if project != nil {
+		where = project.Path
+	}
+
+	run := ""
+	if iid, ok := context.Pipeline["iid"]; ok {
+		run = fmt.Sprintf("#%v", iid)
+		if ref, ok := context.Pipeline["ref"].(string); ok && ref != "" {
+			run += " " + ref
+		}
+	}
 
 	switch {
 	case context.Job != nil:
-		return fmt.Sprintf("%s Job %q %s in %s",
-			mark, context.Job["name"], context.Job["status"], project.Path)
+		name, _ := context.Job["name"].(string)
+		return joinFacts(fmt.Sprintf("job %q", name), run, where)
 	case context.Pipeline != nil:
-		return fmt.Sprintf("%s Pipeline #%v %s in %s",
-			mark, context.Pipeline["iid"], context.Pipeline["status"], project.Path)
+		return joinFacts(run, where)
 	default:
-		return fmt.Sprintf("%s %s in %s", mark, context.Event, project.Path)
+		return joinFacts(context.Event, where)
 	}
+}
+
+// joinFacts puts the parts together without leaving holes where one is missing.
+func joinFacts(parts ...string) string {
+	kept := []string{}
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, " · ")
 }

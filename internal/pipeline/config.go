@@ -33,6 +33,9 @@ type Config struct {
 	Default JobSpec `yaml:"default"`
 	// Variables are available to every job.
 	Variables map[string]any `yaml:"variables"`
+	// Notify is what this pipeline says about being announced. Its absence is
+	// silence, and is handled by the type rather than by a zero value somewhere else.
+	Notify NotifySpec `yaml:"-"`
 	// Jobs are the named tasks, in the order they were written.
 	Jobs map[string]JobSpec `yaml:"-"`
 	// Order preserves the order the jobs were written in, which is the order a
@@ -129,6 +132,23 @@ func Parse(data []byte) (*Config, error) {
 		"stages": true, "default": true, "variables": true,
 		"workflow": true, "include": true,
 		"before_script": true, "after_script": true,
+		// Not a job. Read separately: `notify` decides whether the run speaks, and a
+		// job of that name would otherwise be parsed as one.
+		"notify": true,
+	}
+
+	// Read as a document rather than as a field of the struct, because `notify` is
+	// three different shapes of thing — a list, one entry, or `false` — and only one
+	// of them is a value the struct can hold.
+	for index := 0; index+1 < len(raw); index += 2 {
+		if raw[index].Value != "notify" {
+			continue
+		}
+		notify, err := parseNotify(raw[index+1])
+		if err != nil {
+			return nil, fmt.Errorf("notify: %w", err)
+		}
+		config.Notify = notify
 	}
 
 	// Written order, not sorted order: the order somebody wrote jobs in is the order
