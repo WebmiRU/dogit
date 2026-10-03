@@ -349,8 +349,10 @@ func (s *Server) publishInstanceEvent(r *http.Request, kind models.EventKind,
 	body["kind"] = integration.Kind
 	body["name"] = integration.Name
 
+	// Nil when nobody is behind the call: a module registering itself has no
+	// session, and a page being read has nobody to attribute its events to.
 	var actorID *uuid.UUID
-	if user := userFrom(r.Context()); user.ID != uuid.Nil {
+	if user := userFrom(r.Context()); user != nil && user.ID != uuid.Nil {
 		id := user.ID
 		actorID = &id
 	}

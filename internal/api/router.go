@@ -153,6 +153,11 @@ func (s *Server) Register(r chi.Router) {
 		// administrator may ask: the answer spans every project, and a member of one
 		// project has no business knowing what another project's images are called.
 		authenticated.Get("/registry/catalog", s.handleRegistryCatalog)
+		// The two lists an administrator needs to answer "who is on here" and "which
+		// machine is doing the work". Both are admin-only: one enumerates accounts,
+		// the other says what every machine is occupied with.
+		authenticated.Get("/admin/users", s.handleListUsers)
+		authenticated.Get("/admin/runners", s.handleListRunners)
 		authenticated.Get("/modules/{integrationID}", s.handleGetModule)
 		authenticated.Put("/modules/{integrationID}/state", s.handleSetModuleState)
 		authenticated.Delete("/modules/{integrationID}", s.handleDeleteModule)

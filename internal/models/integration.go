@@ -54,6 +54,11 @@ type Manifest struct {
 
 	// Routing says what address the module needs to be reachable at.
 	Routing RoutingSpec `json:"routing,omitempty"`
+
+	// Capacity is how much this machine will take at once. A runner declares it so
+	// that a page can say "one of four slots is free" without the core guessing at
+	// it, and zero means the module did not say — which is not the same as none.
+	Capacity int `json:"capacity,omitempty"`
 }
 
 // RoutingSpec is a module's request to be served on an address of its own.

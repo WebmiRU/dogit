@@ -191,6 +191,10 @@ func manifest(cfg config) map[string]any {
 		"description": "Runs CI jobs with Docker, and builds images on machines that are allowed to",
 		"scopes":      []string{},
 		"database":    false,
+		// Declared rather than left for the core to guess: how many jobs this machine
+		// takes at once is a fact about this machine, and an operator asking why a
+		// pipeline is waiting is asking about the machine.
+		"capacity": cfg.concurrency,
 
 		"settings": []map[string]any{
 			{
