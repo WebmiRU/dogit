@@ -26,6 +26,11 @@ const (
 	ScopeCacheRead      = "cache:read"
 	ScopeCacheWrite     = "cache:write"
 	ScopeBuilderBuild   = "builder:build"
+	// What a caller may ask a deploy module to do. Reading is what a project's page
+	// does when it shows what is deployed; writing is what pressing undo does, and it
+	// is separate so that the first can be given to somebody who may only look.
+	ScopeDeployRead  = "deploy:read"
+	ScopeDeployWrite = "deploy:write"
 )
 
 // Manifest is what a module reports about itself at registration time.

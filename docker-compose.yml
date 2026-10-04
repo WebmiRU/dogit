@@ -167,10 +167,12 @@ services:
       # answer a browser on the instance's address. Named explicitly rather than
       # left open: the answer is per project, and the credential is short.
       DOGIT_MODULE_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
-      # Written once, at registration: the module is published on a host port during
-      # development and on its own name in production, and the project's page has to
-      # be told which it is. An operator changes it in the module's settings.
-      DOGIT_REGISTRY_PUBLIC_ADDRESS: ${DOGIT_REGISTRY_PUBLIC_ADDRESS:-http://127.0.0.1:8091}
+      # The address image names are built with, written once at registration. It has
+      # to be an address a cluster can pull from and not only one a browser on this
+      # machine can reach: during development that is the machine's own address on the
+      # network, because a pod cannot reach a loopback. An operator changes it in the
+      # module's settings.
+      DOGIT_REGISTRY_PUBLIC_ADDRESS: ${DOGIT_REGISTRY_PUBLIC_URL:-http://127.0.0.1:8091}
       DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
       REGISTRY_URL: http://registry:5000
       REGISTRY_STORAGE_DIR: /var/lib/registry
@@ -178,7 +180,13 @@ services:
       # reached through the shared web server on 80/443, under a name of its own.
       DOGIT_MODULE_LISTEN: ":8091"
     ports:
+      # On the loopback, for the browser and for docker on this machine.
       - "127.0.0.1:8091:8091"
+      # And on this machine's address in the network, because a pod cannot reach a
+      # loopback: 127.0.0.1 inside a pod is that pod. An image name the cluster cannot
+      # pull is a deployment that rolls out and then sits at ImagePullBackOff, which
+      # looks like a broken cluster rather than a published port.
+      - "${DOGIT_REGISTRY_BIND:-192.168.1.103}:8091:8091"
     volumes:
       - dogit-registry:/var/lib/registry:ro
 
@@ -272,6 +280,13 @@ services:
     # discovering the problem from a rollout that timed out.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      # The credentials for this module's own database are handed over once, at
+      # registration, and never again — the core does not store a password. Keeping
+      # them here is the only way the history survives a restart, and a history that
+      # is empty after every restart is a history that cannot answer the one question
+      # anybody opens it for.
+      - module-deploy-state:/var/lib/dogit-deploy
 
   # Reference implementation of the module protocol. It has no product
   # behaviour: it exists to prove that registration, heartbeats and
@@ -329,6 +344,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
+  # This module's own state: the credentials for the database the core handed it once.
+  module-deploy-state:
   postgres-data:
   dogit-data:
   # The generated proxy configuration, shared between the writer and the reader.

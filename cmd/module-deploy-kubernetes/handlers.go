@@ -221,12 +221,25 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("cluster")
 	namespace := r.URL.Query().Get("namespace")
 
-	if project == "" || name == "" {
-		writeError(w, http.StatusBadRequest, "the history is asked for by project and cluster")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "the history is asked for by project")
 		return
 	}
 	if c.history == nil {
 		writeError(w, http.StatusServiceUnavailable, errNoHistory.Error())
+		return
+	}
+
+	// No cluster named means the whole project: a page asking "what has this project
+	// deployed" is not asking about one place, and making it name a cluster first
+	// would mean the answer to that question is a form.
+	if strings.TrimSpace(name) == "" {
+		records, err := c.history.List(ctx, project, "", "")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deployments": viewsOf(records)})
 		return
 	}
 
@@ -249,11 +262,7 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	views := make([]map[string]any, 0, len(records))
-	for _, one := range records {
-		views = append(views, viewOf(one))
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"deployments": views})
+	writeJSON(w, http.StatusOK, map[string]any{"deployments": viewsOf(records)})
 }
 
 // handleTestCluster says whether a cluster can be reached, before anything is deployed
@@ -344,6 +353,15 @@ func viewOf(record deploy.Deployment) map[string]any {
 		out["finished_at"] = *record.FinishedAt
 	}
 	return out
+}
+
+// viewsOf is a list of deployments as the interface sees them.
+func viewsOf(records []deploy.Deployment) []map[string]any {
+	views := make([]map[string]any, 0, len(records))
+	for _, one := range records {
+		views = append(views, viewOf(one))
+	}
+	return views
 }
 
 func boolSetting(settings map[string]any, key string) bool {

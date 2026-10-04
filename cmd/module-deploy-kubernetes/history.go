@@ -20,6 +20,10 @@ import (
 // the module's own business, and the reason it lives here rather than in the core is
 // that a second copy of "what is deployed" is how two things start to disagree.
 
+// staleDeploymentAge is how long a deployment may claim a place before it is assumed
+// abandoned. Well beyond any rollout, and well beyond the core's own hour-long limit.
+const staleDeploymentAge = 2 * time.Hour
+
 // History is this module's record of deployments.
 type History interface {
 	Begin(ctx context.Context, d deploy.Deployment) (deploy.Deployment, error)
@@ -105,6 +109,24 @@ func (h *postgresHistory) Begin(ctx context.Context, d deploy.Deployment) (deplo
 		d.ID = uuid.New()
 	}
 
+	// A deployment that was begun and never finished — this module was killed
+	// mid-rollout, or the machine it was on went away — would hold this place for
+	// ever. One that started long enough ago is not in progress, it is abandoned: its
+	// module is not coming back, and every later deployment to the same place is
+	// refused by a row nobody will ever close.
+	//
+	// Long enough is generous. A migration that legitimately takes this long is
+	// unheard of, and being wrong in this direction costs one extra concurrent
+	// rollout rather than a namespace that can never be deployed to again.
+	if _, err := h.pool.Exec(ctx, `
+		UPDATE deployments SET state = 'abandoned', finished_at = now(),
+			reason = 'the module stopped reporting this deployment'
+		WHERE project = $1 AND cluster = $2 AND namespace = $3 AND state = 'running'
+		  AND started_at < now() - $4::interval`,
+		d.Project, d.Cluster, d.Namespace, staleDeploymentAge); err != nil {
+		return d, fmt.Errorf("clear an abandoned deployment: %w", err)
+	}
+
 	_, err := h.pool.Exec(ctx, `
 		INSERT INTO deployments (id, project, cluster, namespace, image, workload, state, started_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'running', $7)`,
@@ -175,11 +197,15 @@ func (h *postgresHistory) Current(ctx context.Context, project, cluster, namespa
 	return &record, nil
 }
 
+// An empty cluster or namespace means "any": the question a project page asks is what
+// it has deployed, not what it deployed to one place it already knows the name of.
 func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace string) ([]deploy.Deployment, error) {
 	rows, err := h.pool.Query(ctx, `
 		SELECT id, project, cluster, namespace, image, workload, state, phase, reason, started_at, finished_at
 		FROM deployments
-		WHERE project = $1 AND cluster = $2 AND namespace = $3
+		WHERE project = $1
+		  AND ($2 = '' OR cluster = $2)
+		  AND ($3 = '' OR namespace = $3)
 		ORDER BY started_at DESC LIMIT 100`, project, cluster, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("read the deployment history: %w", err)
@@ -309,4 +335,15 @@ func timeoutFrom(settings map[string]any, key string, fallback time.Duration) ti
 		return fallback
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+// setStartedAt moves a deployment's start, for the test that stands in for one whose
+// module was killed.
+//
+// A test helper rather than part of the interface on purpose: nothing in the running
+// module has any business rewriting when a deployment began.
+func (h *postgresHistory) setStartedAt(ctx context.Context, id uuid.UUID, startedAt time.Time) error {
+	_, err := h.pool.Exec(ctx,
+		`UPDATE deployments SET started_at = $2 WHERE id = $1`, id, startedAt)
+	return err
 }

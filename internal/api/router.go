@@ -253,6 +253,12 @@ func (s *Server) projectRoutes() chi.Router {
 
 	// Pipelines. A run is a run whether it came from a push or from a person, and
 	// both end up here.
+	// What a project has running, and the one action that changes it. Both go to the
+	// deploy module, which is where those facts live; the core only decides who may
+	// ask and refuses an undo to anybody but an administrator.
+	projects.Get(base+"/deployments", s.handleProjectDeployments)
+	projects.Post(base+"/deployments/rollback", s.handleRollbackDeployment)
+
 	projects.Post(base+"/pipelines", s.handleCreatePipeline)
 	projects.Get(base+"/pipelines", s.handleListPipelines)
 	projects.Get(base+"/pipelines/{pipelineIID}", s.handleGetPipeline)

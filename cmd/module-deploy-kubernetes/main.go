@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -32,6 +33,9 @@ const (
 	defaultListen  = ":8094"
 	defaultName    = "kubernetes"
 	deployKind     = "deploy:kubernetes"
+
+	// defaultStateDir is where this module keeps the credentials it was handed once.
+	defaultStateDir = "/var/lib/dogit-deploy"
 
 	// maxBody is how much of a request is read. A deploy carries manifests and images;
 	// anything much larger than this is not a deploy.
@@ -52,6 +56,9 @@ func main() {
 	flag.StringVar(&cfg.listen, "listen", envOr("DOGIT_MODULE_LISTEN", defaultListen),
 		"address this module listens on")
 	flag.DurationVar(&cfg.interval, "heartbeat", 60*time.Second, "heartbeat interval")
+	flag.StringVar(&cfg.stateDir, "state", envOr("DOGIT_MODULE_STATE", defaultStateDir),
+		"directory this module keeps its own state in, including the database credentials "+
+			"it was handed at registration and never given again")
 	flag.Parse()
 
 	if cfg.registrationToken == "" {
@@ -84,6 +91,19 @@ func main() {
 	// There is nowhere else to keep them: a module is a separate process with its own
 	// secret, and a history that lives only in memory is a history that is empty after
 	// a restart — which is exactly when somebody asks what was deployed.
+	// The credentials arrive exactly once, at registration, so they are written down
+	// here. Nothing else in the process keeps them, and a history that is empty after
+	// a restart is a history that is empty exactly when somebody asks what was
+	// deployed — a question nobody asks at the moment they are deploying.
+	if core.databaseURL != "" {
+		if err := rememberDatabase(cfg.stateDir+"/database", core.databaseURL); err != nil {
+			log.Printf("module-deploy: the database could not be saved: %v", err)
+		}
+	} else if saved, ok := recallDatabase(cfg.stateDir + "/database"); ok {
+		core.databaseURL = saved
+		log.Printf("module-deploy: using the database saved earlier")
+	}
+
 	if core.databaseURL != "" {
 		history, err := openHistory(ctx, core.databaseURL)
 		if err != nil {
@@ -127,6 +147,8 @@ type config struct {
 	name              string
 	listen            string
 	interval          time.Duration
+	/** Where the database credentials handed over at registration are kept. */
+	stateDir string
 }
 
 // manifest is what this module says it does.
@@ -139,7 +161,9 @@ func manifest() map[string]any {
 	return map[string]any{
 		"version":     "0.1.0",
 		"description": "Deploys a project's built image onto a Kubernetes cluster",
-		"scopes":      []string{},
+		// Declared, because the core decides who may look at what is deployed and who may
+		// undo it, and it can only decide that about scopes a module says it has.
+		"scopes": []string{"deploy:read", "deploy:write"},
 
 		// It asks the core for a database of its own. The history is this module's
 		// business and nobody else's, and a module without one would be asking the core
@@ -282,3 +306,29 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 var errNoHistory = errors.New("this module has no history store, so it cannot remember deployments")
+
+// rememberDatabase writes the connection string to the module's own state.
+//
+// The core hands it over exactly once, at registration, and never again — that is the
+// whole point of not storing a password in a table everybody can read. So the module
+// keeps it, in a file on a volume that is its own, with permissions only it can read.
+func rememberDatabase(path, url string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(url), 0o600)
+}
+
+// recallDatabase is what was written earlier, if it is still there.
+//
+// A missing file is not a failure: a module being run without a volume is a module
+// whose history lasts until it restarts, which is better than a module that refuses
+// to deploy anything at all.
+func recallDatabase(path string) (string, bool) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	url := strings.TrimSpace(string(contents))
+	return url, url != ""
+}

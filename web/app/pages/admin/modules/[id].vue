@@ -38,6 +38,10 @@ const tabNames = computed(() => [
   ...(moduleKind.value === 'registry:docker' ? ['images'] : []),
   'settings',
   ...(moduleKind.value.startsWith('notify:') ? ['notifications'] : []),
+  // The record of what it deployed, kept apart from what it is configured to do: one
+  // is settings anybody inherits, the other is what happened to a running system and
+  // belongs to whoever may change one.
+  ...(moduleKind.value.startsWith('deploy:') ? ['deployments'] : []),
   'removal',
 ])
 
@@ -45,6 +49,7 @@ const tabTitles: Record<string, string> = {
   overview: 'Overview',
   images: 'Images',
   notifications: 'Notifications',
+  deployments: 'Deployments',
   settings: 'Settings',
   removal: 'Removal',
 }
@@ -249,6 +254,15 @@ const storageFraction = computed(() => {
               note="These are the instance-wide values. Group and project scopes override them and are configured on the group or project page."
             />
           </div>
+        </div>
+      </section>
+
+      <!-- Instance-wide: every project's deployments through this module, which is
+           what somebody who installed it wants to see. A project is not in scope here
+           because a project can be reached through any of them. -->
+      <section v-else-if="tab === 'deployments'" class="card">
+        <div class="card-body">
+          <ModuleDeploymentsByModule :module="module" />
         </div>
       </section>
 
