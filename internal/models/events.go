@@ -26,6 +26,14 @@ const (
 	// changes, while the history of what has been deployed changes once, at the end.
 	// One event for both would mean a page redrawing a list of twenty deployments
 	// every time one pod came up — which is exactly what it was doing.
+	// EventDeployPlan is the list of steps this particular deployment will go through,
+	// sent once before any of them happens.
+	//
+	// A separate kind rather than a field on the first progress event, because it is a
+	// different kind of fact: this is the whole plan, and it is true before the first
+	// step is taken. A client that had to infer it from progress would be inventing a
+	// list and correcting it as it went.
+	EventDeployPlan EventKind = "deploy.plan"
 	EventDeployOperation EventKind = "deploy.operation"
 	EventDeployHistory   EventKind = "deploy.history"
 

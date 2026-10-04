@@ -17,6 +17,12 @@
  */
 import type { DeployProgress } from '~/types/pipeline'
 
+/** One step, as the core described it. */
+interface PlannedStep {
+  key: string
+  label: string
+}
+
 const props = defineProps<{
   /** The most recent thing said about this deployment. */
   progress: DeployProgress | null
@@ -31,6 +37,14 @@ const props = defineProps<{
    * there is nothing to stand for.
    */
   live?: boolean
+  /**
+   * The steps this deployment will go through, in order.
+   *
+   * From the core, not from here. A client that kept its own list would be drawing a
+   * set of phases that might apply rather than the ones that do, and the difference
+   * is two rows that stay blue for ever on a deployment that has neither of them.
+   */
+  plan?: PlannedStep[]
 }>()
 
 type StepState = 'done' | 'now' | 'failed' | 'waiting'
@@ -45,18 +59,6 @@ interface Step {
 }
 
 /** The steps, in the order a deployment goes through them. */
-const ORDER: { key: string; label: string }[] = [
-  { key: 'build', label: 'Build the image' },
-  { key: 'push', label: 'Push the image' },
-  { key: 'prepare', label: 'Read the manifests' },
-  { key: 'pre', label: 'Run the pre-step jobs' },
-  { key: 'pull', label: 'Give the cluster a way to pull' },
-  { key: 'apply', label: 'Apply to the cluster' },
-  { key: 'rollout', label: 'Bring the new pods up' },
-  { key: 'retire', label: 'Retire the old pods' },
-  { key: 'post', label: 'Run the post-step jobs' },
-]
-
 /**
  * The "five of ten" in whatever a step last said, if it said one.
  *
@@ -88,29 +90,71 @@ function countsIn(heard?: DeployProgress): { done: number; of: number } | null {
  * message is a snapshot of one step, and a list built from snapshots loses the ticks
  * the moment a later step says anything.
  */
-const steps = computed<Step[]>(() => {
-  const wasSaid = new Map<string, DeployProgress>()
-  for (const one of props.seen ?? []) {
-    if (one?.phase) wasSaid.set(one.phase, one)
+/** The steps to draw: what the core planned, plus anything reported afterwards. */
+const order = computed<PlannedStep[]>(() => {
+  const planned = [...(props.plan ?? [])]
+  const known = new Set(planned.map((one) => one.key))
+
+  // Anything the module announces that was not in the plan is still real work and
+  // still belongs on the list: the core cannot know every step before the module
+  // starts, and the module is the one doing it. Appended in the order it arrived,
+  // which is the order it happened.
+  for (const key of lastHeard.value.keys()) {
+    if (known.has(key)) continue
+    known.add(key)
+    planned.push({ key, label: labelOf(key) })
   }
-  if (props.progress?.phase) wasSaid.set(props.progress.phase, props.progress)
+
+  return planned
+})
+
+/** A name for a step the core did not mention, taken from what the module said. */
+function labelOf(key: string) {
+  const said = lastHeard.value.get(key)
+  return said?.message.slice(0, 40) || key
+}
+
+/** Everything said so far, by phase: the last word on each. */
+const lastHeard = computed(() => {
+  const said = new Map<string, DeployProgress>()
+  for (const one of props.seen ?? []) {
+    if (one?.phase) said.set(one.phase, one)
+  }
+  if (props.progress?.phase) said.set(props.progress.phase, props.progress)
+  return said
+})
+
+const steps = computed<Step[]>(() => {
+  const wasSaid = lastHeard.value
 
   const nowOn = props.progress?.phase ?? ''
-  const nowAt = ORDER.findIndex((one) => one.key === nowOn)
+  const nowAt = order.value.findIndex((one) => one.key === nowOn)
 
-  // Whether the operation is over. The last thing said about a finished deployment
+  // How far it got, which is not the same question as where it is now.
+  //
+  // The last thing said about a finished operation carries no phase in it, so asking
+  // "which step is current" at the end answers "none" — and a list that takes that
+  // for its high-water mark loses every tick it had earned and paints the whole
+  // operation grey. The furthest step ever mentioned is the one that knows.
+  let reachedAt = nowAt
+  for (const key of wasSaid.keys()) {
+    const at = order.value.findIndex((one) => one.key === key)
+    if (at > reachedAt) reachedAt = at
+  }
+
+  // Whether the operation is over: the last thing said about a finished deployment
   // has no phase in it, and without that a step nobody reached would sit at
   // "waiting" for ever — which says it is about to start.
   const over = props.progress?.message !== undefined && nowOn === ''
 
-  return ORDER.map((step, position) => {
+  return order.value.map((step, position) => {
     const heard = wasSaid.get(step.key)
     let state: StepState = 'waiting'
 
     if (heard?.failed) state = 'failed'
     else if (step.key === nowOn) state = 'now'
-    else if (nowAt > -1 && position < nowAt) state = 'done'
-    else if (over && position > nowAt) state = 'skipped'
+    else if (reachedAt > -1 && position < reachedAt) state = 'done'
+    else if (over && position > reachedAt) state = 'skipped'
 
     return {
       key: step.key,

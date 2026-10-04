@@ -171,6 +171,18 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		return err
 	}
 
+	// The plan, said before any of it happens.
+	//
+	// The step list is drawn from a fixed set of phases, and two of them only exist
+	// for deployments that configured them. Without being told which, a page draws a
+	// pre-step and a post-step for a deployment that has neither, in blue, for ever:
+	// two rows promising work that will never happen and never changing colour.
+	// Whoever read the configuration is the one who knows, so they say.
+	s.publishPipeline(ctx, project.ID, nil, models.EventDeployPlan, map[string]any{
+		"job_id": job.ID,
+		"steps":  deployStepsFor(buildJob(ctx, s, pipelineRun, job.ID), len(manifests), len(pre), len(post)),
+	})
+
 	request := deployRequest{
 		Project:        project.Path,
 		Target:         spec.Target,
@@ -411,6 +423,56 @@ func (s *Server) deployModule(ctx context.Context, target string) (*models.Integ
 // Read at the commit rather than from a branch, for the same reason the pipeline's
 // configuration is: a deployment is a claim about code, and applying today's
 // manifests to yesterday's image is not the deployment anybody described.
+// deployStepNames is a step of a deployment, as the page is told to draw it.
+//
+// The label is the core's because the core is the one assembling the list, and a
+// client that invented its own labels would show words the module never said.
+type deployStepName struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
+// deployStepsFor is the plan for one particular deployment.
+//
+// Only what this deployment will actually do. A deployment with no pre-step jobs has
+// no pre-step row, and one that deploys an image somebody else built has no build or
+// push row — a list drawn from a fixed set of phases is a list of things that might
+// happen, and a page full of blue dots that never turn is a page nobody can read.
+func deployStepsFor(built string, manifests, pre, post int) []deployStepName {
+	steps := make([]deployStepName, 0, 9)
+
+	if built != "" {
+		steps = append(steps,
+			deployStepName{"build", "Build the image"},
+			deployStepName{"push", "Push the image"})
+	}
+
+	steps = append(steps, deployStepName{"prepare", "Read the manifests"})
+	if pre > 0 {
+		steps = append(steps, deployStepName{"pre", "Run the pre-step jobs"})
+	}
+	steps = append(steps,
+		deployStepName{"pull", "Give the cluster a way to pull"},
+		deployStepName{"apply", "Apply to the cluster"},
+		deployStepName{"rollout", "Bring the new pods up"},
+		// Only a deployment that rolls something can have something to retire. A step
+		// for retiring old pods on a workload there are none of would be a row that
+		// never changes; if it turns out there was nothing to retire, the page draws
+		// it as skipped, which is what happened.
+		deployStepName{"retire", "Retire the old pods"})
+	if post > 0 {
+		steps = append(steps, deployStepName{"post", "Run the post-step jobs"})
+	}
+
+	return steps
+}
+
+// buildJob names the job that built the image this run deploys, or nothing.
+func buildJob(ctx context.Context, s *Server, run *store.Pipeline, skipJobID int64) string {
+	_, built := builtImage(ctx, s, run, skipJobID)
+	return built
+}
+
 func (s *Server) readDeployManifests(ctx context.Context, repoDir, sha string,
 	paths []string, log func(string, ...any)) ([]deployManifest, error) {
 

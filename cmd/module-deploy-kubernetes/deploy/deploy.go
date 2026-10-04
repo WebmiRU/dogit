@@ -291,10 +291,18 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		err := d.wait(ctx, request)
 		stop()
 
-		// What the rollout did, kept before anything else can go wrong. A deployment
-		// that fails halfway through still rolled some containers out, and a history
-		// that only remembers success and failure cannot say how far it got.
+		// Asked once more after the watching has stopped, because watching is by
+		// definition a sample: a rollout that finishes between two ticks is a rollout
+		// that was never seen at all, and a history that says "0 of 0" about three
+		// pods that came up a moment ago is worse than one that says nothing.
+		//
+		// The state at the end is also the only one worth recording. The numbers during
+		// a rollout are for the person watching; the numbers afterwards are the record.
 		wanted, ready, retired := counted()
+		if final, cerr := d.client.Counts(ctx, request.Namespace, request.Rollout,
+			request.Image); cerr == nil {
+			wanted, ready = final.Desired, final.Ready
+		}
 		if err := d.history.Counts(ctx, record.ID, wanted, ready, retired); err != nil {
 			d.logf("record what the rollout did: %v", err)
 		}
@@ -303,7 +311,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 			request.report(Progress{Phase: StepRollout, Message: err.Error(), Failed: true})
 			return d.fail(ctx, record, PhaseApply, err)
 		}
-		request.report(Progress{Phase: StepRollout,
+		request.report(Progress{Phase: StepRollout, Ready: ready, Desired: wanted,
 			Message: fmt.Sprintf("every pod is running the new image (%d of %d)", ready, wanted)})
 	}
 

@@ -95,6 +95,9 @@ const imagePage = ref(1)
 
 /** The operation under way, as the module describes it step by step. */
 const active = ref<DeployProgress | null>(null)
+
+/** The steps the core said this deployment goes through, in order. */
+const plan = ref<{ key: string; label: string }[]>([])
 const activeSeen = ref<DeployProgress[]>([])
 
 const target = computed(() => props.module.kind.replace(/^deploy:/, ''))
@@ -383,6 +386,7 @@ async function revertTo(deployment: Deployment) {
 }
 
 /** Two subscriptions, because two things change at different rates. */
+let stopPlan: (() => void) | undefined
 let stopHistory: (() => void) | undefined
 let stopOperation: (() => void) | undefined
 
@@ -403,6 +407,19 @@ onMounted(async () => {
     },
   })
 
+  // The plan, once, before anything happens. Separate from the operation's own
+  // events because it is a different kind of fact: the whole list, sent before the
+  // first step is taken.
+  stopPlan = watchEvents({
+    kinds: ['deploy.plan'],
+    project: () => props.projectPath,
+    onEvent: (event) => {
+      const steps = event.payload?.steps
+      if (!Array.isArray(steps)) return
+      plan.value = steps as { key: string; label: string }[]
+    },
+  })
+
   // The history, once, when something ends.
   stopHistory = watchEvents({
     kinds: ['deploy.history'],
@@ -417,6 +434,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  stopPlan?.()
   stopHistory?.()
   stopOperation?.()
 })
@@ -447,7 +465,7 @@ watch(() => props.module.id, load)
           </span>
         </div>
 
-        <DeploySteps :progress="active" :seen="activeSeen" live />
+        <DeploySteps :progress="active" :seen="activeSeen" :plan="plan" live />
 
         <details class="log">
           <summary class="muted small">Where the whole of this is written down</summary>
@@ -482,7 +500,7 @@ watch(() => props.module.id, load)
              to read rather than something to catch. -->
         <!-- Not live: this is the last operation's steps, and an arrow moving here
              would be claiming work that finished long ago. -->
-        <DeploySteps v-if="idleProgress" :progress="idleProgress" />
+        <DeploySteps v-if="idleProgress" :progress="idleProgress" :plan="plan" />
       </div>
     </section>
 
