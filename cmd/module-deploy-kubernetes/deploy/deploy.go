@@ -70,6 +70,10 @@ type Request struct {
 	// repository's manifests are applied as they are, which is only right for a deploy
 	// that changes nothing about what runs — so it has to be asked for deliberately.
 	Image string
+	// Tags are the names that image was published under. Kept with the deployment
+	// rather than looked up later, because a tag can be moved: what a lookup says now
+	// is not what was deployed then.
+	Tags []string
 	// Placeholder is the token the manifests leave where the image goes.
 	Placeholder string
 
@@ -129,6 +133,10 @@ type Deployment struct {
 	Reason     string
 	StartedAt  time.Time
 	FinishedAt *time.Time
+	// Tags are the names the image was published under when this deployment happened.
+	// Written down rather than asked of the registry afterwards, because a tag can be
+	// moved and a lookup later answers a different question than the one being asked.
+	Tags []string `json:"tags,omitempty"`
 	// Log is what this deployment said, in order. Kept with it because the question the
 	// log answers — where did it break — is asked long after the page that watched it
 	// was closed.
@@ -275,6 +283,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		Namespace: request.Namespace,
 		Image:     image,
 		Workload:  request.Workload,
+		Tags:      request.Tags,
 		State:     StateRunning,
 		StartedAt: now(),
 	})

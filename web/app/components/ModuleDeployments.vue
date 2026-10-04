@@ -54,6 +54,8 @@ interface Deployment {
   pods_wanted?: number
   pods_ready?: number
   pods_retired?: number
+  /** The names this image had when this operation ran, as they were then. */
+  tags?: string[]
   /** What this operation said, in order, when the server has it to give. */
   log?: LogLine[]
 }
@@ -147,6 +149,23 @@ function shortImage(image: string): string {
   if (at < 0) return image || '—'
   const digest = image.slice(at + 1).replace(/^sha256:/, '')
   return `${image.slice(0, at)}@${digest.slice(0, 12)}`
+}
+
+/**
+ * What an image is called, for a person to read.
+ *
+ * The tag first, because that is the name somebody chose and recognises. The digest is
+ * what the system uses and what the row is really about, so it stays on the line — but
+ * after the name, where it answers to a question rather than replacing one.
+ */
+function namedImage(image: string, tags?: string[]): string {
+  const names = (tags ?? []).map((one) => one.trim()).filter(Boolean)
+  if (names.length === 0) return shortImage(image)
+
+  const short = shortImage(image)
+  // Already the same thing said twice: an image whose only tag is its own digest.
+  if (names.length === 1 && short.includes(names[0])) return short
+  return `${names.join(', ')} · ${short}`
 }
 
 function when(iso?: string): string {
@@ -797,7 +816,7 @@ watch(() => props.module.id, load)
                     type="button"
                     @click="showImage(one.image)"
                   >
-                    {{ shortImage(one.image) }}
+                    {{ namedImage(one.image, one.tags) }}
                   </button>
                   <span v-else>—</span>
                 </td>

@@ -583,20 +583,49 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 	return nil
 }
 
-// imageTagFor is what an image built without a name of its own is called.
+// imageNamesFor is what an image is called here, in the order it should be named.
 //
-// The tag when the run has one, the short commit otherwise. Never "latest": that name
-// means nothing, moves by itself, and is the usual way the wrong image reaches
-// production — and here every deploy is named by digest anyway, so a tag is a label for
-// a person, not an address for the system.
-func imageTagFor(environment map[string]string) string {
-	if tag := environment["CI_COMMIT_TAG"]; tag != "" {
-		return tag
+// Never "latest": that name means nothing, moves by itself, and is the usual way the
+// wrong image reaches production. Every deploy here is addressed by digest anyway, so a
+// tag is a label for a person, not an address for the system — which is exactly why
+// having the commit's name beside it matters more than having "latest".
+//
+// A repository may name the image itself with `tag: $CI_COMMIT_TAG`. That name is
+// honoured, and the commit is added beside it rather than replaced by it: a release
+// that can only be found by a name somebody might reuse is harder to reason about later
+// than one that also carries the commit it was built from.
+func imageNamesFor(build map[string]any, environment map[string]string) []string {
+	short := environment["CI_COMMIT_SHORT_SHA"]
+	tag := environment["CI_COMMIT_TAG"]
+
+	wanted, _ := build["tag"].(string)
+	wanted = strings.TrimSpace(wanted)
+	// The common case: the file asked for the tag and there is none, so it asked for
+	// the commit by another name. Not an empty image and not "latest".
+	if wanted == "" || wanted == tag {
+		if tag == "" && short != "" {
+			return []string{short}
+		}
 	}
-	if sha := environment["CI_COMMIT_SHORT_SHA"]; sha != "" {
-		return sha
+
+	names := []string{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		for _, existing := range names {
+			if existing == name {
+				return
+			}
+		}
+		names = append(names, name)
 	}
-	return "latest"
+
+	add(wanted)
+	add(tag)
+	add(short)
+	return names
 }
 
 // buildAndPush builds the image a job asked for and pushes it to the registry.
@@ -616,11 +645,18 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	if image == "" {
 		return "", errors.New("the core did not say what the image is called")
 	}
-	tag, _ := build["tag"].(string)
-	if tag == "" {
-		tag = imageTagFor(environment)
+	// Two names for one image, when it has two.
+	//
+	// The tag says what the release is called and the short commit says what was
+	// actually built. Both are pushed: a tag can be reused, so a registry holding only
+	// tags cannot answer "what exactly was deployed then" a year later, and a name that
+	// was built and never pushed is work for nothing. The second push costs one manifest
+	// — the layers are addressed by their content and are already there.
+	names := imageNamesFor(build, environment)
+	if len(names) == 0 {
+		names = []string{"latest"}
 	}
-	full := image + ":" + tag
+	full := image + ":" + names[0]
 
 	contextPath := "."
 	if value, ok := build["context"].(string); ok && value != "" {
@@ -635,8 +671,14 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	// it, which is the whole reason this process exists as its own binary.
 	// Plain progress, asked for rather than inferred: docker decides between lines
 	// and a spinner by whether it has a terminal, and what we want here is lines.
-	args := []string{"build", "--progress=plain", "-t", full,
-		"-f", filepathJoin(workspace, file), workspace}
+	// One build, every name it will be known by. Building twice would be faster to
+	// write and wrong: two builds of the same sources can differ, and a release whose
+	// two names point at different images is a release nobody can reason about.
+	args := []string{"build", "--progress=plain"}
+	for _, name := range names {
+		args = append(args, "-t", image+":"+name)
+	}
+	args = append(args, "-f", filepathJoin(workspace, file), workspace)
 	// Provenance off.
 	//
 	// BuildKit attaches a record of how an image was built and pushes it beside the
@@ -700,17 +742,24 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	// terminal attached docker writes plain lines for both, which is what a log
 	// wants anyway — the spinner is for somebody sitting in front of it.
 	pushTail := newTailWriter(20)
-	push := []string{"--config", configDir, "push", full}
 	if announce != nil {
 		announce("push", "pushing to "+host)
 	}
-	if err := runStreaming(ctx, progress, pushTail, cfg.dockerBinary, push...); err != nil {
-		if announce != nil {
-			announce("push", "the push was refused")
+	for i, name := range names {
+		if err := runStreaming(ctx, progress, pushTail, cfg.dockerBinary,
+			"--config", configDir, "push", image+":"+name); err != nil {
+			if announce != nil {
+				announce("push", "the push was refused")
+			}
+			return "", fmt.Errorf("docker push %s: %w: %s", name, err, pushTail.String())
 		}
-		return "", fmt.Errorf("docker push: %w: %s", err, pushTail.String())
+		if i < len(names)-1 {
+			fmt.Fprintf(progress, "also as %s\n", image+":"+name)
+		}
 	}
 	if announce != nil {
+		// Named by digest, which is how a deployment refers to it and is the one name
+		// here that cannot be reused or moved.
 		announce("push", "the registry has it as "+digestOf(pushTail.String()))
 	}
 	return full, nil

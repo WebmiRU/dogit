@@ -39,6 +39,11 @@ type deployRequest struct {
 	Image       string `json:"image"`
 	Placeholder string `json:"placeholder"`
 
+	// Tags are the names that image was published under. Recorded with the deployment
+	// rather than asked of the registry when somebody asks, because a tag can be moved
+	// and the answer to "what was this called" changes with it.
+	Tags []string `json:"tags,omitempty"`
+
 	Manifests []struct {
 		APIVersion string `json:"api_version"`
 		Kind       string `json:"kind"`
@@ -158,6 +163,7 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		Cluster:        cluster.Name,
 		Namespace:      namespace,
 		Image:          request.Image,
+		Tags:           request.Tags,
 		Placeholder:    request.Placeholder,
 		Manifests:      manifests,
 		Pre:            jobs(substitution, request.Pre, namespace),
@@ -558,6 +564,9 @@ func viewOf(record deploy.Deployment) map[string]any {
 		// How many pods this operation dealt with. Sent whenever there were any,
 		// so a row with no rollout on it — a failed apply, a revert of something
 		// that never ran — says nothing rather than saying zero of zero.
+		// The names the image had when this deployment ran. Carried through rather
+		// than read from the registry, which would answer for now instead of then.
+		"tags": record.Tags,
 		"pods_wanted":  record.PodsWanted,
 		"pods_ready":   record.PodsReady,
 		"pods_retired": record.PodsRetired,

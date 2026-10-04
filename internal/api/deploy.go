@@ -76,6 +76,16 @@ type deployRequest struct {
 	// rollback can say what it returned to, without asking the core again.
 	Ref string `json:"ref"`
 	Sha string `json:"sha"`
+
+	// Tags are the names the image was published under, as they were when this
+	// deployment happened.
+	//
+	// Written down rather than asked for later, on purpose. Asking the registry which
+	// tags point at a digest means listing every tag and reading every manifest, and
+	// the answer changes: a tag may be moved afterwards, so a lookup a year later
+	// describes now, not what was deployed. This is what was true then, recorded when
+	// it was true, which is the only version of the question that has an answer.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // registryCredential is what a cluster needs to pull this project's images.
@@ -185,6 +195,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		TimeoutSeconds: deployTimeoutSeconds(spec.Timeout),
 		Ref:            pipelineRun.Ref,
 		Sha:            pipelineRun.SHA,
+		Tags:           deployedImageNames(pipelineRun),
 	}
 	// The credential the cluster pulls with.
 	//
@@ -389,6 +400,35 @@ func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.
 		return image, nil
 	}
 	return digest, nil
+}
+
+// deployedImageNames are the names the image was published under.
+//
+// The tag if the run had one, the short commit always, and the repository's own name if
+// it chose one. Which is what a person wants to see on a row: "0681599" identifies the
+// image and tells nobody anything, while "v4.00" says what the release is.
+func deployedImageNames(run *store.Pipeline) []string {
+	names := []string{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		for _, existing := range names {
+			if existing == name {
+				return
+			}
+		}
+		names = append(names, name)
+	}
+
+	add(run.Variables["CI_COMMIT_TAG"])
+	if short := run.Variables["CI_COMMIT_SHORT_SHA"]; short != "" {
+		add(short)
+	} else if len(run.SHA) > 7 {
+		add(run.SHA[:7])
+	}
+	return names
 }
 
 // deployModule is the module that does this kind of deployment.
