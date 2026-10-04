@@ -649,6 +649,30 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 		return fmt.Errorf("finish job: %w", err)
 	}
 
+	// A job that failed for good takes the rest of the run with it: the jobs after
+	// it will never run, and leaving them pending is a run that waits for ever on
+	// something nobody is going to do. It is also what a person reading the queue
+	// is misled by — a deploy job sitting at "waiting" beside a build that failed
+	// says the run is still going somewhere, and the run is not.
+	//
+	// Skipped rather than canceled: nothing chose this, and the difference is worth
+	// keeping. A failure the job was allowed to fail does not stop the run, and a
+	// retry puts the job back to pending where it belongs.
+	//
+	// A job that is already running is left alone: it belongs to a machine that is
+	// working on it, and cancelling it here would only make two things believe
+	// otherwise — the machine, and whoever reads the log afterwards.
+	if status == JobFailed {
+		if _, err := r.s.pool.Exec(ctx, `
+			UPDATE jobs SET status = $2, finished_at = now()
+			WHERE pipeline_id = (SELECT pipeline_id FROM jobs WHERE id = $1)
+			  AND id > $1
+			  AND status = $3`,
+			id, JobSkipped, JobPending); err != nil {
+			return fmt.Errorf("skip the jobs after a failed one: %w", err)
+		}
+	}
+
 	// The pipeline is finished when nothing of its is still waiting. Both the
 	// pending and the running states count as waiting: a pipeline whose second job
 	// has not started is not over, however the first went.
