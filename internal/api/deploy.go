@@ -256,7 +256,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				}
 				_, _ = s.appendJobOutput(ctx, job, stream, progressLine(progress))
 
-				s.publishPipeline(ctx, project.ID, nil, models.EventJobUpdated, map[string]any{
+				// The operation's own event. Separate from the history below because
+				// this arrives many times a minute and that arrives once.
+				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, map[string]any{
 					"job_id":  job.ID,
 					"phase":   progress.Phase,
 					"message": progress.Message,

@@ -146,7 +146,7 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		if json.Unmarshal(line, &progress) != nil || progress.Message == "" {
 			return
 		}
-		s.publishPipeline(r.Context(), project.ID, nil, models.EventJobUpdated, map[string]any{
+		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, map[string]any{
 			"phase": progress.Phase, "message": progress.Message,
 			"ready": progress.Ready, "desired": progress.Desired,
 		})
@@ -155,6 +155,10 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, r, err)
 		return
 	}
+	s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployHistory, map[string]any{
+		"project": project.Path,
+	})
+
 	s.log.Info("a version was put back", "project", project.Path,
 		"cluster", request.Cluster, "deployment", request.DeploymentID, "user", user.Username)
 

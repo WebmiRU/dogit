@@ -10,17 +10,16 @@ import (
 // Reading this module's own settings, and what it says when they do not say enough.
 //
 // The clusters are a list because a cluster is a set of values that belong together,
-// and two clusters of different kinds — one reached through the pod's service
-// account, one through a kubeconfig somebody copied — cannot be two values of one
-// key. What the tests check is that a list arrives as a list, that half-filled rows
-// are ignored rather than half-used, and that the module refuses where guessing would
-// be worse.
+// and one reached through the pod's own service account cannot be two values of one
+// key with one reached through a kubeconfig somebody copied. What the tests check is
+// that a list arrives as a list, that half-filled rows are ignored rather than
+// half-used, and that the module refuses where guessing would be worse.
 
 // clusterList is the shape a list setting arrives in from the core.
 const clusterList = `[
   {"name": "production-eu", "in_cluster": false, "kubeconfig": "YXBpVmVyc2lvbjogdjEK",
    "context": "prod", "default_namespace": "web"},
-  {"name": "staging", "in_cluster": true, "default_namespace": ""}
+  {"name": "staging", "default_namespace": "staging"}
 ]`
 
 func TestClustersArriveAsAList(t *testing.T) {
@@ -39,8 +38,8 @@ func TestClustersArriveAsAList(t *testing.T) {
 	if first.DefaultNamespace != "web" {
 		t.Errorf("the default namespace was read as %q", first.DefaultNamespace)
 	}
-	if clusters[1].InCluster != true {
-		t.Errorf("the in-cluster flag was not read: %+v", clusters[1])
+	if clusters[1].DefaultNamespace != "staging" {
+		t.Errorf("the second cluster was read as %+v", clusters[1])
 	}
 }
 
@@ -67,8 +66,8 @@ func TestNoClustersIsNotAFailure(t *testing.T) {
 	}
 }
 
-// A cluster reached by a kubeconfig that is not there is a problem the operator has
-// to fix, and the message has to say which file.
+// A cluster with no credential is a problem the operator has to fix, and the message
+// has to say which cluster is unusable.
 func TestAClusterWithNoWayInSaysWhatIsMissing(t *testing.T) {
 	_, err := Cluster{Name: "staging"}.Connect(t.Context())
 	if err == nil {

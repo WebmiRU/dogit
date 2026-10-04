@@ -371,7 +371,7 @@ onMounted(async () => {
   // keeps listening, so a job retried from another page — or a run started from the
   // list — is picked up without a reload.
   stopWatching = watchEvents({
-    kinds: ['pipeline.created', 'pipeline.updated', 'job.updated'],
+    kinds: ['pipeline.created', 'pipeline.updated', 'deploy.operation', 'job.updated'],
     project: () => props.projectPath,
     onEvent: noteProgress,
     onChange: () => {

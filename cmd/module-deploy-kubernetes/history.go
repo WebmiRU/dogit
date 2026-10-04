@@ -283,11 +283,6 @@ func clustersOf(settings map[string]any) ([]Cluster, error) {
 // Cluster is one place this module may deploy to.
 type Cluster struct {
 	Name string `json:"name"`
-	// InCluster says this module runs inside the cluster and uses the pod's own
-	// service account. It is a separate mode rather than a defaulted field because
-	// the two differ in every way that matters: what has to be stored, what can leak,
-	// and what somebody has to rotate by hand.
-	InCluster bool `json:"in_cluster"`
 	// Kubeconfig is the file's contents, not a path to it.
 	//
 	// The contents, and marked secret, because a kubeconfig is a credential and a path
@@ -305,13 +300,8 @@ type Cluster struct {
 
 // Connect builds a client for a cluster, or says why it cannot.
 func (c Cluster) Connect(ctx context.Context) (k8s.Client, error) {
-	if c.InCluster {
-		return k8s.Connect(ctx, k8s.Access{InCluster: true})
-	}
 	if strings.TrimSpace(c.Kubeconfig) == "" {
-		return nil, fmt.Errorf(
-			"cluster %q has neither a kubeconfig nor the setting that says this module runs inside it",
-			c.Name)
+		return nil, fmt.Errorf("cluster %q has no kubeconfig, so there is no way in", c.Name)
 	}
 	return k8s.Connect(ctx, k8s.Access{
 		Kubeconfig: []byte(c.Kubeconfig), Context: c.Context})

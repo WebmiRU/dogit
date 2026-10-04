@@ -19,6 +19,16 @@ const (
 	EventMergeRequestChanged EventKind = "merge_request.changed"
 	EventProjectUpdated      EventKind = "project.updated"
 
+	// A deployment's own two streams.
+	//
+	// Split because they answer different questions at different rates: the operation
+	// under way reports a step every few seconds and is the only thing on the page that
+	// changes, while the history of what has been deployed changes once, at the end.
+	// One event for both would mean a page redrawing a list of twenty deployments
+	// every time one pod came up — which is exactly what it was doing.
+	EventDeployOperation EventKind = "deploy.operation"
+	EventDeployHistory   EventKind = "deploy.history"
+
 	// Module events carry no project: a module belongs to the instance rather than
 	// to anything inside it, and the only page that watches them is the
 	// administrator's.

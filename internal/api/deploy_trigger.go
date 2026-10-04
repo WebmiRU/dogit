@@ -209,6 +209,15 @@ func (s *Server) reportDeployFinished(ctx context.Context, job *store.Job, run *
 		"status":      status,
 	})
 
+	// The history changed — once, now, and not again until the next deployment. Its own
+	// event so that a page watching the list of what has been deployed does not also
+	// redraw it for every pod that comes up.
+	s.publishPipeline(ctx, project.ID, nil, models.EventDeployHistory, map[string]any{
+		"job_id":  job.ID,
+		"status":  status,
+		"project": project.Path,
+	})
+
 	remaining, err := s.store.Pipelines().UnfinishedJobs(ctx, run.ID)
 	if err != nil || remaining != 0 {
 		return

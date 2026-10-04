@@ -154,6 +154,23 @@ const shown = computed(() =>
   filtered.value.slice((page.value - 1) * PAGE, page.value * PAGE),
 )
 
+/**
+ * The rows as they now are, keeping the object of every row that has not changed.
+ *
+ * The identity of a row is what Vue patches on: a row whose object is the same one it
+ * had is not touched at all, so its DOM survives, and with it any text somebody had
+ * half-selected. Returning fresh objects for everything — which is what a straight
+ * assignment does — is what makes a page that nothing happened on still redraw.
+ */
+function merge(previous: Deployment[], arrived: Deployment[]): Deployment[] {
+  const byID = new Map(previous.map((one) => [one.id, one]))
+
+  return arrived.map((one) => {
+    const old = byID.get(one.id)
+    return old && JSON.stringify(old) === JSON.stringify(one) ? old : one
+  })
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -167,7 +184,7 @@ async function load() {
       reason.value = 'No deploy module is installed on this instance.'
       return
     }
-    const arrived = answer.deployments ?? []
+    const arrived = merge(deployments.value, answer.deployments ?? [])
 
     // Only put it in state when it is different.
     //
@@ -176,6 +193,9 @@ async function load() {
     // selection collapses, the page jumps back to the top, and the text somebody was
     // about to copy is no longer the text they were copying. A list that is not
     // scrolling should not repaint.
+    // Only what changed: Vue compares rows by identity, and a re-read that produces
+    // fresh objects for rows whose contents did not move makes every row re-render —
+    // which is what has been tearing the page about every few seconds.
     if (JSON.stringify(arrived) !== JSON.stringify(deployments.value)) {
       deployments.value = arrived
       page.value = 1
@@ -243,12 +263,21 @@ watch(stateFilter, () => {
  * the page has already moved past. A notification arriving while the table says
  * "running" is exactly the moment somebody stops trusting it.
  */
+/**
+ * Two subscriptions, because there are two things that change.
+ *
+ * The history changes once, when a deployment or a revert ends. The operation
+ * under way changes several times a minute. Listening to both through one
+ * subscription meant the list of twenty deployments was re-read and re-rendered
+ * every time a pod came up — which is the whole of the page twitching for no
+ * reason, and is what "the page jumps about" was.
+ */
 let stopWatching: (() => void) | undefined
 
 onMounted(async () => {
   await load()
   stopWatching = watchEvents({
-    kinds: ['pipeline.updated', 'job.updated'],
+    kinds: ['deploy.history'],
     project: () => props.projectPath,
     onChange: () => void load(),
   })

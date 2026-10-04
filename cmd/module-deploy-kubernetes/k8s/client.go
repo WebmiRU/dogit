@@ -156,20 +156,10 @@ type Access struct {
 	Kubeconfig []byte
 	// Context names which context in that file to use. Empty means the current one.
 	Context string
-	// InCluster asks for the ServiceAccount of the pod this is running in.
-	InCluster bool
 }
 
 func restConfig(access Access) (*rest.Config, error) {
 	switch {
-	case access.InCluster:
-		config, err := rest.InClusterConfig()
-		if err != nil {
-			return nil, fmt.Errorf(
-				"this module is set to use the cluster it runs in, and it is not running in one: %w", err)
-		}
-		return config, nil
-
 	case len(access.Kubeconfig) > 0:
 		// Straight from the bytes somebody pasted into a settings page.
 		//
