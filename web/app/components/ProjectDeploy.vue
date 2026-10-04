@@ -106,9 +106,12 @@ onMounted(load)
                 <div class="muted small mono">{{ module.kind }}</div>
               </td>
               <td>
-                <span v-if="!module.enabled" class="badge badge-muted">Forbidden</span>
-                <span v-else-if="module.status === 'online'" class="badge badge-ok">Online</span>
-                <span v-else class="badge badge-warn">{{ module.status }}</span>
+                <!-- A module that is not answering is the one thing an operator has
+                     to act on, so the colours are the ones used everywhere else rather
+                     than three new ones that look nearly the same. -->
+                <span v-if="!module.enabled" class="badge badge-neutral">Forbidden</span>
+                <span v-else-if="module.status === 'online'" class="badge badge-green">Online</span>
+                <span v-else class="badge badge-warning">{{ module.status }}</span>
               </td>
               <td class="actions-col">
                 <button class="btn btn-small" type="button" @click="toggleEdit(module)">
@@ -120,30 +123,45 @@ onMounted(load)
               </td>
             </tr>
 
+            <!-- The row of a module that is open. Nothing about a table goes here:
+                 a cell spanning every column makes the browser redistribute them, and
+                 the buttons slide sideways at the moment somebody is reaching for one. -->
             <tr v-if="editing === module.id" class="detail-row">
-              <td colspan="3">
-                <ModuleSettingsForm
-                  :module="module"
-                  scope="project"
-                  :scope-id="props.projectId"
-                  :note="`These values are for ${props.projectPath} only. Anything left alone is inherited from the group or the instance.`"
-                />
-              </td>
-            </tr>
-
-            <tr v-if="administering === module.id" class="detail-row">
-              <td colspan="3" class="admin-cell">
-                <ModuleDeployments
-                  :project-id="props.projectId"
-                  :project-path="props.projectPath"
-                  :module="module"
-                  :can-manage="props.canManage"
-                />
-              </td>
+              <td></td>
+              <td></td>
+              <td></td>
             </tr>
           </template>
         </tbody>
       </table>
+
+      <div
+        v-for="module in deployModules"
+        v-show="editing === module.id"
+        :key="`edit-${module.id}`"
+        class="panel"
+      >
+        <ModuleSettingsForm
+          :module="module"
+          scope="project"
+          :scope-id="props.projectId"
+          :note="`These values are for ${props.projectPath} only. Anything left alone is inherited from the group or the instance.`"
+        />
+      </div>
+
+      <div
+        v-for="module in deployModules"
+        v-show="administering === module.id"
+        :key="`admin-${module.id}`"
+        class="panel"
+      >
+        <ModuleDeployments
+          :project-id="props.projectId"
+          :project-path="props.projectPath"
+          :module="module"
+          :can-manage="props.canManage"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -183,16 +201,13 @@ th {
   margin-left: 6px;
 }
 
-.detail-row td {
-  background: var(--bg-inset);
+/* An open row, below the table rather than inside it, and given the same inset as the
+   rest of an expanded thing so it reads as belonging to the row above. */
+.panel {
+  margin-top: 4px;
   padding: 14px 12px;
-}
-
-/* The admin panel has a table of its own, a place list and a list of images. It is
-   given room rather than a fixed column, because a history squeezed into a card reads
-   as a summary and somebody will act on it. */
-.admin-cell {
-  width: 100%;
+  background: var(--bg-inset);
+  border-radius: 0 0 6px 6px;
 }
 
 .small {

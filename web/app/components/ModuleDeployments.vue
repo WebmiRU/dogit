@@ -70,6 +70,27 @@ function when(iso?: string): string {
   return new Date(iso).toLocaleString()
 }
 
+/**
+ * A state's colour, in the palette the rest of the interface uses.
+ *
+ * Written as one place rather than a class per row: a state means one colour, and a
+ * row that decides for itself is a row that will eventually be a fourth shade.
+ */
+function badgeClass(state: string): string {
+  switch (state) {
+    case 'succeeded':
+    case 'rolled_back':
+      return 'badge-green'
+    case 'failed':
+    case 'abandoned':
+      return 'badge-red'
+    case 'running':
+      return 'badge-warning'
+    default:
+      return 'badge-neutral'
+  }
+}
+
 function isLive(deployment: Deployment): boolean {
   return deployment.state === 'succeeded' || deployment.state === 'rolled_back'
 }
@@ -175,7 +196,28 @@ watch(stateFilter, () => {
   page.value = 1
 })
 
-onMounted(load)
+/**
+ * Re-read when something about this project's runs changes.
+ *
+ * Not optional. A deployment finishes long after the request that started it was
+ * answered, so this panel is nearly always open across the moment it changes — and
+ * without this it is the one place in the interface that shows a state the rest of
+ * the page has already moved past. A notification arriving while the table says
+ * "running" is exactly the moment somebody stops trusting it.
+ */
+let stopWatching: (() => void) | undefined
+
+onMounted(async () => {
+  await load()
+  stopWatching = watchEvents({
+    kinds: ['pipeline.updated', 'job.updated'],
+    project: () => props.projectPath,
+    onChange: () => void load(),
+  })
+})
+
+onBeforeUnmount(() => stopWatching?.())
+
 watch(() => props.module.id, load)
 </script>
 
@@ -251,11 +293,7 @@ watch(() => props.module.id, load)
               <td>
                 <span
                   class="badge"
-                  :class="{
-                    'badge-ok': isLive(deployment),
-                    'badge-warn': deployment.state === 'running',
-                    'badge-error': deployment.state === 'failed' || deployment.state === 'abandoned',
-                  }"
+                  :class="badgeClass(deployment.state)"
                 >
                   {{ deployment.state }}
                 </span>
