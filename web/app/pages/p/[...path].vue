@@ -257,14 +257,16 @@ const tabs = computed(() => {
     // and a tag that was never built has no page to show. So this one carries no ref.
     { label: 'Pipelines', to: `${base}/-/pipelines`, match: 'pipelines' },
     { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
-    // Present whether or not anything is installed. A tab that only exists once a
-    // module is there cannot introduce the idea: somebody who has never seen one has
-    // no reason to go looking for it.
-    { label: 'Notifications', to: `${base}/-/notifications`, match: 'notifications' },
     // Deployments sit outside the repository for the same reason images do: a commit
     // is not what runs, and a branch has nothing to say about which cluster it went
     // to. So no ref on this one either.
+    //
+    // Deploy comes before Notifications because both are about what this instance
+    // did to the world rather than about the code, and deploying is the one people
+    // are here for. Notifications is present whether or not anything is installed:
+    // a tab that only exists once a module is there cannot introduce the idea.
     { label: 'Deploy', to: `${base}/-/deploy`, match: 'deploy' },
+    { label: 'Notifications', to: `${base}/-/notifications`, match: 'notifications' },
     { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
   ]
 })

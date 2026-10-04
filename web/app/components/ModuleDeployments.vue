@@ -39,6 +39,29 @@ interface Deployment {
   reason: string
   started_at: string
   finished_at?: string
+  /** How many pods this operation dealt with. Zero when it never reached a cluster. */
+  pods_wanted?: number
+  pods_ready?: number
+  pods_retired?: number
+}
+
+/**
+ * What one operation did to the containers, in a few words.
+ *
+ * A deployment that is remembered by the fact that it succeeded has forgotten almost
+ * everything: how many pods ran the new image, how many of the old ones went away.
+ * Those numbers are the operation, and they are the only part of it that cannot be
+ * read off the cluster afterwards — by then the old pods are gone.
+ */
+function podsOf(one: Deployment) {
+  const wanted = Number(one.pods_wanted ?? 0)
+  if (wanted <= 0) return ''
+  const ready = Number(one.pods_ready ?? 0)
+  const retired = Number(one.pods_retired ?? 0)
+
+  const bits = [`${ready} of ${wanted} up`]
+  if (retired > 0) bits.push(`${retired} old gone`)
+  return bits.join(' · ')
 }
 
 /** How many rows a page holds, for both lists: twenty is what fits without scrolling
@@ -150,6 +173,23 @@ const live = computed(() => new Set(places.value.map((one) => one.deployment.id)
  * have to catch rather than something you can read — and the times somebody wants to
  * read it are exactly the times nothing is happening.
  */
+/**
+ * The pods, while there are pods to count.
+ *
+ * Only while a rollout is under way: afterwards the numbers are a fact about the
+ * history, and the history has its own row for it. Shown only when the operation
+ * says it wants more than nothing, so a step that reports no pods of its own does
+ * not draw a bar reading 0 / 0.
+ */
+const pods = computed(() => {
+  const progress = active.value
+  if (!progress || progress.phase !== 'rollout') return null
+  const desired = Number(progress.desired ?? 0)
+  const ready = Number(progress.ready ?? 0)
+  if (desired <= 0) return null
+  return { ready, desired, percent: Math.min(100, Math.round((ready / desired) * 100)) }
+})
+
 const idleProgress = computed<DeployProgress | null>(() => {
   const last = deployments.value[0]
   if (!last || active.value) return null
@@ -409,6 +449,19 @@ watch(() => props.module.id, load)
           </span>
         </div>
 
+        <!-- How many of the pods are up. It arrives with the step that is waiting
+             for them, and it is the number somebody watching a rollout actually
+             wants: the step list says which phase is being worked on, and this says
+             whether it is getting anywhere. Without it a rollout that is stuck at
+             zero looks exactly like one that is thirty seconds from finishing. -->
+        <p v-if="pods" class="pods">
+          <span class="pods-count mono">{{ pods.ready }} / {{ pods.desired }}</span>
+          <span class="muted small">pods ready</span>
+          <span class="pods-bar" aria-hidden="true">
+            <span class="pods-fill" :style="{ width: pods.percent + '%' }" />
+          </span>
+        </p>
+
         <DeploySteps :progress="active" :seen="activeSeen" />
 
         <details class="log">
@@ -421,13 +474,15 @@ watch(() => props.module.id, load)
       </div>
     </section>
 
-    <!-- Nothing moving. Said plainly rather than shown as an empty space, because an
-         empty card reads as something that failed to load. -->
+    <!-- Nothing moving. The card is still here, and says what it is: this is what
+         the last operation did, not an absence of operations. "Nothing is deploying"
+         was true and useless — it described the moment rather than the thing on
+         screen, and the thing on screen is a record of a run. -->
     <section v-else class="card active-card idle">
       <div class="card-body">
         <div class="block-head">
-          <h3 class="block-title">Nothing is deploying</h3>
-          <span class="muted small">what the last operation did</span>
+          <h3 class="block-title">The last operation</h3>
+          <span class="muted small">what it did</span>
         </div>
 
         <div v-for="place in places" :key="place.place" class="running-place">
@@ -486,6 +541,7 @@ watch(() => props.module.id, load)
                 <th>When</th>
                 <th>Image</th>
                 <th>Status</th>
+                <th>Pods</th>
                 <th>What happened</th>
               </tr>
             </thead>
@@ -513,6 +569,7 @@ watch(() => props.module.id, load)
                      two different facts and reading them as one — a badge with a
                      paragraph hanging off it — makes the paragraph look like part of
                      the status. -->
+                <td class="pods-cell mono small">{{ podsOf(one) || '—' }}</td>
                 <td class="what-cell">{{ one.reason || '—' }}</td>
               </tr>
             </tbody>
@@ -643,6 +700,38 @@ watch(() => props.module.id, load)
 
 .active-card.idle {
   border-left-color: var(--border-strong);
+}
+
+/* The rollout's own number, big enough to read while watching and not so big that
+   it becomes the thing the card is about. */
+.pods {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 10px 0 2px;
+}
+
+.pods-count {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pods-bar {
+  flex: 1 1 auto;
+  height: 4px;
+  min-width: 60px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  align-self: center;
+}
+
+.pods-fill {
+  display: block;
+  height: 100%;
+  background: var(--green, #3fb950);
+  transition: width 0.4s ease;
 }
 
 .place-chip {
@@ -817,10 +906,17 @@ th {
   min-width: 130px;
 }
 
+/* The module's own words, wrapped rather than cut. They are the only part of the
+   row that says what happened, and a sentence that stops at "...were left as they
+   are" has stopped exactly where it started being interesting — and every row with
+   a long reason is the same length on screen, so the column looks empty. */
 .what-cell {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 220px;
 }
 
 .pager {
