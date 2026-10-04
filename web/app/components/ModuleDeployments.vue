@@ -154,7 +154,15 @@ const places = computed(() => {
     const key = `${one.cluster}/${one.namespace}`
     if (!seen.has(key)) seen.set(key, one)
   }
-  return [...seen.entries()].map(([place, deployment]) => ({ place, deployment }))
+  return [...seen.entries()].map(([place, deployment]) => ({
+    place,
+    deployment,
+    // What was done to this place, which for the newest operation that finished well
+    // is also what is in the cluster. The list above already marks the image that is
+    // running now; saying it here as well would be the same fact in two places, one
+    // of them true only some of the time.
+    badge: deployment.state || 'unknown',
+  }))
 })
 
 const live = computed(() => new Set(places.value.map((one) => one.deployment.id)))
@@ -490,7 +498,13 @@ watch(() => props.module.id, load)
         </div>
 
         <div v-for="place in places" :key="place.place" class="running-place">
-          <span class="badge badge-green">running</span>
+          <!-- What is actually there, rather than a word that was hard-coded when
+               this card only ever appeared during a deployment. "running" on a
+               deployment that finished twenty minutes ago is a claim about the
+               cluster dressed up as a label on a row. -->
+          <span class="badge" :class="badgeClass(place.deployment.state)">
+            {{ place.badge }}
+          </span>
           <span class="place-chip mono">{{ place.place }}</span>
           <span class="mono small">{{ shortImage(place.deployment.image) }}</span>
           <span class="muted small">{{ place.deployment.workload || '—' }}</span>

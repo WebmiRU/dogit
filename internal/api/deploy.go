@@ -171,18 +171,6 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		return err
 	}
 
-	// The plan, said before any of it happens.
-	//
-	// The step list is drawn from a fixed set of phases, and two of them only exist
-	// for deployments that configured them. Without being told which, a page draws a
-	// pre-step and a post-step for a deployment that has neither, in blue, for ever:
-	// two rows promising work that will never happen and never changing colour.
-	// Whoever read the configuration is the one who knows, so they say.
-	s.publishPipeline(ctx, project.ID, nil, models.EventDeployPlan, map[string]any{
-		"job_id": job.ID,
-		"steps":  deployStepsFor(buildJob(ctx, s, pipelineRun, job.ID), len(manifests), len(pre), len(post)),
-	})
-
 	request := deployRequest{
 		Project:        project.Path,
 		Target:         spec.Target,
@@ -471,6 +459,45 @@ func deployStepsFor(built string, manifests, pre, post int) []deployStepName {
 func buildJob(ctx context.Context, s *Server, run *store.Pipeline, skipJobID int64) string {
 	_, built := builtImage(ctx, s, run, skipJobID)
 	return built
+}
+
+// publishDeployPlan tells the instance what this run's deployment will involve.
+//
+// Sent with the run rather than with the deployment, because the build and push steps
+// happen in a job that finishes before the deployment starts: a plan sent from there
+// arrives after the first two steps have already been reported, and the page draws
+// them from the events' own sentences until it does.
+func (s *Server) publishDeployPlan(ctx context.Context, project *models.Project,
+	config *pipeline.Config, run *store.Pipeline, jobs []store.Job) {
+
+	if config == nil || !config.Deploy.Present {
+		return
+	}
+
+	// The deployment's own job, so that a client can tell one run's plan from
+	// another's. A run with a build in it is a run that will have an image.
+	deployJobID := int64(0)
+	builds := false
+	for _, job := range jobs {
+		if job.Deploy != nil {
+			deployJobID = job.ID
+		}
+		if len(job.Build) > 0 {
+			builds = true
+		}
+	}
+
+	built := ""
+	if builds {
+		built = "the build job"
+	}
+
+	s.publishPipeline(ctx, project.ID, nil, models.EventDeployPlan, map[string]any{
+		"job_id":      deployJobID,
+		"pipeline_iid": run.IID,
+		"steps": deployStepsFor(built, len(config.Deploy.Manifests),
+			len(config.Deploy.Pre), len(config.Deploy.Post)),
+	})
 }
 
 func (s *Server) readDeployManifests(ctx context.Context, repoDir, sha string,

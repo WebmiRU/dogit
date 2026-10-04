@@ -118,6 +118,19 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		"ref":          ref,
 		"sha":          sha,
 	})
+
+	// The deployment's plan, sent with the run rather than when the deployment starts.
+	//
+	// Published here because this is the last moment everything it depends on is known
+	// without having done any of the work: whether the run builds an image, and
+	// whether it has pre- and post-step jobs. Sent from the deployment job instead —
+	// where the same facts are known a moment later — the build and push steps arrive
+	// first and reach the page before anything says what they are called.
+	//
+	// The step list is the core's to give: the module that carries the deployment out
+	// is not asked to describe it in advance, and a client that kept its own copy of
+	// the phases would be drawing a list of what might happen rather than what will.
+	s.publishDeployPlan(r.Context(), project, config, pipeline, jobs)
 	// Queued with the facts, not with a sentence: what a channel says about this is
 	// that channel's business. The text here is only for a module with nothing of
 	// its own to say.
