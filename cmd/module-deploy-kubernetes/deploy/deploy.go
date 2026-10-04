@@ -129,6 +129,10 @@ type Deployment struct {
 	Reason     string
 	StartedAt  time.Time
 	FinishedAt *time.Time
+	// Log is what this deployment said, in order. Kept with it because the question the
+	// log answers — where did it break — is asked long after the page that watched it
+	// was closed.
+	Log []LogLine `json:"log,omitempty"`
 	// Pods are the counts the rollout passed through: how many were wanted, how
 	// many were running the new image, and how many were still on the old one when
 	// it was over.
@@ -167,6 +171,22 @@ type History interface {
 	ByID(ctx context.Context, id uuid.UUID) (Deployment, error)
 	// List is a project's history, newest first.
 	List(ctx context.Context, project, cluster, namespace string) ([]Deployment, error)
+	// LogOf reads back what a deployment said, for a page that arrives afterwards.
+	LogOf(ctx context.Context, id uuid.UUID) ([]LogLine, error)
+	// Log writes down what a deployment said, in the order it said it.
+	//
+	// Written when it ends rather than as each line arrives. A rollout says a few dozen
+	// things over minutes, so there is nothing to gain from a write per line, and a
+	// deployment that died halfway still leaves the lines that explain why.
+	Log(ctx context.Context, id uuid.UUID, lines []LogLine) error
+}
+
+// LogLine is one thing a deployment said, kept as it was said.
+type LogLine struct {
+	Phase   string `json:"phase"`
+	Message string `json:"message"`
+	Step    int    `json:"step"`
+	Of      int    `json:"of"`
 }
 
 // ErrBusy is returned when a deployment for this cluster and namespace is already under
@@ -233,6 +253,28 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		return record, err
 	}
 	d.logf("deployment started: %s to %s/%s", record.ID, request.Cluster, request.Namespace)
+
+	// Every line this deployment says is also written down, here as it happens and to
+	// the database when it ends. A watcher sees a deployment once; somebody reading
+	// about it next week needs it to still be there.
+	var said []LogLine
+	watching := request.Progress
+	request.Progress = func(progress Progress) {
+		if progress.Message != "" {
+			said = append(said, LogLine{
+				Phase: progress.Phase, Message: progress.Message,
+				Step: progress.Step, Of: progress.Of,
+			})
+		}
+		if watching != nil {
+			watching(progress)
+		}
+	}
+	defer func() {
+		if err := d.history.Log(ctx, record.ID, said); err != nil {
+			d.logf("could not write down the deployment log: %s", err)
+		}
+	}()
 
 	// Every phase says what it is about to do, so a watcher is never left with a
 	// deployment that has started and nothing further to show for it.

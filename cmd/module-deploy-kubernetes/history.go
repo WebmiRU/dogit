@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ewolf/dogit/cmd/module-deploy-kubernetes/deploy"
@@ -24,17 +27,9 @@ import (
 // abandoned. Well beyond any rollout, and well beyond the core's own hour-long limit.
 const staleDeploymentAge = 2 * time.Hour
 
-// History is this module's record of deployments.
+// History is this module's record of deployments, which is the contract deploy states.
 type History interface {
-	Begin(ctx context.Context, d deploy.Deployment) (deploy.Deployment, error)
-	Phase(ctx context.Context, id uuid.UUID, state deploy.State, phase deploy.Phase, reason string) error
-	Finish(ctx context.Context, id uuid.UUID, state deploy.State, reason string) error
-	Counts(ctx context.Context, id uuid.UUID, wanted, ready, retired int) error
-	Current(ctx context.Context, project, cluster, namespace string) (*deploy.Deployment, error)
-	// ByID is one deployment by identity, which is how a revert names the row
-	// somebody clicked on.
-	ByID(ctx context.Context, id uuid.UUID) (deploy.Deployment, error)
-	List(ctx context.Context, project, cluster, namespace string) ([]deploy.Deployment, error)
+	deploy.History
 	Close(ctx context.Context)
 }
 
@@ -90,7 +85,8 @@ func (h *postgresHistory) migrate(ctx context.Context) error {
 			finished_at TIMESTAMPTZ,
 			pods_wanted  INT NOT NULL DEFAULT 0,
 			pods_ready   INT NOT NULL DEFAULT 0,
-			pods_retired INT NOT NULL DEFAULT 0
+			pods_retired INT NOT NULL DEFAULT 0,
+			log          JSONB NOT NULL DEFAULT '[]'::jsonb
 		)`,
 		// Added to a table that already exists as well as described in the CREATE
 		// above. A module is upgraded by being restarted, and an installation that
@@ -99,6 +95,7 @@ func (h *postgresHistory) migrate(ctx context.Context) error {
 		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pods_wanted  INT NOT NULL DEFAULT 0`,
 		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pods_ready   INT NOT NULL DEFAULT 0`,
 		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pods_retired INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS log JSONB NOT NULL DEFAULT '[]'::jsonb`,
 		// One deployment at a time per place. The index is the lock: a second one
 		// cannot be begun while this exists, so the rule holds even if two tasks reach
 		// this module at the same moment and even if this module is running twice.
@@ -187,6 +184,39 @@ func (h *postgresHistory) Finish(ctx context.Context, id uuid.UUID, state deploy
 		UPDATE deployments
 		SET state = $2, reason = $3, finished_at = now()
 		WHERE id = $1`, id, state, reason)
+	return err
+}
+
+// LogOf reads back what a deployment said.
+func (h *postgresHistory) LogOf(ctx context.Context, id uuid.UUID) ([]deploy.LogLine, error) {
+	var encoded []byte
+	err := h.pool.QueryRow(ctx, `SELECT log FROM deployments WHERE id = $1`, id).Scan(&encoded)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(encoded) == 0 {
+		return nil, nil
+	}
+	var lines []deploy.LogLine
+	if err := json.Unmarshal(encoded, &lines); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+// Log writes down what a deployment said.
+func (h *postgresHistory) Log(ctx context.Context, id uuid.UUID, lines []deploy.LogLine) error {
+	if len(lines) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(lines)
+	if err != nil {
+		return err
+	}
+	_, err = h.pool.Exec(ctx, `UPDATE deployments SET log = $2 WHERE id = $1`, id, encoded)
 	return err
 }
 

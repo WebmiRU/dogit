@@ -141,6 +141,9 @@ type memoryHistory struct {
 	// held is closed when something takes a lock, so a test can wait for the other
 	// deployment to be under way rather than sleeping and hoping.
 	held chan string
+	// logs is what each deployment said, kept per deployment so a test can ask what a
+	// run reported rather than only that it finished.
+	logs map[string][]LogLine
 }
 
 func newHistory() *memoryHistory {
@@ -148,6 +151,7 @@ func newHistory() *memoryHistory {
 		records: map[string][]Deployment{},
 		busy:    map[string]string{},
 		held:    make(chan string, 8),
+		logs:    map[string][]LogLine{},
 	}
 }
 
@@ -198,6 +202,20 @@ func waitForLock(t *testing.T, h *memoryHistory) {
 
 func lockKey(project, cluster, namespace string) string {
 	return strings.Join([]string{project, cluster, namespace}, "|")
+}
+
+// Log keeps what it was told, in order, which is what the tests check it for.
+func (h *memoryHistory) Log(_ context.Context, id uuid.UUID, lines []LogLine) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	h.logs[id.String()] = append(h.logs[id.String()], lines...)
+	return nil
+}
+
+func (h *memoryHistory) LogOf(_ context.Context, id uuid.UUID) ([]LogLine, error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	return h.logs[id.String()], nil
 }
 
 func (h *memoryHistory) Phase(_ context.Context, _ uuid.UUID, _ State, _ Phase, _ string) error {

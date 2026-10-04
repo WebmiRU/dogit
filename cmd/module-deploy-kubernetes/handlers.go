@@ -322,6 +322,14 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// The newest row carries its own log, because that is the one a page opened
+		// between deployments asks about. The rest are a list of rows: a hundred
+		// deployments' logs are a hundred answers to a question nobody has asked yet.
+		if len(records) > 0 {
+			if lines, err := c.history.LogOf(ctx, records[0].ID); err == nil {
+				records[0].Log = lines
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"deployments": viewsOf(records)})
 		return
 	}
@@ -452,6 +460,9 @@ func viewOf(record deploy.Deployment) map[string]any {
 	}
 	if record.FinishedAt != nil {
 		out["finished_at"] = *record.FinishedAt
+	}
+	if len(record.Log) > 0 {
+		out["log"] = record.Log
 	}
 	return out
 }

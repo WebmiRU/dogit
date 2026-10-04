@@ -44,6 +44,15 @@ interface Deployment {
   pods_wanted?: number
   pods_ready?: number
   pods_retired?: number
+  /** What this operation said, in order, when the server has it to give. */
+  log?: LogLine[]
+}
+
+interface LogLine {
+  phase: string
+  message: string
+  step: number
+  of: number
 }
 
 /**
@@ -200,6 +209,28 @@ const cardState = computed<'working' | 'ok' | 'bad'>(() => {
   return 'ok'
 })
 
+/**
+ * The log on show: what this operation has said so far, and when nothing is running,
+ * what the last one said.
+ *
+ * The second case is the reason the module writes it down. A page opened between
+ * deployments was never there for the lines, and a log that only exists while somebody
+ * is watching is no use to whoever is trying to find out where it broke.
+ */
+const lastLog = ref<LogLine[]>([])
+
+const shownLog = computed<LogLine[]>(() => {
+  if (active.value) {
+    return activeSeen.value.map((line) => ({
+      phase: line.phase,
+      message: line.message,
+      step: line.step,
+      of: line.of,
+    }))
+  }
+  return lastLog.value
+})
+
 const idleProgress = computed<DeployProgress | null>(() => {
   const last = deployments.value[0]
   if (!last || active.value) return null
@@ -320,6 +351,10 @@ async function load() {
     const answer = await api.get<{ reason?: string; deployments?: Deployment[] }>(
       `/projects/${props.projectId}/deployments?${query}`,
     )
+    // The newest row carries what it said, so the log is there before anything is
+    // watched rather than only for a run somebody stayed to see.
+    lastLog.value = answer.deployments?.[0]?.log ?? []
+
     if (answer.reason === 'no_deploy_module') {
       deployments.value = []
       reason.value = 'No deploy module is installed on this instance.'
@@ -500,6 +535,7 @@ watch(() => props.module.id, load)
         </div>
 
         <DeploySteps :progress="active" :seen="activeSeen" :plan="plan" live />
+        <DeployLog :lines="shownLog" :plan="plan" />
 
         <details class="log">
           <summary class="muted small">Where the whole of this is written down</summary>
@@ -550,6 +586,7 @@ watch(() => props.module.id, load)
           :progress="idleProgress"
           :plan="plan"
         />
+        <DeployLog :lines="shownLog" :plan="plan" />
       </div>
     </section>
 

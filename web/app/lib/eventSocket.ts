@@ -53,8 +53,43 @@ let attempts = 0
 /** The highest event id ever delivered, so a reopened socket resumes rather than repeats. */
 let lastSeenID = 0
 
+/**
+ * What arrived in the last moments, kept for a page that was not listening yet.
+ *
+ * The socket opens the instant the document is ready, and the core answers a new
+ * connection with everything it has not sent: the plan for this deployment, the steps,
+ * the pod counts. All of it can arrive while the page is still mounting, before a
+ * panel has registered anything to hear it, and a page that has to be told twice by the
+ * network is a page that will be told once and shown a summary.
+ *
+ * So the last few seconds are held here and handed to any listener that arrives after
+ * them. Being a page that redraws, replaying a fact it has already drawn must be its
+ * own doing; losing the fact entirely is not.
+ */
+const recent: Held[] = []
+/** How long an event stays worth handing to a late listener. */
+const recentWindowMS = 30_000
+
+interface Held {
+  event: InstanceEvent
+  at: number
+}
+
 const listeners = new Set<Listener>()
 const rewakers = new Set<Rewake>()
+
+function remember(event: InstanceEvent) {
+  const at = Date.now()
+  while (recent.length && at - recent[0].at > recentWindowMS) recent.shift()
+  recent.push({ event, at })
+}
+
+/** What a listener joining now has missed, oldest first. */
+function sinceJoin(): InstanceEvent[] {
+  const at = Date.now()
+  while (recent.length && at - recent[0].at > recentWindowMS) recent.shift()
+  return recent.map((held) => held.event)
+}
 
 function wakeAll() {
   for (const wake of [...rewakers]) {
@@ -134,6 +169,7 @@ export function openEventSocket() {
     // rather than for everything again. Kept across connections, and deliberately not
     // reset on close: a close is not an erasure.
     if (typeof event.id === 'number' && event.id > lastSeenID) lastSeenID = event.id
+    remember(event)
 
     for (const listener of [...listeners]) {
       try {
@@ -199,6 +235,16 @@ export function onRewake(wake: Rewake): () => void {
 /** Listens, and returns the way to stop. Never closes the socket itself. */
 export function onEvent(listener: Listener): () => void {
   openEventSocket()
+  // What has already gone past since this page loaded, given to it now rather than
+  // lost. Everything, not only what is recent: a listener that mounted late is missing
+  // the whole of the operation it is here to show.
+  for (const event of sinceJoin()) {
+    try {
+      listener(event)
+    } catch {
+      // Same rule as for live events: one page's mistake is not the socket's problem.
+    }
+  }
   listeners.add(listener)
   return () => {
     listeners.delete(listener)
