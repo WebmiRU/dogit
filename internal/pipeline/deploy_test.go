@@ -171,3 +171,45 @@ func TestABareStepIsAPathToAManifest(t *testing.T) {
 		t.Errorf("the step was read as %+v", config.Deploy.Pre)
 	}
 }
+
+// Which places run for this ref, and which do not.
+//
+// The two directions matter differently. A branch reaching a tag-only place is a
+// deployment nobody chose. A tag not reaching a branch place is a release that quietly
+// skipped a place, which is found out later or not at all.
+func TestDeploysFor(t *testing.T) {
+	places := []DeploySpec{
+		{Name: "dev", Rules: []Rule{{If: `$CI_COMMIT_BRANCH == "dev"`}}},
+		{Name: "prod", TagOnly: true, Rules: []Rule{{If: `$CI_COMMIT_TAG == "v*"`}}},
+		{Name: "always"},
+	}
+
+	cases := []struct {
+		name string
+		ref  Ref
+		want []string
+	}{
+		{"a branch runs its own place and the unconditional one", Ref{Name: "dev"},
+			[]string{"dev", "always"}},
+		{"another branch runs only the unconditional one", Ref{Name: "main"},
+			[]string{"always"}},
+		{"a tag runs the release and the unconditional one", Ref{Name: "v1.01", IsTag: true},
+			[]string{"prod", "always"}},
+		{"a tag never runs a branch place", Ref{Name: "nightly", IsTag: true},
+			[]string{"always"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chosen := DeploysFor(places, tc.ref)
+			if len(chosen) != len(tc.want) {
+				t.Fatalf("places = %d, want %d (%v)", len(chosen), len(tc.want), chosen)
+			}
+			for i, spec := range chosen {
+				if spec.Name != tc.want[i] {
+					t.Fatalf("place %d = %q, want %q", i, spec.Name, tc.want[i])
+				}
+			}
+		})
+	}
+}

@@ -113,6 +113,7 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 		return
 	}
 
+
 	repoDir := s.repos.PathFor(project)
 	err = s.runDeployJob(ctx, job, run, project, repoDir, config)
 	switch {
@@ -183,7 +184,7 @@ func (s *Server) deploySpecFor(ctx context.Context, project *models.Project,
 	if err != nil {
 		return nil, err
 	}
-	if config.Deploy.Empty() {
+	if len(config.Deploys) == 0 {
 		return nil, fmt.Errorf(
 			"this commit has no deploy block, so there is nothing to deploy")
 	}

@@ -130,12 +130,24 @@ const imagePlaceholder = "IMAGE"
 func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *store.Pipeline,
 	project *models.Project, repoDir string, config *pipeline.Config) error {
 
-	spec := config.Deploy
+	// This job's own place, not whichever one the file happened to list first.
+	//
+	// Read from the job because that is where it was decided: the rules were applied
+	// when the run was created, and a file that has been edited since describes a
+	// different set of places than the one this run was asked to do.
+	spec := deploySpecForJob(job, config)
+	if !spec.Present {
+		return fmt.Errorf("this job carries no deployment to carry out")
+	}
+
 	// The newline is in the format string, not added here: appendJobOutput marks each
 	// line it is given, and a line that has already ended gets an empty one after it,
 	// which reads as though the deployment paused between every step.
 	log := func(format string, args ...any) {
 		_, _ = s.appendJobOutput(ctx, job, "out", fmt.Sprintf(format, args...))
+	}
+	if spec.Name != "" {
+		log("Deploying to %s\n", spec.Name)
 	}
 
 	started := time.Now()
@@ -429,6 +441,27 @@ func deployedImageNames(run *store.Pipeline) []string {
 		add(run.SHA[:7])
 	}
 	return names
+}
+
+// deploySpecForJob is the place this job was created to deploy to.
+//
+// The job carries its own copy of the place, written when the rules were applied. The
+// configuration is only a fallback for a run filed before places were named separately,
+// and never a second answer to a question the job has already answered.
+func deploySpecForJob(job *store.Job, config *pipeline.Config) pipeline.DeploySpec {
+	if len(job.Deploy) > 0 {
+		var spec pipeline.DeploySpec
+		encoded, err := json.Marshal(job.Deploy)
+		if err == nil && json.Unmarshal(encoded, &spec) == nil && spec.Present {
+			return spec
+		}
+	}
+	for _, spec := range config.Deploys {
+		if spec.Name != "" && job.Name == "deploy:"+spec.Name {
+			return spec
+		}
+	}
+	return config.Deploy
 }
 
 // deployModule is the module that does this kind of deployment.

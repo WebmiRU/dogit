@@ -399,8 +399,15 @@ func jobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []store.Jo
 	// Skipped when one job was named on the command line, because that is somebody
 	// asking to run one thing; adding a deployment they did not ask for would be the
 	// pipeline surprising them in the most expensive way available.
-	if !config.Deploy.Empty() && only == "" {
-		jobs = append(jobs, deployJob(config.Deploy))
+	//
+	// A place now carries rules, and so does the mark that says a place is only reached
+	// by a tag. Both are read here rather than at deploy time, so that a run says what
+	// it is going to do before it starts doing any of it — a page listing three places
+	// shows one line, not three that appear and disappear.
+	if only == "" {
+		for _, spec := range pipeline.DeploysFor(config.Deploys, ref) {
+			jobs = append(jobs, deployJob(spec))
+		}
 	}
 
 	return jobs
@@ -418,11 +425,18 @@ func deployJob(spec pipeline.DeploySpec) store.Job {
 		_ = json.Unmarshal(encoded, &deploy)
 	}
 
+	// One job per place, each named for the place. The name is what a failed run says
+	// it was deploying to, and "deploy" said only that something was deployed.
+	name := "deploy"
+	if strings.TrimSpace(spec.Name) != "" {
+		name = "deploy:" + strings.TrimSpace(spec.Name)
+	}
+
 	return store.Job{
 		// "deploy" is a reserved job name in the file's own terms: somebody who
 		// writes a job called deploy gets this one instead of theirs, which is why it
 		// is checked for while the configuration is read.
-		Name:   "deploy",
+		Name:   name,
 		Stage:  "deploy",
 		Deploy: deploy,
 	}

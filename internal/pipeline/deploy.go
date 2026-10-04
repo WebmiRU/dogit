@@ -38,6 +38,27 @@ type DeploySpec struct {
 	// either way.
 	Present bool
 
+	// Name is what this deployment is called in the repository's own terms.
+	//
+	// Not decoration. A file that deploys three places produces three records, and
+	// without a name each of them is only distinguishable by the cluster and namespace
+	// they happen to use — which is not what anybody reading a failed deployment is
+	// looking for.
+	Name string `yaml:"name"`
+
+	// Rules decide when this one runs, in the same language jobs use. A deployment
+	// with no rules runs whenever there is a deploy at all, which is the behaviour of
+	// every file written before there was more than one.
+	Rules []Rule `yaml:"rules"`
+
+	// TagOnly says this place may only be reached by a tag, never by a branch.
+	//
+	// The default for anywhere that matters, and enforced here rather than by
+	// convention: a production cluster that follows every push to the default branch
+	// is a deployment nobody chose, and the fact that it was written down correctly
+	// should not be the only thing standing between a mistake and production.
+	TagOnly bool `yaml:"tag_only"`
+
 	// Target names the deploy module to do it, such as "kubernetes". Written rather
 	// than assumed: the same word will mean Nomad or an archive over SSH later, and a
 	// file that does not say which cannot be read by somebody else's module.
@@ -115,9 +136,60 @@ type DeployExpect struct {
 	ConfigMaps []string `yaml:"config_maps"`
 }
 
+// DeploysFor is the places that run for this ref, in the order they were written.
+//
+// The rules are the same language jobs use, and a place with no rules runs always: that
+// is what every file written before there was more than one place already does.
+//
+// TagOnly is enforced here rather than left to whoever writes the file. A place marked
+// that way does not run for a branch at all, whatever its rules say — the mark exists
+// precisely for the case where somebody edits a rule and means it.
+func DeploysFor(entries []DeploySpec, ref Ref) []DeploySpec {
+	chosen := []DeploySpec{}
+	for _, spec := range entries {
+		if spec.TagOnly && !ref.IsTag {
+			continue
+		}
+		if len(spec.Rules) > 0 {
+			matched := false
+			for _, rule := range spec.Rules {
+				if ruleRuns(rule, ref, false) {
+					matched = rule.When != "never"
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		chosen = append(chosen, spec)
+	}
+	return chosen
+}
+
 // Empty is whether this says nothing at all.
 func (d DeploySpec) Empty() bool {
 	return !d.Present
+}
+
+// parseDeploys reads the `deploys` key: a list of places, each with a name and rules.
+func parseDeploys(node *yaml.Node) ([]DeploySpec, error) {
+	if node.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("expected a list of places to deploy to")
+	}
+
+	entries := make([]DeploySpec, 0, len(node.Content))
+	for _, item := range node.Content {
+		if item.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("each place is a block with at least a target")
+		}
+		spec, err := parseDeploy(item)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, spec)
+	}
+	return entries, nil
 }
 
 // parseDeploy reads the `deploy` key.
@@ -155,12 +227,13 @@ func parseDeploy(node *yaml.Node) (DeploySpec, error) {
 		}
 
 		switch key {
-		case "target", "cluster", "namespace", "manifests", "pre", "post",
-			"expect", "rollout", "timeout":
+		case "name", "target", "cluster", "namespace", "manifests", "pre", "post",
+			"expect", "rollout", "timeout", "rules", "tag_only":
 		default:
 			return spec, fmt.Errorf(
-				"deploy has no field called %q; it knows target, cluster, namespace, "+
-					"manifests, pre, post, expect, rollout and timeout", key)
+				"deploy has no field called %q; it knows name, target, cluster, "+
+					"namespace, manifests, pre, post, expect, rollout, timeout, rules "+
+					"and tag_only", key)
 		}
 	}
 

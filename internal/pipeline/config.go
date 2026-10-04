@@ -39,6 +39,12 @@ type Config struct {
 	// Deploy is what this pipeline says about deploying. A file that does not mention
 	// it builds and says nothing more.
 	Deploy DeploySpec `yaml:"-"`
+
+	// Deploys are the places this pipeline deploys to, in the order they were
+	// written. One entry for a file that says `deploy:`, several for one that says
+	// `deploys:` — the singular form is the same thing with one entry, and it keeps
+	// working rather than becoming a second spelling of the same idea.
+	Deploys []DeploySpec `yaml:"-"`
 	// Jobs are the named tasks, in the order they were written.
 	Jobs map[string]JobSpec `yaml:"-"`
 	// Order preserves the order the jobs were written in, which is the order a
@@ -140,6 +146,10 @@ func Parse(data []byte) (*Config, error) {
 		// be parsed as one.
 		"notify": true,
 		"deploy": true,
+	// The list form of the same thing. Missing here it was read as a job named
+	// "deploys" whose body is a list, and the error said so in terms nobody who
+	// wrote the file could act on.
+	"deploys": true,
 	}
 
 	// Read as a document rather than as a field of the struct, because `notify` is
@@ -157,14 +167,38 @@ func Parse(data []byte) (*Config, error) {
 	}
 
 	for index := 0; index+1 < len(raw); index += 2 {
-		if raw[index].Value != "deploy" {
-			continue
+		switch raw[index].Value {
+		case "deploy":
+			deploy, err := parseDeploy(raw[index+1])
+			if err != nil {
+				return nil, fmt.Errorf("deploy: %w", err)
+			}
+			config.Deploy = deploy
+			config.Deploys = append(config.Deploys, deploy)
+
+		case "deploys":
+			entries, err := parseDeploys(raw[index+1])
+			if err != nil {
+				return nil, fmt.Errorf("deploys: %w", err)
+			}
+			config.Deploys = append(config.Deploys, entries...)
 		}
-		deploy, err := parseDeploy(raw[index+1])
-		if err != nil {
-			return nil, fmt.Errorf("deploy: %w", err)
+	}
+
+	// A file with several places has to name them: three records that differ only by
+	// which cluster they went to are three records nobody can tell apart in a list.
+	if len(config.Deploys) > 1 {
+		seen := map[string]bool{}
+		for _, one := range config.Deploys {
+			if strings.TrimSpace(one.Name) == "" {
+				return nil, fmt.Errorf(
+					"deploys: with more than one place, each needs a name")
+			}
+			if seen[one.Name] {
+				return nil, fmt.Errorf("deploys: two places are called %q", one.Name)
+			}
+			seen[one.Name] = true
 		}
-		config.Deploy = deploy
 	}
 
 	// Written order, not sorted order: the order somebody wrote jobs in is the order
