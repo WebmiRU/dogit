@@ -153,6 +153,7 @@ func (s *Server) Register(r chi.Router) {
 	// anything that would rather ask. See internal/api/events.go.
 	authenticated.Get("/events", s.handleEventStream)
 	authenticated.Get("/events/stream", s.handleEventLive)
+	authenticated.Get("/events/socket", s.handleEventSocket)
 
 		// Module administration: an administrator sees and configures modules,
 		// and a user mints the tokens they present to them.

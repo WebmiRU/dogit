@@ -209,6 +209,15 @@ type statusRecorder struct {
 	bytes  int
 }
 
+// Unwrap passes the interface on to the writer underneath.
+//
+// A wrapper that hides this one costs more than a line of bookkeeping. A WebSocket
+// takes the connection away from the server, so it asks the writer by type, and here
+// that question was being answered by a type that had never heard of it: every upgrade
+// was refused with "feature not supported", which looks like the server declining to
+// speak WebSocket rather than like a wrapper in the way.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)

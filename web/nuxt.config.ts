@@ -25,6 +25,11 @@ export default defineNuxtConfig({
         '/api': {
           target: 'http://localhost:8080',
           changeOrigin: false,
+          // WebSocket upgrades as well as ordinary requests. Without this the proxy
+          // passes HTTP through and refuses the upgrade, so every socket closes at once
+          // with 1006 — which looks exactly like the server refusing us and is nothing
+          // of the kind.
+          ws: true,
         },
       },
     },
@@ -34,6 +39,9 @@ export default defineNuxtConfig({
     // Overridable at runtime so one image works in every environment.
     public: {
       apiBase: process.env.NUXT_PUBLIC_API_BASE || '/api/v1',
+      // Empty means "same origin as this page". Set in development, where the dev
+      // server's proxy carries ordinary requests but not protocol upgrades.
+      eventSocketURL: process.env.NUXT_PUBLIC_EVENT_SOCKET_URL || '',
     },
   },
 

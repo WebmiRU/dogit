@@ -1,28 +1,31 @@
 /**
  * The one connection to the instance's events.
  *
- * It is opened once, for the whole application, and never closed: every page
- * listens to this and not to a stream of its own. Two reasons, and the second is
- * the one that matters.
+ * A WebSocket, opened once for the whole application at the root, and never closed by
+ * a page: every page listens to this rather than to a stream of its own. Two reasons,
+ * and the second is the one that matters.
  *
- * The first is obvious — a tab with six pages open should hold one connection, not
- * six. The second is that a page's own connection is a promise about what it will
- * hear, and that promise is made by a URL: this project, these kinds. Change the
- * page and the connection has to change with it, which is a reconnect, and a
- * reconnect is a moment when nothing is arriving. One unfiltered socket and a filter
- * in the listener means navigation costs nothing and nothing is missed while the page
- * decides what it cares about.
+ * The first is obvious — a tab with six pages open should hold one connection, not six.
+ * The second is that a page's own connection is a promise about what it will hear, and
+ * that promise is made by a URL: this project, these kinds. Change the page and the
+ * connection has to change with it, which is a reconnect, and a reconnect is a moment
+ * when nothing is arriving. One unfiltered socket and a filter in the listener means
+ * navigation costs nothing and nothing is missed while the page decides what it cares
+ * about.
  *
- * Narrowing is not a loss of privacy and must not become one: the core filters by
- * what the person may see before anything is written, so this socket carries every
- * event this account can see and no event it cannot. The project a page cares about
- * is a question about what to draw, not about what is allowed.
+ * Why not an event stream: because a stream's silence is its own idea of failure. The
+ * browser decides how long a connection has to say something and closes it when it
+ * decides so, which is a decision no part of this programme can see or argue with — and
+ * a page that was cut off mid-deployment goes stale while the socket still claims to be
+ * open. A WebSocket has ping and pong in the protocol: the server asks, the client has
+ * to answer, and both ends find out within a round trip rather than when somebody
+ * notices. The event stream is still served, and still works; it is simply not what the
+ * interface uses.
  *
- * A connection that stops delivering does not say so. The socket stays in its open
- * state, the browser does not reconnect, and the page goes quietly stale — which from
- * here is indistinguishable from a deployment that has stopped saying anything. So
- * something watches the clock: the core pings every fifteen seconds, and silence
- * across several of those is treated as death and answered by opening another.
+ * Narrowing is not a loss of privacy and must not become one: the core filters by what
+ * the person may see before anything is written, so this socket carries every event this
+ * account can see and no event it cannot. The project a page cares about is a question
+ * about what to draw, not about what is allowed.
  */
 
 export interface InstanceEvent {
@@ -38,33 +41,17 @@ export interface InstanceEvent {
 type Listener = (event: InstanceEvent) => void
 type Rewake = () => void
 
-/**
- * How long the connection may be silent before it is treated as gone.
- *
- * Two of the server's fifteen-second pings, plus eight seconds for a round trip on a
- * connection that has stopped carrying anything. Longer than that and a page sits
- * stale through three dropped pings; shorter and a slow link or a busy laptop is
- * mistaken for a dead one, which costs a reconnect and a re-read for nothing.
- *
- * Kept as a count of pings rather than a number somebody chose: the two have to agree,
- * and a watchdog that outlives its own keep-alive is a watchdog that fires late.
- */
-const PING_EVERY_MS = 15_000
-const MISSED_PINGS = 2
-const slackMS = 8_000
-const silenceIsDeathMS = PING_EVERY_MS * MISSED_PINGS + slackMS
+/** How long to wait before opening another socket after one has gone. */
+const retryDelayMS = 2000
+/** The longest that wait grows to, so a server that is down is not hammered. */
+const retryCeilingMS = 15000
 
-/** How often the watchdog looks. */
-const watchdogEveryMS = 10_000
-
-let stream: EventSource | null = null
+let socket: WebSocket | null = null
 let opening = false
-/** A retry is already scheduled, so a refused socket does not queue up a dozen. */
 let retrying = false
-/** How many attempts in a row have failed, which sets how long to wait before the next. */
 let attempts = 0
-/** When the last thing arrived, whether an event or a ping. */
-let lastHeard = Date.now()
+/** The highest event id ever delivered, so a reopened socket resumes rather than repeats. */
+let lastSeenID = 0
 
 const listeners = new Set<Listener>()
 const rewakers = new Set<Rewake>()
@@ -80,57 +67,73 @@ function wakeAll() {
 }
 
 /**
- * Opens the socket, or does nothing if it is already open.
+ * Where the socket opens.
  *
- * Safe to call from anywhere and any number of times: a page asking for the events
- * must not be able to open a second connection by asking twice.
+ * The address is a configuration value rather than an assumption about this page's
+ * origin. In the shape things are deployed the interface and the API are one origin and
+ * nothing has to be said. In development the page is served by a separate dev server
+ * whose proxy passes ordinary requests but refuses a protocol upgrade, so the socket is
+ * pointed at the core directly, where cookies are shared because cookies belong to a
+ * host and not to a port.
  */
+function socketURL(): string {
+  const configured = useRuntimeConfig().public.eventSocketURL as string | undefined
+  if (configured) return configured
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${scheme}://${location.host}/api/v1/events/socket`
+}
+
+/** Opens the socket, or does nothing if it is already open or on its way. */
 export function openEventSocket() {
-  if (stream || opening) return
+  if (socket || opening) return
   if (import.meta.server) return
 
-  // Not while the page is still loading.
-  //
-  // A connection opened during load is one the browser may abandon when the load
-  // finishes — and it says so, in the console, as "the event stream was aborted
-  // during page load". Waiting costs nothing: the events that matter happen after
-  // somebody starts reading, and a connection that opens later is sent the same
-  // backlog by the same code.
+  // Not while the page is still loading: a connection opened during a load is one the
+  // browser may abandon when the load finishes, and it says so in the console as
+  // "aborted during page load". Nothing is missed by waiting — a socket that opens
+  // later is sent the whole backlog anyway.
   if (document.readyState !== 'complete') {
     window.addEventListener('load', () => openEventSocket(), { once: true })
     return
   }
 
   opening = true
-  const opened = new EventSource('/api/v1/events/stream', { withCredentials: true })
+  const url = socketURL()
+  const opened = new WebSocket(url)
+  socket = opened
 
-  // Kept only once it has actually opened.
-  //
-  // A connection that has been created but not opened is one the page may be about
-  // to unload, or one something in the middle has refused. Holding on to it means the
-  // next caller believes there is a live stream, joins a socket that is never going to
-  // carry anything, and never asks again.
-  let openedYet = false
+  opened.addEventListener('open', () => {
+    opening = false
+    // A socket has no query string to be reopened with, so where to resume from
+    // travels in the first message. Sent immediately and unasked for: the server waits
+    // for it before it sends anything, and a client that stays quiet makes every
+    // connection wait for the server to time out.
+    opened.send(JSON.stringify({ since: lastSeenID }))
+    const first = attempts === 0
+    attempts = 0
+    console.info(
+      `[dogit] event socket ${first ? 'connected' : 'reconnected'} at ${new Date().toLocaleTimeString()}`,
+    )
+  })
 
-  // "message", not "event": the feed sends no name for its lines, and a stream line
-  // with no name arrives under the default type. Listening for "event" waits for a
-  // message that is never coming, and the connection looks perfectly healthy while
-  // saying nothing for ever.
   opened.addEventListener('message', (message) => {
     let event: InstanceEvent
     try {
-      event = JSON.parse((message as MessageEvent).data as string) as InstanceEvent
+      event = JSON.parse(String(message.data)) as InstanceEvent
     } catch {
-      // A line that is not an event is not something to act on, and not something
-      // to stop listening over either.
+      // A line that is not an event is not something to act on, and not something to
+      // stop listening over either.
       return
     }
-    lastHeard = Date.now()
 
-    // The keep-alive is not news about anything. It exists so the connection is
-    // visibly alive, and a page that redrew itself every fifteen seconds because the
-    // socket said hello would be worse than no keep-alive at all.
+    // The keep-alive is not news about anything, and a page that redrew itself because
+    // the socket said hello would be worse than no keep-alive at all.
     if (event.kind === 'ping') return
+
+    // The highest id ever seen, so a reopened socket can be asked for what came after it
+    // rather than for everything again. Kept across connections, and deliberately not
+    // reset on close: a close is not an erasure.
+    if (typeof event.id === 'number' && event.id > lastSeenID) lastSeenID = event.id
 
     for (const listener of [...listeners]) {
       try {
@@ -141,94 +144,49 @@ export function openEventSocket() {
     }
   })
 
-  // The server's own ping, on the same connection. Proof it carries, and what the
-  // watchdog below measures silence from.
-  opened.addEventListener('ping', () => {
-    lastHeard = Date.now()
-  })
-
-  opened.addEventListener('open', () => {
-    attempts = 0
-    const wasOpen = openedYet
-    openedYet = true
-    stream = opened
-    opening = false
-    lastHeard = Date.now()
-
-    // A connection that was open and is open again has been through a gap, and
-    // anything that happened in it was not delivered to anybody. A page showing the
-    // present cannot carry on from what it last heard: it has to ask again.
-    if (wasOpen) {
-      console.info('[dogit] the event stream was interrupted and is back')
-      wakeAll()
-    }
-  })
-
   opened.addEventListener('error', () => {
-    if (openedYet) {
-      // The browser reconnects on its own and resumes from where it got to, so there
-      // is nothing to do but say so. Nothing here rebuilds the socket: a reconnect
-      // that started again from the beginning would replay the instance's whole
-      // history at a page that has already seen it.
-      console.warn('[dogit] the event stream is reconnecting')
-      return
-    }
-
-    // Never opened, so the browser has nothing to reconnect from and will not try.
-    // Open another one — without closing this one first, because closing a request that
-    // is still in flight is what produces "the event stream was aborted during page
-    // load" in the console. That message was this code's own doing, and it looked for
-    // all the world like the browser blaming us for something.
-    console.warn('[dogit] the event stream did not open; trying again')
-    opening = false
-    if (stream === opened) stream = null
-
-    // Closed before the replacement is opened, and quietly.
-    //
-    // Leaving it to hang is worse than the message: a browser allows only a handful of
-    // connections to one host, so a few attempts that never opened and were never
-    // closed take up the room the working connection needs. That turns one unlucky
-    // attempt into a page that cannot open any at all.
-    opened.close()
-
-    if (!retrying) {
-      retrying = true
-      const wait = Math.min(1000 * 2 ** attempts, 15000)
-      attempts += 1
-      setTimeout(() => {
-        retrying = false
-        openEventSocket()
-      }, wait)
-    }
+    // The error event carries nothing useful by design; the close event says why.
+    console.warn(`[dogit] event socket error at ${new Date().toLocaleTimeString()}`)
   })
 
-  stream = opened
-  opening = false
-  lastHeard = Date.now()
-
-  setInterval(() => {
-    if (stream !== opened) return
-    const silent = Date.now() - lastHeard
-    if (silent < silenceIsDeathMS) return
-
-    console.warn(`[dogit] the event stream has been silent for ${Math.round(silent / 1000)}s; reopening`)
-    // Whoever is watching must know it was blind, or they keep believing a card that
-    // stopped hearing anything.
-    wakeAll()
-    opened.close()
-    stream = null
+  opened.addEventListener('close', (event) => {
+    const wasOpen = attempts === 0 && event.wasClean === false
     opening = false
-    openEventSocket()
-  }, watchdogEveryMS)
+    if (socket === opened) socket = null
+
+    console.warn(
+      `[dogit] event socket closed (code ${event.code}${event.reason ? `, ${event.reason}` : ''}) ` +
+        `at ${new Date().toLocaleTimeString()}; opening another in ${retryAfter()}ms`,
+    )
+
+    // Whoever is listening was blind for as long as that was, and a page showing a live
+    // process has to know: the deployment carried on without it.
+    wakeAll()
+
+    if (wasOpen) return
+    scheduleReopen()
+  })
+
+  function retryAfter() {
+    return Math.min(retryDelayMS * 2 ** attempts, retryCeilingMS)
+  }
+
+  function scheduleReopen() {
+    if (retrying) return
+    retrying = true
+    attempts += 1
+    setTimeout(() => {
+      retrying = false
+      openEventSocket()
+    }, retryAfter())
+  }
 }
 
 /**
- * Told when the connection comes back after having been open, or after going silent.
+ * Told when the socket comes back, or after it has been gone.
  *
- * Separate from the events themselves: a reconnection is not something that happened
- * on this instance, it is something that happened to the connection. A page that
- * draws a live process has to know, because while the connection was down the process
- * carried on without it.
+ * Separate from the events themselves: a reconnection is not something that happened on
+ * this instance, it is something that happened to the connection.
  */
 export function onRewake(wake: Rewake): () => void {
   openEventSocket()
