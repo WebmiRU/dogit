@@ -54,21 +54,21 @@ const ORDER: { key: string; label: string }[] = [
  * the moment a later step says anything.
  */
 const steps = computed<Step[]>(() => {
-  const said = new Map<string, DeployProgress>()
+  const wasSaid = new Map<string, DeployProgress>()
   for (const one of props.seen ?? []) {
-    if (one?.phase) said.set(one.phase, one)
+    if (one?.phase) wasSaid.set(one.phase, one)
   }
-  if (props.progress?.phase) said.set(props.progress.phase, props.progress)
+  if (props.progress?.phase) wasSaid.set(props.progress.phase, props.progress)
 
-  const failedOn = [...said.values()].find((one) => one.failed)?.phase ?? ''
+  const failedOn = [...wasSaid.values()].find((one) => one.failed)?.phase ?? ''
   const nowOn = props.progress?.phase ?? ''
   const nowAt = ORDER.findIndex((one) => one.key === nowOn)
 
   return ORDER.map((step, position) => {
-    const said = said.get(step.key)
+    const heard = wasSaid.get(step.key)
     let state: StepState = 'waiting'
 
-    if (said?.failed) state = 'failed'
+    if (heard?.failed) state = 'failed'
     else if (step.key === nowOn) state = 'now'
     else if (nowAt > -1 && position < nowAt) state = 'done'
 
@@ -76,7 +76,7 @@ const steps = computed<Step[]>(() => {
       key: step.key,
       label: step.label,
       state,
-      detail: said?.message,
+      detail: heard?.message,
     }
   }).filter((step) => step.state !== 'waiting' || step.key === nowOn || failedOn !== '')
 })
@@ -98,11 +98,15 @@ const podFraction = computed(() => {
 <template>
   <ol class="steps">
     <li v-for="step in steps" :key="step.key" class="step" :class="step.state">
-      <span class="mark">
-        <template v-if="step.state === 'done'">✓</template>
-        <template v-else-if="step.state === 'now'">→</template>
-        <template v-else-if="step.state === 'failed'">✗</template>
-        <template v-else>·</template>
+      <!-- One mark on the left of every step, and the colour is the whole of it:
+           green done, yellow now, red failed, blue not yet reached. Blue rather than
+           grey because "has not come to it yet" is a known state and not an absence —
+           grey reads as something this page has not been told. -->
+      <span class="mark" :class="step.state">
+        <template v-if="step.state === 'done'">●</template>
+        <template v-else-if="step.state === 'now'">➜</template>
+        <template v-else-if="step.state === 'failed'">●</template>
+        <template v-else>●</template>
       </span>
 
       <span class="body">
@@ -146,20 +150,31 @@ const podFraction = computed(() => {
   width: 16px;
   height: 20px;
   text-align: center;
-  font-weight: 700;
-  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 20px;
 }
 
-.step.done .mark {
+.mark.waiting {
+  color: var(--accent);
+  opacity: 0.5;
+}
+
+.mark.done {
   color: var(--green);
 }
 
-.step.now .mark {
-  color: var(--accent);
+.mark.now {
+  color: var(--yellow);
+  font-size: 14px;
 }
 
-.step.failed .mark {
+.mark.failed {
   color: var(--red);
+}
+
+/* Dimmed, not greyed out: the step is not past, it has not been reached. */
+.step.waiting .label {
+  color: var(--text-muted);
 }
 
 .body {
