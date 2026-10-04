@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ewolf/dogit/cmd/module-deploy-kubernetes/deploy"
 	"github.com/ewolf/dogit/cmd/module-deploy-kubernetes/k8s"
 )
@@ -212,16 +214,34 @@ func (c *coreClient) clusterFor(ctx context.Context, project, name, namespace st
 	return cluster, namespace, client, nil
 }
 
-func (c *coreClient) handleRollback(w http.ResponseWriter, r *http.Request) {
+// handleRevert puts a chosen image back on a workload.
+//
+// The client sends the id of the deployment it wants back rather than an image: this
+// module is the one that knows what that deployment ran, and a client that could name
+// an arbitrary image could put anything at all on a cluster.
+func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var request struct {
 		Project   string `json:"project"`
 		Cluster   string `json:"cluster"`
 		Namespace string `json:"namespace"`
+		Workload  string `json:"workload"`
+		// ID is the deployment to go back to.
+		ID string `json:"deployment_id"`
 	}
 	if err := decode(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(request.Project) == "" || strings.TrimSpace(request.ID) == "" {
+		writeError(w, http.StatusBadRequest, "a revert names a project and the deployment to go back to")
+		return
+	}
+
+	id, err := uuid.Parse(request.ID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "that is not a deployment this module recorded")
 		return
 	}
 	if c.history == nil {
@@ -229,7 +249,7 @@ func (c *coreClient) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cluster, namespace, client, err := c.clusterFor(ctx, request.Project, request.Cluster, request.Namespace)
+	_, namespace, client, err := c.clusterFor(ctx, request.Project, request.Cluster, request.Namespace)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -239,12 +259,29 @@ func (c *coreClient) handleRollback(w http.ResponseWriter, r *http.Request) {
 		log.Printf(format, args...)
 	})
 
-	record, err := deployer.Rollback(ctx, request.Project, cluster.Name, namespace)
+	record, err := deployer.Revert(ctx, deploy.RevertRequest{
+		ID:        id,
+		Workload:  request.Workload,
+		Namespace: namespace,
+		Timeout:   timeoutFrom(mustSettings(ctx, c, request.Project), "default_rollout_timeout", 10*time.Minute),
+	})
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error()})
+		// Refused, and said as a refusal: a revert that changed nothing and reported
+		// success is the answer that makes people believe their cluster is somewhere
+		// it is not.
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deployment": viewOf(record)})
+}
+
+// mustSettings is the module's settings for a project, or empty.
+func mustSettings(ctx context.Context, c *coreClient, project string) map[string]any {
+	settings, err := c.settings(ctx, project)
+	if err != nil {
+		return map[string]any{}
+	}
+	return settings
 }
 
 func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {

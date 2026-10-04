@@ -25,7 +25,15 @@ func sprintf(format string, args ...any) string { return fmt.Sprintf(format, arg
 // Whether the substitution reaches init containers is tested where it belongs, in the
 // package that does the substituting, against a manifest with several containers and
 // no cluster involved.
-func deploymentFor(namespace string) string {
+func deploymentFor(namespace string, image ...string) string {
+	// The image is a parameter because a test that deploys two versions needs two
+	// manifests: the placeholder only gets substituted by the deployer, and a revert
+	// sets the image on the cluster's own copy.
+	what := "IMAGE"
+	if len(image) > 0 {
+		what = image[0]
+	}
+
 	return `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -45,7 +53,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: IMAGE
+          image: ` + what + `
 `
 }
 

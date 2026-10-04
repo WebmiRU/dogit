@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -102,15 +103,17 @@ type Client interface {
 	// Rollout reports how a workload is getting on.
 	Rollout(ctx context.Context, namespace, name string) (Rollout, error)
 
-	// Rollback returns a workload to the revision before the current one.
-	//
-	// The cluster keeps a Deployment's previous pod templates as ReplicaSets, so this
-	// is "apply the previous template again" rather than an undo of anything: it does
-	// not touch a database, a ConfigMap or anything else that was applied alongside.
-	Rollback(ctx context.Context, namespace, name string) (Rollout, error)
-
 	// Revisions lists the history of a workload, newest first.
 	Revisions(ctx context.Context, namespace, name string) ([]Revision, error)
+
+	// SetImage puts one image on a workload's containers and waits for the rollout.
+	//
+	// This rather than an undo, because an undo is relative to whatever the cluster
+	// happens to remember: it steps back one revision, its history is bounded and
+	// prunable, and it will happily report success while leaving the same image in
+	// place. Naming the image says what should run, and says it whether or not the
+	// cluster still has any idea what ran before.
+	SetImage(ctx context.Context, namespace, name, image string, timeout time.Duration) (Rollout, error)
 }
 
 // Revision is one point in a workload's history.
@@ -391,46 +394,6 @@ func rolloutOf(d *appsv1.Deployment) Rollout {
 }
 
 // Rollback returns a Deployment to the revision before the current one.
-func (c *clusterClient) Rollback(ctx context.Context, namespace, name string) (Rollout, error) {
-	deployments := c.typed.AppsV1().Deployments(namespace)
-	deployment, err := deployments.Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return Rollout{}, fmt.Errorf("read deployment %s: %w", name, err)
-	}
-
-	// Asked of the cluster rather than worked out here: the cluster is what keeps the
-	// history, and a list of previous pod templates assembled by hand is a second
-	// source of truth about a cluster, which is the thing this whole design avoids.
-	previous := int64(0)
-	replicaSets, err := c.typed.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return Rollout{}, fmt.Errorf("read the history of %s: %w", name, err)
-	}
-
-	for _, rs := range replicaSets.Items {
-		if !belongsTo(&rs, name) {
-			continue
-		}
-		revision := revisionOf(&rs)
-		if revision >= deploymentRevision(deployment) {
-			continue
-		}
-		if previous == 0 || revision > previous {
-			previous = revision
-		}
-	}
-	if previous == 0 {
-		return Rollout{}, fmt.Errorf(
-			"there is no earlier revision of %s to go back to", name)
-	}
-
-	if _, err := c.typed.AppsV1().Deployments(namespace).Update(ctx,
-		rollbackTo(deployment, previous), metav1.UpdateOptions{}); err != nil {
-		return Rollout{}, fmt.Errorf("roll %s back to revision %d: %w", name, previous, err)
-	}
-
-	return c.Rollout(ctx, namespace, name)
-}
 
 // Revisions lists a Deployment's history, newest first.
 func (c *clusterClient) Revisions(ctx context.Context, namespace, name string) ([]Revision, error) {
@@ -573,4 +536,95 @@ func (c *clusterClient) EnsurePullSecret(ctx context.Context, namespace string, 
 		return fmt.Errorf("write the pull secret: %w", err)
 	}
 	return nil
+}
+
+// SetImage puts one image on every container of a workload and waits for the rollout.
+//
+// Every container, because a workload with two containers has two images and
+// replacing only the first leaves half of it on whatever it had — which is the same
+// mistake as an init container left on a floating tag.
+func (c *clusterClient) SetImage(ctx context.Context, namespace, name, image string,
+	timeout time.Duration) (Rollout, error) {
+
+	deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return Rollout{}, fmt.Errorf(
+				"there is no deployment called %s in %s to change the image of", name, namespace)
+		}
+		return Rollout{}, fmt.Errorf("read deployment %s: %w", name, err)
+	}
+
+	changed := deployment.DeepCopy()
+	for index := range changed.Spec.Template.Spec.Containers {
+		changed.Spec.Template.Spec.Containers[index].Image = image
+	}
+
+	if _, err := c.typed.AppsV1().Deployments(namespace).Update(ctx, changed,
+		metav1.UpdateOptions{}); err != nil {
+		return Rollout{}, fmt.Errorf("set the image of %s: %w", name, err)
+	}
+
+	return c.awaitImage(ctx, namespace, name, image, timeout)
+}
+
+// awaitImage waits until a workload is running the image it was asked for.
+//
+// The image is checked as well as the rollout being finished, because those are two
+// different questions, and answering only the second is how a revert reports success
+// over a cluster still running what it had before.
+func (c *clusterClient) awaitImage(ctx context.Context, namespace, name, image string,
+	timeout time.Duration) (Rollout, error) {
+
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+
+	last := ""
+	for {
+		deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			last = imagesOf(deployment)
+			if last == image {
+				return c.rolloutNow(ctx, namespace, name)
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return Rollout{}, fmt.Errorf(
+				"the image was set to %s but %s is running %s", image, name, describe(last))
+		}
+		select {
+		case <-ctx.Done():
+			return Rollout{}, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// rolloutNow reads the rollout state without waiting for it.
+func (c *clusterClient) rolloutNow(ctx context.Context, namespace, name string) (Rollout, error) {
+	deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return Rollout{}, fmt.Errorf("read deployment %s: %w", name, err)
+	}
+	return rolloutOf(deployment), nil
+}
+
+// imagesOf is what a workload's containers are running, in order.
+func imagesOf(deployment *appsv1.Deployment) string {
+	images := make([]string, 0, len(deployment.Spec.Template.Spec.Containers))
+	for _, container := range deployment.Spec.Template.Spec.Containers {
+		images = append(images, container.Image)
+	}
+	return strings.Join(images, ",")
+}
+
+// describe is what to say about an image nobody can name.
+func describe(images string) string {
+	if images == "" {
+		return "nothing this module can see"
+	}
+	return images
 }

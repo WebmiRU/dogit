@@ -45,6 +45,12 @@ const (
 	// StateRolledBack means somebody undid it afterwards. It is not a failure: the
 	// deployment did what it was asked to, and a person decided it was wrong.
 	StateRolledBack State = "rolled_back"
+
+	// StateReverted is an image that was put back on purpose: not a deployment that
+	// went out, and not one that failed. It gets its own name because in a history of
+	// a dozen entries "succeeded" next to "succeeded" says nothing about which of them
+	// somebody deliberately went back to.
+	StateReverted State = "reverted"
 )
 
 // Request is a deployment somebody asked for.
@@ -135,6 +141,7 @@ type History interface {
 	// Current is the last deployment that reached a decision, which is what a rollback
 	// returns to.
 	Current(ctx context.Context, project, cluster, namespace string) (*Deployment, error)
+	ByID(ctx context.Context, id uuid.UUID) (Deployment, error)
 	// List is a project's history, newest first.
 	List(ctx context.Context, project, cluster, namespace string) ([]Deployment, error)
 }
@@ -366,43 +373,106 @@ func (d *Deployer) waitForJob(ctx context.Context, object k8s.Object) (bool, err
 // anything else that was applied alongside stays where it is. A database does not
 // roll back, and a page that said "rolled back" without saying that would be the worst
 // kind of wrong.
-func (d *Deployer) Rollback(ctx context.Context, project, cluster, namespace string) (Deployment, error) {
-	current, err := d.history.Current(ctx, project, cluster, namespace)
+// Revert puts back one particular image.
+//
+// This is not an undo, and the difference is the whole point of the operation. An undo
+// steps back one revision of whatever the cluster remembers: its history is bounded,
+// prunable, and lost entirely if the Deployment is recreated — and it reports success
+// while leaving the same image in place when there is nothing to step back to, which
+// is a green tick over nothing.
+//
+// Here the caller names the deployment they want back, this module looks up the digest
+// that deployment ran, and that digest is written onto the workload. Where it goes is
+// decided by what this module recorded, not by what the cluster still has a copy of.
+//
+// What it does not do is undo a migration, a ConfigMap or anything else that was
+// applied alongside: only the image goes back.
+func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deployment, error) {
+	target, err := d.history.ByID(ctx, request.ID)
 	if err != nil {
 		return Deployment{}, err
 	}
-	if current == nil {
-		return Deployment{}, fmt.Errorf("there is nothing to roll back: %s has not been deployed", namespace)
+
+	if target.State != StateSucceeded && target.State != StateRolledBack && target.State != StateReverted {
+		return Deployment{}, fmt.Errorf(
+			"deployment %s did not finish, so there is nothing in it to go back to: it %s",
+			request.ID, target.State)
+	}
+	if strings.TrimSpace(target.Image) == "" {
+		return Deployment{}, fmt.Errorf(
+			"deployment %s deployed no image, so there is nothing to go back to", request.ID)
 	}
 
-	workload := workloadOf(current)
+	workload := request.Workload
 	if workload == "" {
-		return Deployment{}, fmt.Errorf("the last deployment to %s is not a workload, so there is no revision to go back to", namespace)
+		workload = target.Workload
+	}
+	if workload == "" {
+		return Deployment{}, fmt.Errorf(
+			"deployment %s says what namespace it went to but not which workload, so there is nothing to change",
+			request.ID)
 	}
 
-	rollout, err := d.client.Rollback(ctx, namespace, workload)
+	// The namespace is the target's, not the target deployment's: somebody may have
+	// deployed the same project to two places, and reverting a row has to act on the
+	// place being looked at.
+	namespace := request.Namespace
+	if namespace == "" {
+		namespace = target.Namespace
+	}
+
+	timeout := request.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+
+	rollout, err := d.client.SetImage(ctx, namespace, workload, target.Image, timeout)
 	if err != nil {
-		return *current, err
+		return Deployment{}, err
+	}
+	d.logf("put %s back on %s: %s", target.Image, workload, rollout.Reason)
+
+	// A new record rather than a change to the old one.
+	//
+	// The old one is history: it is the record that this image ran, and rewriting it
+	// to say it did not would leave a history with no memory of a version having been
+	// live at all. This one says what was put back and why, and points at the
+	// deployment it came from.
+	reverted := Deployment{
+		ID:        uuid.New(),
+		Project:   target.Project,
+		Cluster:   target.Cluster,
+		Namespace: namespace,
+		Image:     target.Image,
+		Workload:  workload,
+		State:     StateRunning,
+		Phase:     PhaseApply,
+		StartedAt: time.Now(),
+	}
+	reverted, err = d.history.Begin(ctx, reverted)
+	if err != nil {
+		return reverted, err
 	}
 
-	d.logf("rolled %s back: %s", workload, rollout.Reason)
-
-	// Said plainly, because "rolled back" without it is the answer that makes people
-	// believe a database went backwards too.
-	reason := fmt.Sprintf(
-		"the image came back to the previous revision of %s; anything applied alongside was left alone, "+
-			"and a database is not undone by anything", workload)
-
-	if err := d.Finish(ctx, current.ID, StateRolledBack, reason); err != nil {
-		return *current, err
+	reverted, err = d.finish(ctx, reverted, PhaseApply, StateReverted,
+		fmt.Sprintf("the image of deployment %s was put back on %s; a migration, a ConfigMap and "+
+			"anything else applied alongside were left as they are", request.ID, workload))
+	if err != nil {
+		return reverted, err
 	}
+	return reverted, nil
+}
 
-	// The copy was read before the history was told, so the answer is assembled here
-	// rather than handed back stale — a caller that reports "succeeded" right after a
-	// rollback has undone the one message that mattered.
-	current.State = StateRolledBack
-	current.Reason = reason
-	return *current, nil
+// RevertRequest is which deployment to go back to, and where.
+type RevertRequest struct {
+	// ID is the deployment whose image goes back. Not "the previous one": the caller
+	// picked a row on a page and this is that row.
+	ID uuid.UUID
+	// Workload and Namespace say where to put it, and default to what that deployment
+	// recorded when they are not given.
+	Workload  string
+	Namespace string
+	Timeout   time.Duration
 }
 
 // Finish closes a deployment from outside Run, which is what a rollback does.

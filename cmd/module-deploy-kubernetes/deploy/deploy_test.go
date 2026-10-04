@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +30,10 @@ type fakeClient struct {
 	failOn      map[string]error
 	rollouts    map[string]k8s.Rollout
 	rollbackErr error
+	// setImageTo is the image the last SetImage was asked for, and setImageFails what
+	// the cluster was still running instead.
+	setImageTo    string
+	setImageFails string
 	// pullSecrets is what was written into the namespace, in order.
 	pullSecrets []k8s.PullSecret
 }
@@ -95,10 +100,17 @@ func (f *fakeClient) Rollout(_ context.Context, _, name string) (k8s.Rollout, er
 	return k8s.Rollout{Desired: 1, Updated: 1, Ready: 1, Done: true}, nil
 }
 
-func (f *fakeClient) Rollback(_ context.Context, _, _ string) (k8s.Rollout, error) {
+// SetImage is what a revert uses now, and it records what it was asked for: a revert
+// that reports success without changing the image is the failure these tests exist for.
+func (f *fakeClient) SetImage(_ context.Context, _, _, image string, _ time.Duration) (k8s.Rollout, error) {
 	if f.rollbackErr != nil {
 		return k8s.Rollout{}, f.rollbackErr
 	}
+	if f.setImageFails != "" {
+		return k8s.Rollout{}, fmt.Errorf("the image was set to %s but app is running %s",
+			image, f.setImageFails)
+	}
+	f.setImageTo = image
 	return k8s.Rollout{Desired: 1, Updated: 1, Ready: 1, Done: true}, nil
 }
 
@@ -199,6 +211,21 @@ func (h *memoryHistory) Finish(_ context.Context, id uuid.UUID, state State, rea
 		}
 	}
 	return nil
+}
+
+// ByID is a record from the map, by identity.
+func (h *memoryHistory) ByID(_ context.Context, id uuid.UUID) (Deployment, error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	for _, records := range h.records {
+		for _, record := range records {
+			if record.ID == id {
+				return record, nil
+			}
+		}
+	}
+	return Deployment{}, fmt.Errorf("there is no deployment %s here", id)
 }
 
 func (h *memoryHistory) Current(_ context.Context, project, cluster, namespace string) (*Deployment, error) {
@@ -393,14 +420,70 @@ func TestADeploymentToAnotherNamespaceIsNotBlocked(t *testing.T) {
 	}
 }
 
-// A rollback says what it did and what it did not. It puts the image back; a database
-// is not touched, and a message claiming otherwise would be the worst kind of wrong.
-func TestARollbackSaysWhatItDidNotUndo(t *testing.T) {
+// A revert says what it did and what it did not. It puts one particular image back; a
+// database is not touched, and a message claiming otherwise would be the worst kind of
+// wrong.
+func TestARevertSaysWhatItDidNotUndo(t *testing.T) {
 	client := newFake()
 	history := newHistory()
 	deployer := &Deployer{client: client, history: history, Now: time.Now}
 
-	_, err := deployer.Run(context.Background(), Request{
+	first, err := deployer.Run(context.Background(), Request{
+		Project: "home-store/www", Cluster: "production", Namespace: "web",
+		Image: "reg/app@sha256:aaa", Placeholder: "IMAGE",
+		Manifests: []k8s.Object{manifestObject("app", "IMAGE")}, Workload: "app",
+	})
+	if err != nil {
+		t.Fatalf("the first deployment: %v", err)
+	}
+	second, err := deployer.Run(context.Background(), Request{
+		Project: "home-store/www", Cluster: "production", Namespace: "web",
+		Image: "reg/app@sha256:bbb", Placeholder: "IMAGE",
+		Manifests: []k8s.Object{manifestObject("app", "IMAGE")}, Workload: "app",
+	})
+	if err != nil {
+		t.Fatalf("the second deployment: %v", err)
+	}
+
+	record, err := deployer.Revert(context.Background(), RevertRequest{ID: first.ID})
+	if err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+
+	// The image that went back is the one that deployment ran, not "the previous
+	// revision" of whatever the cluster still remembers.
+	if client.setImageTo != "reg/app@sha256:aaa" {
+		t.Errorf("the image put back was %q, want the one deployment %s ran", client.setImageTo, first.ID)
+	}
+	if record.State != StateReverted {
+		t.Errorf("the history says %q after a revert", record.State)
+	}
+	if !strings.Contains(record.Reason, "left as they are") {
+		t.Errorf("a revert does not say what it left alone: %q", record.Reason)
+	}
+
+	// The record of the second deployment is untouched: it is history, and rewriting
+	// it would leave no memory of that version ever having been live.
+	kept, err := history.ByID(context.Background(), second.ID)
+	if err != nil {
+		t.Fatalf("read the second deployment: %v", err)
+	}
+	if kept.State != StateSucceeded {
+		t.Errorf("the deployment that was reverted away from now says %q", kept.State)
+	}
+}
+
+// A revert that changed nothing must be refused, not reported as done.
+//
+// This is the case that made the button untrustworthy: an undo with no revision behind
+// it returns happily while the workload keeps the image it had.
+func TestARevertThatChangesNothingIsRefused(t *testing.T) {
+	client := newFake()
+	client.setImageFails = "reg/app@sha256:bbb"
+	history := newHistory()
+	deployer := &Deployer{client: client, history: history, Now: time.Now}
+
+	deployed, err := deployer.Run(context.Background(), Request{
 		Project: "home-store/www", Cluster: "production", Namespace: "web",
 		Image: "reg/app@sha256:bbb", Placeholder: "IMAGE",
 		Manifests: []k8s.Object{manifestObject("app", "IMAGE")}, Workload: "app",
@@ -409,15 +492,35 @@ func TestARollbackSaysWhatItDidNotUndo(t *testing.T) {
 		t.Fatalf("deploy: %v", err)
 	}
 
-	record, err := deployer.Rollback(context.Background(), "home-store/www", "production", "web")
-	if err != nil {
-		t.Fatalf("rollback: %v", err)
+	if _, err := deployer.Revert(context.Background(), RevertRequest{ID: deployed.ID}); err == nil {
+		t.Fatal("a revert that left the same image running was reported as done")
 	}
-	if record.State != StateRolledBack {
-		t.Errorf("the history says %q after a rollback", record.State)
+}
+
+// A deployment that never finished is not a version to go back to.
+func TestADeploymentThatFailedIsNotAVersionToGoBackTo(t *testing.T) {
+	client := newFake()
+	client.failOn[k8s.Object{Kind: "Deployment", Namespace: "web", Name: "app"}.Ref()] =
+		fmt.Errorf("refused")
+	history := newHistory()
+	deployer := &Deployer{client: client, history: history, Now: time.Now}
+
+	_, err := deployer.Run(context.Background(), Request{
+		Project: "home-store/www", Cluster: "production", Namespace: "web",
+		Image: "reg/app@sha256:aaa", Placeholder: "IMAGE",
+		Manifests: []k8s.Object{manifestObject("app", "IMAGE")}, Workload: "app",
+	})
+	if err == nil {
+		t.Fatal("the deployment was expected to fail")
 	}
-	if !strings.Contains(record.Reason, "left alone") {
-		t.Errorf("a rollback does not say what it left alone: %q", record.Reason)
+
+	records, err := history.List(context.Background(), "home-store/www", "production", "web")
+	if err != nil || len(records) == 0 {
+		t.Fatalf("read the history: %v", err)
+	}
+
+	if _, err := deployer.Revert(context.Background(), RevertRequest{ID: records[0].ID}); err == nil {
+		t.Fatal("a failed deployment was offered as something to go back to")
 	}
 }
 

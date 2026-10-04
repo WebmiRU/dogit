@@ -164,25 +164,34 @@ async function load() {
 }
 
 /**
- * Undoes the last deployment of a place.
+ * Puts one version back on a place.
  *
- * Asked to confirm, and says what it will not do: the answer cannot be taken back
- * afterwards, the image it returns to may be one somebody has since removed, and
- * nothing here can say whether it still pulls.
+ * Named after what it does and not after "rollback", because rollback means going
+ * back one step and this means putting back a particular image: the row somebody
+ * clicked, by the digest that row recorded. The cluster's own idea of the previous
+ * revision is bounded, prunable, and gone entirely if the Deployment is recreated —
+ * and it reports success while leaving the same image in place when there is nothing
+ * behind it, which is the answer that makes a button untrustworthy.
+ *
+ * Confirmed, because it changes what is running and cannot be taken back from here.
  */
-async function rollback(deployment: Deployment) {
+async function revertTo(deployment: Deployment) {
+  const where = `${deployment.cluster}/${deployment.namespace || 'its default namespace'}`
   const question =
-    `Put ${deployment.cluster}/${deployment.namespace || 'its default namespace'} back to ` +
-    'the deployment before this one?\n\n' +
-    'This returns the previous image. It does not undo a database migration that ran with it.'
+    `Put ${shortImage(deployment.image)} back on ${where}?\n\n` +
+    `What ${deployment.workload || 'the workload'} runs will be this image again.\n` +
+    'A database migration, a ConfigMap and anything else applied alongside are left as ' +
+    'they are — only the image goes back.'
   if (!globalThis.confirm(question)) return
 
   busy.value = true
   error.value = ''
   try {
-    await api.post(`/projects/${props.projectId}/deployments/rollback`, {
+    await api.post(`/projects/${props.projectId}/deployments/revert`, {
       cluster: deployment.cluster,
       namespace: deployment.namespace,
+      workload: deployment.workload,
+      deployment_id: deployment.id,
     })
     await load()
   } catch (caught) {
@@ -304,10 +313,10 @@ watch(() => props.module.id, load)
                   class="btn btn-small"
                   type="button"
                   :disabled="busy || !isLive(deployment)"
-                  title="Put the previous image back"
-                  @click="rollback(deployment)"
+                  title="Put this image back on the workload"
+                  @click="revertTo(deployment)"
                 >
-                  Roll back
+                  Revert to this
                 </button>
               </td>
             </tr>
@@ -429,8 +438,11 @@ th {
   color: var(--text-muted);
 }
 
+/* Wide enough for the words on the button: "Roll back" fitted and "Revert to this"
+   did not, and a button whose label is cut off is a button nobody trusts to have
+   read. */
 .actions-col {
-  width: 110px;
+  width: 150px;
   white-space: nowrap;
 }
 

@@ -259,7 +259,7 @@ func ownEndpoints(core *coreClient) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /deploy", core.handleDeploy)
-	mux.HandleFunc("POST /rollback", core.handleRollback)
+	mux.HandleFunc("POST /revert", core.handleRevert)
 	mux.HandleFunc("GET /deployments", core.handleDeployments)
 	mux.HandleFunc("POST /clusters/test", core.handleTestCluster)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

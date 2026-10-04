@@ -30,6 +30,9 @@ type History interface {
 	Phase(ctx context.Context, id uuid.UUID, state deploy.State, phase deploy.Phase, reason string) error
 	Finish(ctx context.Context, id uuid.UUID, state deploy.State, reason string) error
 	Current(ctx context.Context, project, cluster, namespace string) (*deploy.Deployment, error)
+	// ByID is one deployment by identity, which is how a revert names the row
+	// somebody clicked on.
+	ByID(ctx context.Context, id uuid.UUID) (deploy.Deployment, error)
 	List(ctx context.Context, project, cluster, namespace string) ([]deploy.Deployment, error)
 	Close(ctx context.Context)
 }
@@ -346,4 +349,26 @@ func (h *postgresHistory) setStartedAt(ctx context.Context, id uuid.UUID, starte
 	_, err := h.pool.Exec(ctx,
 		`UPDATE deployments SET started_at = $2 WHERE id = $1`, id, startedAt)
 	return err
+}
+
+// ByID is one deployment, whichever place it was made to.
+//
+// Looked up by identity rather than by project and place, because a revert says which
+// record it means: the row somebody clicked on a page, and there is no way to guess
+// that from a project and a namespace — several deployments to the same place look
+// alike from here.
+func (h *postgresHistory) ByID(ctx context.Context, id uuid.UUID) (deploy.Deployment, error) {
+	rows, err := h.pool.Query(ctx, `
+		SELECT id, project, cluster, namespace, image, workload, state, phase, reason, started_at, finished_at
+		FROM deployments WHERE id = $1`, id)
+	if err != nil {
+		return deploy.Deployment{}, fmt.Errorf("read the deployment: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return deploy.Deployment{}, fmt.Errorf(
+			"this module has no record of deployment %s, so there is nothing to go back to", id)
+	}
+	return scanDeployment(rows)
 }

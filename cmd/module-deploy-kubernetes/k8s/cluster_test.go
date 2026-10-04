@@ -309,9 +309,9 @@ func TestClusterListsRevisionsWithTheirImages(t *testing.T) {
 	}
 }
 
-// Rolling back returns the previous template — and nothing else. This test exists
-// because the honest answer to "what does rollback undo" has to be checked somewhere.
-func TestClusterRollbackReturnsThePreviousImage(t *testing.T) {
+// Setting an image puts back exactly the one named, and the test exists because the
+// honest answer to "what does reverting undo" has to be checked somewhere.
+func TestClusterSetImageReturnsTheNamedImage(t *testing.T) {
 	client := clusterClientFor(t)
 	space := namespace(t, client)
 
@@ -319,23 +319,28 @@ func TestClusterRollbackReturnsThePreviousImage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := client.Rollback(context.Background(), space, "app"); err != nil {
-		t.Fatalf("rollback: %v", err)
+	if _, err := client.SetImage(context.Background(), space, "app",
+		"registry.k8s.io/pause:3.9", 2*time.Minute); err != nil {
+		t.Fatalf("set the image: %v", err)
 	}
 
-	revisions, err := client.Revisions(context.Background(), space, "app")
+	// Read off the Deployment rather than off the revision list: which ReplicaSet is
+	// "current" is the controller's bookkeeping, and after a revert there is more than
+	// one ReplicaSet carrying the image that was asked for.
+	deployment, err := client.Get(context.Background(), Object{
+		APIVersion: "apps/v1", Kind: "Deployment", Namespace: space, Name: "app",
+	})
 	if err != nil {
-		t.Fatalf("revisions: %v", err)
+		t.Fatalf("read the deployment: %v", err)
 	}
-
-	current := ""
-	for _, one := range revisions {
-		if one.Current {
-			current = one.Image
-		}
+	containers, found, err := unstructured.NestedSlice(
+		deployment.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found || len(containers) == 0 {
+		t.Fatalf("read the containers: found=%v err=%v", found, err)
 	}
-	if current != "registry.k8s.io/pause:3.9" {
-		t.Errorf("after a rollback the cluster runs %q, want the image before the last deploy", current)
+	first, _ := containers[0].(map[string]any)
+	if got, _ := first["image"].(string); got != "registry.k8s.io/pause:3.9" {
+		t.Errorf("the deployment runs %q, want the image that was named", got)
 	}
 }
 

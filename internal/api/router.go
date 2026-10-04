@@ -257,7 +257,7 @@ func (s *Server) projectRoutes() chi.Router {
 	// deploy module, which is where those facts live; the core only decides who may
 	// ask and refuses an undo to anybody but an administrator.
 	projects.Get(base+"/deployments", s.handleProjectDeployments)
-	projects.Post(base+"/deployments/rollback", s.handleRollbackDeployment)
+	projects.Post(base+"/deployments/revert", s.handleRevertDeployment)
 
 	projects.Post(base+"/pipelines", s.handleCreatePipeline)
 	projects.Get(base+"/pipelines", s.handleListPipelines)

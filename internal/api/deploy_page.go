@@ -65,12 +65,18 @@ func (s *Server) handleProjectDeployments(w http.ResponseWriter, r *http.Request
 	s.writeRaw(w, r, http.StatusOK, body)
 }
 
-// handleRollbackDeployment undoes the last deployment of one place.
+// handleRevertDeployment puts one chosen version back on a place.
 //
-// Refused without the write scope, and refused for anybody who may only look: an undo
-// is a change to a running system, and a page that shows what is deployed has no
-// business being able to change it.
-func (s *Server) handleRollbackDeployment(w http.ResponseWriter, r *http.Request) {
+// Not an undo of "the previous revision": the client sends the deployment it wants
+// back, the module looks up the digest that deployment ran, and that digest is what
+// goes onto the workload. Where it goes is decided by this module's history rather
+// than by whatever the cluster still remembers, which is bounded, prunable and lost
+// entirely if the Deployment is ever recreated.
+//
+// Refused without the write scope, and refused for anybody who may only look: this
+// changes a running system, and a page that shows what is deployed has no business
+// being able to change it.
+func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) {
 	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -79,7 +85,7 @@ func (s *Server) handleRollbackDeployment(w http.ResponseWriter, r *http.Request
 
 	user := userFrom(r.Context())
 	if !user.IsAdmin {
-		s.writeError(w, r, errForbidden("rolling back a deployment is an administrator's action"))
+		s.writeError(w, r, errForbidden("putting a version back is an administrator's action"))
 		return
 	}
 
@@ -97,31 +103,42 @@ func (s *Server) handleRollbackDeployment(w http.ResponseWriter, r *http.Request
 	var request struct {
 		Cluster   string `json:"cluster"`
 		Namespace string `json:"namespace"`
+		Workload  string `json:"workload"`
+		// DeploymentID is the record to go back to. Sent as an id rather than as an
+		// image, because the module is the one that knows what a record ran, and a
+		// client that could name an arbitrary image could put anything on a cluster.
+		DeploymentID string `json:"deployment_id"`
 	}
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	if strings.TrimSpace(request.DeploymentID) == "" {
+		s.writeError(w, r, errBadRequest(
+			"say which version to go back to: a revert names the deployment, not \"the last one\""))
+		return
+	}
 
 	body, err := json.Marshal(map[string]string{
-		"project":   project.Path,
-		"cluster":   request.Cluster,
-		"namespace": request.Namespace,
+		"project":       project.Path,
+		"cluster":       request.Cluster,
+		"namespace":     request.Namespace,
+		"workload":      request.Workload,
+		"deployment_id": request.DeploymentID,
 	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 
-	answer, err := s.callDeployModule(r.Context(), module, http.MethodPost, "/rollback", body)
+	answer, err := s.callDeployModule(r.Context(), module, http.MethodPost, "/revert", body)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 
-	s.publishInstanceEvent(r, models.EventModuleRegistered, module, nil)
-	s.log.Info("a deployment was rolled back", "project", project.Path,
-		"cluster", request.Cluster, "user", user.Username)
+	s.log.Info("a version was put back", "project", project.Path,
+		"cluster", request.Cluster, "deployment", request.DeploymentID, "user", user.Username)
 	s.writeRaw(w, r, http.StatusOK, answer)
 }
 

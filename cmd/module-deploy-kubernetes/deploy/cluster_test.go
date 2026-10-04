@@ -193,11 +193,25 @@ func TestClusterAFailedMigrationLeavesTheClusterUntouched(t *testing.T) {
 }
 
 // A rollback on a real cluster, with two real deployments behind it.
-func TestClusterARollbackPutsThePreviousImageBack(t *testing.T) {
+func TestClusterARevertPutsTheChosenImageBack(t *testing.T) {
 	client, space := clusterSetup(t)
 	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
 
-	for _, image := range []string{"registry.k8s.io/pause:3.9", "registry.k8s.io/pause:3.10"} {
+	first, err := deployer.Run(context.Background(), Request{
+		Project: "home-store/www", Cluster: "test", Namespace: space,
+		Image: "registry.k8s.io/pause:3.9", Placeholder: "IMAGE",
+		Manifests: []k8s.Object{{
+			APIVersion: "apps/v1", Kind: "Deployment", Namespace: space, Name: "app",
+			Body: []byte(deploymentFor(space, "registry.k8s.io/pause:3.9")),
+		}},
+		WaitForRollout: true, Rollout: "app", Workload: "app",
+		Timeout: 2 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("the first deployment: %v", err)
+	}
+
+	for _, image := range []string{"registry.k8s.io/pause:3.10"} {
 		_, err := deployer.Run(context.Background(), Request{
 			Project: "home-store/www", Cluster: "test", Namespace: space,
 			Image: image, Placeholder: "IMAGE",
@@ -213,12 +227,13 @@ func TestClusterARollbackPutsThePreviousImageBack(t *testing.T) {
 		}
 	}
 
-	record, err := deployer.Rollback(context.Background(), "home-store/www", "test", space)
+	// By identity: the caller picked a row, and this is that row.
+	record, err := deployer.Revert(context.Background(), RevertRequest{ID: first.ID})
 	if err != nil {
-		t.Fatalf("rollback: %v", err)
+		t.Fatalf("revert: %v", err)
 	}
-	if record.State != StateRolledBack {
-		t.Errorf("the history says %q after a rollback", record.State)
+	if record.State != StateReverted {
+		t.Errorf("the history says %q after a revert", record.State)
 	}
 
 	revisions, err := client.Revisions(context.Background(), space, "app")
