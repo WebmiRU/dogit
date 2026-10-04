@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onRewake } from '~/lib/eventSocket'
 /**
  * What is deploying now, and what has been deployed.
  *
@@ -204,8 +205,19 @@ const idleProgress = computed<DeployProgress | null>(() => {
   if (!last || active.value) return null
 
   const failed = last.state === 'failed' || last.state === 'abandoned'
+
+  // No phase, on purpose, when the last operation ended well.
+  //
+  // There is no step in progress and there has not been for some time. Naming one
+  // anyway — which is what this used to do, naming the rollout because that is where
+  // deployments usually get to — draws an arrow on a step that is finished and leaves
+  // everything after it blue for ever, which reads as a run that stalled one step from
+  // the end. It said so twice today before I looked properly.
+  //
+  // A failure is the other matter: there the step it died on is worth pointing at, and
+  // the module named it.
   return {
-    phase: last.phase || (failed ? 'apply' : 'rollout'),
+    phase: failed ? (last.phase || '') : '',
     message: failed
       ? (last.reason || 'the operation did not finish')
       : `the last operation ${last.state} — ${last.workload || 'the workload'} ran ${shortImage(last.image)}`,
@@ -394,6 +406,7 @@ async function revertTo(deployment: Deployment) {
 }
 
 /** Two subscriptions, because two things change at different rates. */
+let stopRewake: (() => void) | undefined
 let stopPlan: (() => void) | undefined
 let stopHistory: (() => void) | undefined
 let stopOperation: (() => void) | undefined
@@ -413,6 +426,18 @@ onMounted(async () => {
       if (!payload.job_id && !payload.phase) return
       noteOperation(payload)
     },
+  })
+
+  // What a reconnection means for this page.
+  //
+  // Everything here was drawn from events, and while the connection was down the
+  // deployment carried on without it: the steps that finished in that gap were never
+  // seen, and the card would sit on the phase it happened to be showing when the
+  // network blinked. So a reconnect is a reason to ask again rather than to carry on
+  // believing — the same thing a person does when they notice they stopped hearing
+  // something and look again.
+  stopRewake = onRewake(() => {
+    void load()
   })
 
   // The plan, once, before anything happens. Separate from the operation's own
@@ -442,6 +467,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  stopRewake?.()
   stopPlan?.()
   stopHistory?.()
   stopOperation?.()
@@ -514,7 +540,16 @@ watch(() => props.module.id, load)
              to read rather than something to catch. -->
         <!-- Not live: this is the last operation's steps, and an arrow moving here
              would be claiming work that finished long ago. -->
-        <DeploySteps v-if="idleProgress" :progress="idleProgress" :plan="plan" />
+        <!-- The steps of the last operation, when this page has seen which ones they
+             were. It has not, on a page opened between runs: the plan is published
+             with a run, and a page that arrives afterwards is told about the run that
+             is already over and not about the list it went through. Better the summary
+             above than a list of nothing. -->
+        <DeploySteps
+          v-if="idleProgress && plan.length > 0"
+          :progress="idleProgress"
+          :plan="plan"
+        />
       </div>
     </section>
 

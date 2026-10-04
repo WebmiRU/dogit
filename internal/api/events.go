@@ -19,14 +19,21 @@ import (
 // again, so being disconnected costs a moment of delay and nothing else.
 const eventReconnectMS = 2000
 
-// eventStreamPing is how often a comment is written to an idle event connection.
+// eventStreamPing is how often something is written to an idle event connection.
 //
-// Not decoration: a stream that says nothing for a while is a stream a proxy in
-// the middle has concluded is dead, and it will be closed — quietly, and then the
-// page stops hearing about anything until something else happens to make it ask.
-// A comment every twenty seconds costs almost nothing and keeps the connection
-// the client's own decision rather than the network's.
-const eventStreamPing = 20 * time.Second
+// Not decoration. A stream that says nothing for a while is a stream something in
+// the middle has concluded is dead: a proxy, a load balancer, a NAT table, or the
+// client itself, which is entitled to time a connection out and does not have to say
+// so. Whichever it is, the page stops hearing about anything until something else
+// happens to make it ask — and a deployment that carries on regardless is the worst
+// way for that to find out.
+//
+// Written twice on purpose. A comment keeps intermediaries moving, and browsers
+// ignore it; a named event is real content, which browsers do count and can watch.
+// Fifteen seconds rather than twenty or thirty because the cost is a few dozen
+// bytes every fifteen seconds on a connection that was going to be open anyway, and
+// the alternative is a page that quietly stops knowing what is happening.
+const eventStreamPing = 15 * time.Second
 
 // eventStreamCatchUpLimit is how many events are read at once while a connection
 // is catching up to the present.
@@ -153,9 +160,13 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 			return
 
 		case <-ping.C:
-			// A comment, which a client ignores: this is only about keeping the
-			// connection open, and it is the one thing written when nothing happened.
+			// A comment for anything that only counts bytes, and a named event for
+			// anything that counts messages — including the client, which ignores the
+			// first and can watch the second.
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			if _, err := fmt.Fprint(w, "event: ping\ndata: {}\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
