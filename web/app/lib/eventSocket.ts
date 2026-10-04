@@ -164,17 +164,20 @@ export function openEventSocket() {
       return
     }
 
-    // Never opened: let go of it and try again shortly, so a stream refused while a
-    // page was loading is not the end of events for that session.
-    console.warn('[dogit] the event stream could not be opened')
-    opened.close()
+    // Never opened, so the browser has nothing to reconnect from and will not try.
+    // Open another one — without closing this one first, because closing a request that
+    // is still in flight is what produces "the event stream was aborted during page
+    // load" in the console. That message was this code's own doing, and it looked for
+    // all the world like the browser blaming us for something.
+    console.warn('[dogit] the event stream did not open; trying again')
     opening = false
-    if (stream === null && !retrying) {
+    if (stream === opened) stream = null
+    if (!retrying) {
       retrying = true
       setTimeout(() => {
         retrying = false
         openEventSocket()
-      }, 1000)
+      }, 1500)
     }
   })
 

@@ -147,6 +147,15 @@ const steps = computed<Step[]>(() => {
   // "waiting" for ever — which says it is about to start.
   const over = props.progress?.message !== undefined && nowOn === ''
 
+  // Whether anything went wrong, which decides what an unreached step means.
+  //
+  // After a deployment that ended well, a step nobody reached had nothing to do — the
+  // old pods were already gone, or there was nothing to retire. Drawing that grey says
+  // something did not happen, and beside nine green dots it is the one that reads as a
+  // problem. It is only a skipped step when the operation was cut short, and then grey
+  // is exactly right.
+  const anythingFailed = [...wasSaid.values()].some((one) => one.failed)
+
   return order.value.map((step, position) => {
     const heard = wasSaid.get(step.key)
     let state: StepState = 'waiting'
@@ -154,7 +163,7 @@ const steps = computed<Step[]>(() => {
     if (heard?.failed) state = 'failed'
     else if (step.key === nowOn) state = 'now'
     else if (reachedAt > -1 && position < reachedAt) state = 'done'
-    else if (over && position > reachedAt) state = 'skipped'
+    else if (over && position > reachedAt) state = anythingFailed ? 'skipped' : 'done'
 
     return {
       key: step.key,
