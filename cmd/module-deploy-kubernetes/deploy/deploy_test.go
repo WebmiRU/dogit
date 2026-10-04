@@ -287,8 +287,22 @@ func (h *memoryHistory) Current(_ context.Context, project, cluster, namespace s
 	return &last, nil
 }
 
-func (h *memoryHistory) List(_ context.Context, project, cluster, namespace string) ([]Deployment, error) {
-	return h.records[lockKey(project, cluster, namespace)], nil
+// List pages the way the database does, so a test that paginates is testing the same
+// arithmetic the real one does.
+func (h *memoryHistory) List(_ context.Context, project, cluster, namespace string,
+	limit, offset int) ([]Deployment, int, error) {
+
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	all := h.records[lockKey(project, cluster, namespace)]
+	if offset > len(all) {
+		offset = len(all)
+	}
+	page := all[offset:]
+	if len(page) > limit {
+		page = page[:limit]
+	}
+	return page, len(all), nil
 }
 
 func manifestObject(name, image string) k8s.Object {
@@ -563,7 +577,7 @@ func TestADeploymentThatFailedIsNotAVersionToGoBackTo(t *testing.T) {
 		t.Fatal("the deployment was expected to fail")
 	}
 
-	records, err := history.List(context.Background(), "home-store/www", "production", "web")
+	records, _, err := history.List(context.Background(), "home-store/www", "production", "web", 20, 0)
 	if err != nil || len(records) == 0 {
 		t.Fatalf("read the history: %v", err)
 	}

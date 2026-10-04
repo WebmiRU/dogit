@@ -169,8 +169,14 @@ type History interface {
 	// returns to.
 	Current(ctx context.Context, project, cluster, namespace string) (*Deployment, error)
 	ByID(ctx context.Context, id uuid.UUID) (Deployment, error)
-	// List is a project's history, newest first.
-	List(ctx context.Context, project, cluster, namespace string) ([]Deployment, error)
+	// Images is the catalogue of what this project has put on a place, which is not the
+	// same question as what it did most recently.
+	Images(ctx context.Context, project, cluster, namespace string, limit, offset int) ([]KnownImage, int, error)
+	// List is one page of a project's history, newest first, and how many there are.
+	//
+	// A page, and a total, because a project that has been deployed to for a year has
+	// more rows than anybody will read and more than anybody should be made to wait for.
+	List(ctx context.Context, project, cluster, namespace string, limit, offset int) ([]Deployment, int, error)
 	// LogOf reads back what a deployment said, for a page that arrives afterwards.
 	LogOf(ctx context.Context, id uuid.UUID) ([]LogLine, error)
 	// Log writes down what a deployment said, in the order it said it.
@@ -179,6 +185,29 @@ type History interface {
 	// things over minutes, so there is nothing to gain from a write per line, and a
 	// deployment that died halfway still leaves the lines that explain why.
 	Log(ctx context.Context, id uuid.UUID, lines []LogLine) error
+}
+
+// KnownImage is one image in the catalogue.
+//
+// The last deployment that put it somewhere is carried with it, because putting an
+// image back is not a request about an image: it is a request about a place and a
+// workload, and those are recorded by the deployment rather than by the image.
+type KnownImage struct {
+	Image     string    `json:"image"`
+	FirstSeen time.Time `json:"first_seen"`
+	Times     int       `json:"times"`
+	Succeeded int       `json:"succeeded"`
+	Deployed  *ImageDeployment `json:"deployed,omitempty"`
+}
+
+// ImageDeployment is the last deployment of an image, and the place it went to.
+type ImageDeployment struct {
+	ID        string    `json:"id"`
+	Cluster   string    `json:"cluster"`
+	Namespace string    `json:"namespace"`
+	Workload  string    `json:"workload"`
+	State     State     `json:"state"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 // LogLine is one thing a deployment said, kept as it was said.

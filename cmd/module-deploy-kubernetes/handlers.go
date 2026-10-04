@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"context"
 	"encoding/json"
 	"errors"
@@ -304,6 +305,20 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("cluster")
 	namespace := r.URL.Query().Get("namespace")
 
+	// Which page, and how big. Said by the reader rather than guessed here: a control
+	// on a page decides what a page is, and the database is what can afford to answer.
+	page := queryInt(r, "page", 1)
+	perPage := queryInt(r, "per_page", 20)
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 20
+	}
+	if perPage > 200 {
+		perPage = 200
+	}
+
 	if project == "" {
 		writeError(w, http.StatusBadRequest, "the history is asked for by project")
 		return
@@ -317,7 +332,7 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	// deployed" is not asking about one place, and making it name a cluster first
 	// would mean the answer to that question is a form.
 	if strings.TrimSpace(name) == "" {
-		records, err := c.history.List(ctx, project, "", "")
+		records, total, err := c.history.List(ctx, project, "", "", perPage, (page-1)*perPage)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -325,12 +340,12 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		// The newest row carries its own log, because that is the one a page opened
 		// between deployments asks about. The rest are a list of rows: a hundred
 		// deployments' logs are a hundred answers to a question nobody has asked yet.
-		if len(records) > 0 {
+		if page == 1 && len(records) > 0 {
 			if lines, err := c.history.LogOf(ctx, records[0].ID); err == nil {
 				records[0].Log = lines
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"deployments": viewsOf(records)})
+		writeJSON(w, http.StatusOK, pageOf(records, total, page, perPage))
 		return
 	}
 
@@ -347,13 +362,102 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	records, err := c.history.List(ctx, project, name, namespace)
+	records, total, err := c.history.List(ctx, project, name, namespace,
+		perPage, (page-1)*perPage)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"deployments": viewsOf(records)})
+	writeJSON(w, http.StatusOK, pageOf(records, total, page, perPage))
+}
+
+// pageOf is one page of rows, and enough about the rest for a control to be honest
+// about what it has not loaded.
+func pageOf(records []deploy.Deployment, total, page, perPage int) map[string]any {
+	shown := len(records)
+	pages := 1
+	if perPage > 0 {
+		pages = (total + perPage - 1) / perPage
+	}
+	if pages < 1 {
+		pages = 1
+	}
+	return map[string]any{
+		"deployments": viewsOf(records),
+		"total":       total,
+		"page":        page,
+		"per_page":    perPage,
+		"pages":       pages,
+		// True when asking for the next page would bring rows, which is what a reader
+		// of the control needs and what a count alone does not say for an empty tail.
+		"has_more": page*perPage < total,
+		"shown":    shown,
+	}
+}
+
+// queryInt is a number the reader asked for, or a default when it asked for nothing
+// sensible.
+func queryInt(r *http.Request, name string, fallback int) int {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+// handleImages is the catalogue: every image this project has put on a place.
+//
+// Asked for on its own rather than read out of a page of operations. A catalogue built
+// from one page is a catalogue that forgets everything older than that page, and the
+// older entries are exactly the ones a rollback is chosen from.
+func (c *coreClient) handleImages(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	project := r.URL.Query().Get("project")
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "the catalogue is asked for by project")
+		return
+	}
+	if c.history == nil {
+		writeError(w, http.StatusServiceUnavailable, errNoHistory.Error())
+		return
+	}
+
+	page := queryInt(r, "page", 1)
+	perPage := queryInt(r, "per_page", 20)
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 20
+	}
+	if perPage > 200 {
+		perPage = 200
+	}
+
+	images, total, err := c.history.Images(ctx, project,
+		r.URL.Query().Get("cluster"), r.URL.Query().Get("namespace"),
+		perPage, (page-1)*perPage)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	pages := 1
+	if perPage > 0 {
+		pages = (total + perPage - 1) / perPage
+	}
+	if pages < 1 {
+		pages = 1
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"images": images, "total": total, "page": page,
+		"per_page": perPage, "pages": pages, "has_more": page*perPage < total,
+	})
 }
 
 // handleTestCluster says whether a cluster can be reached, before anything is deployed

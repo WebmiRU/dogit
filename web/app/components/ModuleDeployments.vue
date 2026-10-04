@@ -29,6 +29,16 @@ const props = defineProps<{
   canManage: boolean
 }>()
 
+/** One page of the history, and what is left of it. */
+interface DeploymentsPage {
+  reason?: string
+  deployments?: Deployment[]
+  total?: number
+  page?: number
+  pages?: number
+  has_more?: boolean
+}
+
 interface Deployment {
   id: string
   cluster: string
@@ -97,7 +107,7 @@ const page = ref(1)
  * the width making both of them narrower. Operations are what somebody opens the page
  * for; images are what they open once something went wrong.
  */
-const tab = ref<'operations' | 'images'>('operations')
+const tab = ref<'now' | 'operations' | 'images'>('now')
 
 /** The image to be shown, when somebody arrived here by clicking one. */
 const wanted = ref('')
@@ -110,7 +120,16 @@ const active = ref<DeployProgress | null>(null)
 const plan = ref<{ key: string; label: string }[]>([])
 const activeSeen = ref<DeployProgress[]>([])
 
-const target = computed(() => props.module.kind.replace(/^deploy:/, ''))
+/**
+ * The place being asked about, if one was named.
+ *
+ * Not guessed from the module's kind. "deploy:kubernetes" is what the module is, and a
+ * cluster is called something else entirely, so asking for a cluster named "kubernetes"
+ * is asking about a place that does not exist and getting an empty history in reply.
+ * Empty means every place, which is the right question for a page that lists operations
+ * across all of them.
+ */
+const target = ref('')
 
 /** An image, with what is known about it. */
 interface KnownImage {
@@ -272,31 +291,11 @@ const activeImage = computed(() => {
  * as the history is deep. It is also why an image that failed on its first attempt and
  * worked on the second appears once rather than twice.
  */
-const images = computed<KnownImage[]>(() => {
-  const byDigest = new Map<string, KnownImage>()
-  const order: string[] = []
+const images = ref<KnownImage[]>([])
+const imagePages = ref(1)
+const imageTotal = ref(0)
+const imageHasMore = ref(false)
 
-  for (const one of deployments.value) {
-    if (!one.image) continue
-    const at = one.image.indexOf('@')
-    const digest = at >= 0 ? one.image.slice(at + 1) : one.image
-    const full = one.image
-
-    let known = byDigest.get(digest)
-    if (!known) {
-      known = { digest: full, firstSeen: one.started_at, times: 0, succeeded: 0, live: null }
-      byDigest.set(digest, known)
-      order.push(digest)
-    }
-
-    known.times++
-    if (isLive(one)) known.succeeded++
-    // The newest successful deployment of this image is what a rollback would name.
-    if (!known.live && isLive(one)) known.live = one
-  }
-
-  return order.map((digest) => byDigest.get(digest)!)
-})
 
 /**
  * Goes to that image on the images tab and points at it.
@@ -320,14 +319,20 @@ function showImage(image: string) {
 }
 
 /** The images on this page. */
-const imagePageCount = computed(() => Math.max(1, Math.ceil(images.value.length / IMAGE_PAGE)))
-const shownImages = computed(() =>
-  images.value.slice((imagePage.value - 1) * IMAGE_PAGE, imagePage.value * IMAGE_PAGE),
-)
+const shownImages = computed(() => images.value)
 
-/** The operations on this page, newest first. */
-const pageCount = computed(() => Math.max(1, Math.ceil(deployments.value.length / PAGE)))
-const shown = computed(() => deployments.value.slice((page.value - 1) * PAGE, page.value * PAGE))
+/**
+ * The operations on show, newest first.
+ *
+ * Asked for by page and not cut up here. Loading the whole history and slicing it in
+ * the browser is how a page stops opening after a year, and it makes the control next to
+ * the rows a decoration: it says "page" while changing nothing about what was fetched.
+ */
+const total = ref(0)
+const pages = ref(1)
+const hasMore = ref(false)
+
+const shown = computed(() => deployments.value)
 
 /**
  * The rows as they now are, keeping the object of every row that has not changed.
@@ -343,14 +348,115 @@ function merge(previous: Deployment[], arrived: Deployment[]): Deployment[] {
   })
 }
 
+/** Goes to a page of the history by asking for it. */
+function goToPage(to: number) {
+  if (to < 1 || (pages.value > 0 && to > pages.value)) return
+  page.value = to
+  void load()
+}
+
+/**
+ * Whether a load is under way, and whether one more is owed.
+ *
+ * Coalesced, because there are several honest reasons to ask again at once — a
+ * reconnection, an operation finishing, the buffer of recent events arriving — and
+ * twenty identical requests in a millisecond is not a careful page reloading itself. It
+ * is twenty pages' worth of work for one answer, and on a list this size it is the
+ * difference between opening and not opening.
+ */
+let loadingNow = false
+let loadAgain = false
+
+/**
+ * The catalogue of images, asked for as its own question.
+ *
+ * It used to be worked out from the operations that had been loaded, which was free
+ * while every operation was loaded and wrong the moment they were not: a page of twenty
+ * rows cannot tell you about the three hundred deployments behind them, and the older
+ * images are the ones a rollback is chosen from.
+ */
+async function loadImages() {
+  try {
+    const query = new URLSearchParams({
+      page: String(imagePage.value),
+      per_page: String(IMAGE_PAGE),
+    })
+    const answer = await api.get<{
+      images?: {
+        image: string
+        first_seen: string
+        times: number
+        succeeded: number
+        deployed?: {
+          id: string
+          cluster: string
+          namespace: string
+          workload: string
+          state: string
+          started_at: string
+        }
+      }[]
+      pages?: number
+      total?: number
+      has_more?: boolean
+    }>(`/projects/${props.projectId}/deploy-images?${query}`)
+
+    imagePages.value = answer.pages ?? 1
+    imageTotal.value = answer.total ?? 0
+    imageHasMore.value = answer.has_more ?? false
+
+    images.value = (answer.images ?? []).map((one) => {
+      const at = one.image.indexOf('@')
+      return {
+        digest: at >= 0 ? one.image.slice(at + 1) : one.image,
+        firstSeen: one.first_seen,
+        times: one.times,
+        succeeded: one.succeeded,
+        live: one.deployed
+          ? {
+              id: one.deployed.id,
+              cluster: one.deployed.cluster,
+              namespace: one.deployed.namespace,
+              workload: one.deployed.workload,
+              state: one.deployed.state,
+              started_at: one.deployed.started_at,
+            }
+          : null,
+      }
+    })
+  } catch {
+    // A catalogue that cannot be read leaves the tab as it was: an empty list and no
+    // claim that there are no images, which would be a different and wrong statement.
+  }
+}
+
+/** Goes to a page of the catalogue by asking for it. */
+function goToImagePage(to: number) {
+  if (to < 1 || to > imagePages.value) return
+  imagePage.value = to
+  void loadImages()
+}
+
 async function load() {
+  if (loadingNow) {
+    loadAgain = true
+    return
+  }
+  loadingNow = true
   loading.value = true
   error.value = ''
   try {
-    const query = new URLSearchParams({ target: target.value })
-    const answer = await api.get<{ reason?: string; deployments?: Deployment[] }>(
+    const query = new URLSearchParams({
+      cluster: target.value,
+      page: String(page.value),
+      per_page: String(PAGE),
+    })
+    const answer = await api.get<DeploymentsPage>(
       `/projects/${props.projectId}/deployments?${query}`,
     )
+    total.value = answer.total ?? 0
+    pages.value = answer.pages ?? 1
+    hasMore.value = answer.has_more ?? false
     // The newest row carries what it said, so the log is there before anything is
     // watched rather than only for a run somebody stayed to see.
     lastLog.value = answer.deployments?.[0]?.log ?? []
@@ -361,15 +467,21 @@ async function load() {
       return
     }
 
-    const arrived = merge(deployments.value, answer.deployments ?? [])
-    if (JSON.stringify(arrived) !== JSON.stringify(deployments.value)) {
-      deployments.value = arrived
-      page.value = 1
-    }
+    // The rows of the page that was asked for, and not those rows merged into the last
+    // page. Merging turned every page change into "the list changed", which reset the
+    // page, which fetched page one again: a control that could never leave the first
+    // page and looked like it had.
+    deployments.value = merge(deployments.value, answer.deployments ?? [])
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
+    loadingNow = false
     loading.value = false
+    lastLoadedAt = Date.now()
+    if (loadAgain) {
+      loadAgain = false
+      setTimeout(() => void load(), LOAD_SETTLE_MS)
+    }
   }
 }
 
@@ -448,6 +560,7 @@ let stopOperation: (() => void) | undefined
 
 onMounted(async () => {
   await load()
+  void loadImages()
 
   // The operation under way, on its own channel. Many times a minute.
   stopOperation = watchEvents({
@@ -521,6 +634,43 @@ watch(() => props.module.id, load)
          A card and not a row: it is the only thing on this page that is moving, and a
          row among a table of finished work reads as another entry in the history
          rather than as the present. Its own background says so before a word does. -->
+    <!-- The tabs above the content, not below it: a row of names that sits under what
+         it names is a legend for something the reader has already scrolled past. -->
+    <template v-if="!reason && !loading">
+      <nav class="tabs">
+        <button
+          class="tab"
+          :class="{ on: tab === 'now' }"
+          type="button"
+          @click="tab = 'now'"
+        >
+          Now
+        </button>
+        <button
+          class="tab"
+          :class="{ on: tab === 'operations' }"
+          type="button"
+          @click="tab = 'operations'"
+        >
+          Operations
+          <span class="count">{{ deployments.length }}</span>
+        </button>
+        <button
+          class="tab"
+          :class="{ on: tab === 'images' }"
+          type="button"
+          @click="tab = 'images'"
+        >
+          Images
+          <span class="count">{{ images.length }}</span>
+        </button>
+      </nav>
+    </template>
+
+    <!-- What is happening, or what last happened. Its own tab and the first one: this
+         is the thing a page is opened for, and it answers one question, where the two
+         lists below answer another. -->
+    <div v-show="tab === 'now'">
     <section v-if="active" class="card active-card" :class="cardState">
       <div class="card-body">
         <div class="block-head">
@@ -589,30 +739,12 @@ watch(() => props.module.id, load)
         <DeployLog :lines="shownLog" :plan="plan" />
       </div>
     </section>
+    </div>
 
     <template v-if="!reason && !loading">
       <!-- Operations and images side by side: the first says what happened, the second
            says what could be put back, and the question is nearly always about both. -->
-      <nav class="tabs">
-        <button
-          class="tab"
-          :class="{ on: tab === 'operations' }"
-          type="button"
-          @click="tab = 'operations'"
-        >
-          Operations
-          <span class="count">{{ deployments.length }}</span>
-        </button>
-        <button
-          class="tab"
-          :class="{ on: tab === 'images' }"
-          type="button"
-          @click="tab = 'images'"
-        >
-          Images
-          <span class="count">{{ images.length }}</span>
-        </button>
-      </nav>
+
 
       <div class="columns">
         <section v-show="tab === 'operations'" class="block">
@@ -668,16 +800,23 @@ watch(() => props.module.id, load)
             </table>
           </div>
 
-          <div v-if="pageCount > 1" class="pager">
-            <button class="btn btn-small" type="button" :disabled="page === 1" @click="page--">
-              Newer
-            </button>
-            <span class="muted small">Page {{ page }} of {{ pageCount }}</span>
+          <!-- Each move asks the server for that page. The count comes from the same
+               answer, so the control cannot promise rows that were never counted. -->
+          <div v-if="pages > 1" class="pager">
             <button
               class="btn btn-small"
               type="button"
-              :disabled="page === pageCount"
-              @click="page++"
+              :disabled="page === 1"
+              @click="goToPage(page - 1)"
+            >
+              Newer
+            </button>
+            <span class="muted small">Page {{ page }} of {{ pages }} · {{ total }}</span>
+            <button
+              class="btn btn-small"
+              type="button"
+              :disabled="!hasMore"
+              @click="goToPage(page + 1)"
             >
               Older
             </button>
@@ -727,21 +866,21 @@ watch(() => props.module.id, load)
             </li>
           </ul>
 
-          <div v-if="imagePageCount > 1" class="pager">
+          <div v-if="imagePages > 1" class="pager">
             <button
               class="btn btn-small"
               type="button"
               :disabled="imagePage === 1"
-              @click="imagePage--"
+              @click="goToImagePage(imagePage - 1)"
             >
               Newer
             </button>
-            <span class="muted small">Page {{ imagePage }} of {{ imagePageCount }}</span>
+            <span class="muted small">Page {{ imagePage }} of {{ imagePages }} · {{ imageTotal }}</span>
             <button
               class="btn btn-small"
               type="button"
-              :disabled="imagePage === imagePageCount"
-              @click="imagePage++"
+              :disabled="!imageHasMore"
+              @click="goToImagePage(imagePage + 1)"
             >
               Older
             </button>

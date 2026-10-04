@@ -187,6 +187,77 @@ func (h *postgresHistory) Finish(ctx context.Context, id uuid.UUID, state deploy
 	return err
 }
 
+
+// Images reads the catalogue, a page of it.
+func (h *postgresHistory) Images(ctx context.Context, project, cluster, namespace string,
+	limit, offset int) ([]deploy.KnownImage, int, error) {
+
+	var total int
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(DISTINCT image) FROM deployments
+		WHERE project = $1 AND image <> ''
+		  AND ($2 = '' OR cluster = $2) AND ($3 = '' OR namespace = $3)`,
+		project, cluster, namespace).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count the images: %w", err)
+	}
+
+	// The last deployment of each image comes along with it, chosen by asking the
+	// table once per row rather than by a second query per image: a catalogue page of
+	// twenty rows should cost twenty rows, not twenty round trips.
+	rows, err := h.pool.Query(ctx, `
+		SELECT grouped.image, grouped.first_seen, grouped.times, grouped.succeeded,
+		       last.id, last.cluster, last.namespace, last.workload, last.state,
+		       last.started_at
+		FROM (
+			SELECT image, min(started_at) AS first_seen, count(*) AS times,
+			       count(*) FILTER (WHERE state = 'succeeded') AS succeeded
+			FROM deployments
+			WHERE project = $1 AND image <> ''
+			  AND ($2 = '' OR cluster = $2) AND ($3 = '' OR namespace = $3)
+			GROUP BY image
+			ORDER BY min(started_at) DESC
+			LIMIT $4 OFFSET $5
+		) AS grouped
+		LEFT JOIN LATERAL (
+			SELECT id, cluster, namespace, workload, state, started_at
+			FROM deployments
+			WHERE project = $1 AND image = grouped.image AND state = 'succeeded'
+			ORDER BY started_at DESC LIMIT 1
+		) AS last ON true
+		ORDER BY grouped.first_seen DESC`,
+		project, cluster, namespace, limit+1, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read the images: %w", err)
+	}
+	defer rows.Close()
+
+	out := []deploy.KnownImage{}
+	for rows.Next() {
+		var one deploy.KnownImage
+		var lastID, lastCluster, lastNamespace, lastWorkload *string
+		var lastState *deploy.State
+		var lastAt *time.Time
+		if err := rows.Scan(&one.Image, &one.FirstSeen, &one.Times, &one.Succeeded,
+			&lastID, &lastCluster, &lastNamespace, &lastWorkload, &lastState, &lastAt); err != nil {
+			return nil, 0, err
+		}
+		if lastID != nil {
+			one.Deployed = &deploy.ImageDeployment{
+				ID: *lastID, Cluster: *lastCluster, Namespace: *lastNamespace,
+				Workload: *lastWorkload, State: *lastState, StartedAt: *lastAt,
+			}
+		}
+		out = append(out, one)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
+}
+
 // LogOf reads back what a deployment said.
 func (h *postgresHistory) LogOf(ctx context.Context, id uuid.UUID) ([]deploy.LogLine, error) {
 	var encoded []byte
@@ -259,7 +330,20 @@ func (h *postgresHistory) Current(ctx context.Context, project, cluster, namespa
 
 // An empty cluster or namespace means "any": the question a project page asks is what
 // it has deployed, not what it deployed to one place it already knows the name of.
-func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace string) ([]deploy.Deployment, error) {
+func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace string,
+	limit, offset int) ([]deploy.Deployment, int, error) {
+
+	// One page past what was asked for, to answer "is there more" without a second
+	// query, and a count because a control that cannot say how many pages there are
+	// leaves somebody guessing.
+	var total int
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM deployments
+		WHERE project = $1 AND ($2 = '' OR cluster = $2) AND ($3 = '' OR namespace = $3)`,
+		project, cluster, namespace).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count the deployment history: %w", err)
+	}
+
 	rows, err := h.pool.Query(ctx, `
 		SELECT id, project, cluster, namespace, image, workload, state, phase, reason,
 		       started_at, finished_at, pods_wanted, pods_ready, pods_retired
@@ -267,9 +351,10 @@ func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace 
 		WHERE project = $1
 		  AND ($2 = '' OR cluster = $2)
 		  AND ($3 = '' OR namespace = $3)
-		ORDER BY started_at DESC LIMIT 100`, project, cluster, namespace)
+		ORDER BY started_at DESC
+		LIMIT $4 OFFSET $5`, project, cluster, namespace, limit+1, offset)
 	if err != nil {
-		return nil, fmt.Errorf("read the deployment history: %w", err)
+		return nil, 0, fmt.Errorf("read the deployment history: %w", err)
 	}
 	defer rows.Close()
 
@@ -277,11 +362,17 @@ func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace 
 	for rows.Next() {
 		record, err := scanDeployment(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, record)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
 }
 
 func (h *postgresHistory) Close(_ context.Context) {

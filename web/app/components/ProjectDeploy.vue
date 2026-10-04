@@ -68,10 +68,13 @@ async function load() {
 onMounted(async () => {
   await load()
 
-  // TEMPORARY, for working on the deploy page: the panel opens by itself, because
-  // clicking a button on every reload to see whether anything moved is a tax paid
-  // on every single look at the page. Put the line back when this is done — an
-  // interface that opens its own drawer is not a thing to leave behind.
+  // The first module's record is open before anything is clicked.
+  //
+  // An instance has one deploy module in practice, and this page is opened to find out
+  // what it is doing: whether a rollout is moving, what it printed, what it did last
+  // night. A panel behind a button turns that question into two — click, then look —
+  // and the answer to the first question is usually already there. The button stays,
+  // because it is how somebody gets at a second module, and it still closes.
   const deployable = deployModules.value[0]
   if (deployable) administering.value = deployable.id
 })

@@ -28,6 +28,43 @@ import (
 // installed, which is a sentence to show rather than an error page.
 
 // handleProjectDeployments is what a project has running, and what happened to it.
+// handleProjectImages is the catalogue of images a project has put on a place, read
+// from the deploy module and passed through as it came.
+func (s *Server) handleProjectDeployImages(w http.ResponseWriter, r *http.Request) {
+	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	module, err := s.deployModuleFor(r, project)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if module == nil {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{
+			"reason": "no_deploy_module", "images": []any{},
+		})
+		return
+	}
+
+	query := url.Values{}
+	query.Set("project", project.Path)
+	for _, key := range []string{"cluster", "namespace", "page", "per_page"} {
+		if value := r.URL.Query().Get(key); value != "" {
+			query.Set(key, value)
+		}
+	}
+
+	body, err := s.callDeployModule(r.Context(), module, http.MethodGet, "/images?"+query.Encode(), nil)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.writeRaw(w, r, http.StatusOK, body)
+}
+
 func (s *Server) handleProjectDeployments(w http.ResponseWriter, r *http.Request) {
 	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
 	if err != nil {
@@ -52,7 +89,10 @@ func (s *Server) handleProjectDeployments(w http.ResponseWriter, r *http.Request
 
 	query := url.Values{}
 	query.Set("project", project.Path)
-	for _, key := range []string{"cluster", "namespace"} {
+	// Paging is passed through rather than decided here: the module is what knows how
+	// many rows there are, and a page size chosen in two places is a page size that
+	// will disagree.
+	for _, key := range []string{"cluster", "namespace", "page", "per_page"} {
 		if value := r.URL.Query().Get(key); value != "" {
 			query.Set(key, value)
 		}

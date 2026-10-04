@@ -245,7 +245,6 @@ export function onEvent(listener: Listener): () => void {
       // Same rule as for live events: one page's mistake is not the socket's problem.
     }
   }
-  listeners.add(listener)
   return () => {
     listeners.delete(listener)
   }
