@@ -41,11 +41,18 @@ type Rewake = () => void
 /**
  * How long the connection may be silent before it is treated as gone.
  *
- * Three of the server's fifteen-second pings: long enough that a slow network or a
- * busy laptop is not mistaken for a dead connection, and short enough that a page
- * which has lost the stream starts asking again while somebody is still watching.
+ * Two of the server's fifteen-second pings, plus eight seconds for a round trip on a
+ * connection that has stopped carrying anything. Longer than that and a page sits
+ * stale through three dropped pings; shorter and a slow link or a busy laptop is
+ * mistaken for a dead one, which costs a reconnect and a re-read for nothing.
+ *
+ * Kept as a count of pings rather than a number somebody chose: the two have to agree,
+ * and a watchdog that outlives its own keep-alive is a watchdog that fires late.
  */
-const silenceIsDeathMS = 45_000
+const PING_EVERY_MS = 15_000
+const MISSED_PINGS = 2
+const slackMS = 8_000
+const silenceIsDeathMS = PING_EVERY_MS * MISSED_PINGS + slackMS
 
 /** How often the watchdog looks. */
 const watchdogEveryMS = 10_000

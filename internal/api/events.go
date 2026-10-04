@@ -130,6 +130,22 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 	// only sent once.
 	lastSent := after
 
+	// What this connection did and when it ended, said once, on the way out.
+	//
+	// The client knows only that events stopped. It cannot tell the difference between
+	// a browser that timed the connection out, something in the middle that closed it,
+	// and a server that stopped writing — and the three are fixed in three different
+	// places. One line per stream is a few hundred bytes an hour on a busy instance,
+	// and it is the difference between knowing why a page went stale and guessing.
+	started := time.Now()
+	eventsSent := 0
+	defer func() {
+		s.log.Info("event stream closed", "user", user.Username,
+			"project", filterName(projectID), "for", time.Since(started).Round(time.Second),
+			"events", eventsSent, "cursor", lastSent)
+	}()
+
+
 	// Writes everything after the cursor and says how many. Zero means the backlog
 	// is done — which is the only thing that can mean it, since a query that
 	// succeeds with nothing new is not a failure.
@@ -150,6 +166,7 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 			if entry.ID > lastSent {
 				lastSent = entry.ID
 			}
+			eventsSent++
 		}
 		if len(entries) > 0 {
 			flusher.Flush()
@@ -214,6 +231,15 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// filterName is what a log line can say about a stream's project filter without
+// carrying the uuid, which tells a reader nothing.
+func filterName(projectID *uuid.UUID) string {
+	if projectID == nil {
+		return "the whole instance"
+	}
+	return projectID.String()
 }
 
 // handleEventStream serves the event feed as a cursor read.
