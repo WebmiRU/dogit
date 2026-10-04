@@ -107,6 +107,23 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 	ping := time.NewTicker(eventStreamPing)
 	defer ping.Stop()
 
+	// A deployment reports every phase and every pod count, so a burst of events is
+	// ordinary and arrives all at once. Reading the feed once per event turns a burst
+	// of fifteen into fifteen queries per connection, on the same database everything
+	// else is using — and a connection that stops getting served looks exactly like one
+	// that has died.
+	//
+	// So the first event of a burst starts a short wait, and everything that arrives
+	// in that window goes out in one read. Sixty milliseconds is far below what a
+	// person can read as a delay, and far above the gap between the events of one
+	// operation.
+	settle := time.NewTimer(0)
+	if !settle.Stop() {
+		<-settle.C
+	}
+	settled := true
+	defer settle.Stop()
+
 	// Everything the client was told is remembered by id, so a slow client that
 	// reconnects is sent nothing it has already seen, and an event that arrives by
 	// both routes — published live, then read again as the tail catches up — is
@@ -175,6 +192,10 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
+			if settled {
+				settle.Reset(60 * time.Millisecond)
+				settled = false
+			}
 			// The event is only a reason to look: what is sent is read back through
 			// the query, which decides whether this person may see it at all. A
 			// project filter is applied there too, so an event about another project
@@ -185,6 +206,9 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 			if projectID != nil && (ev.ProjectID == nil || *ev.ProjectID != *projectID) {
 				continue
 			}
+			// Read on the settle timer rather than here, so a burst costs one read.
+		case <-settle.C:
+			settled = true
 			if _, ok := send(); !ok {
 				return
 			}
