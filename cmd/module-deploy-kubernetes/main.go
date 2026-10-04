@@ -189,15 +189,6 @@ func manifest() map[string]any {
 								"production-eu. Changing it does not move anything already deployed.",
 						},
 						{
-							"key":     "in_cluster",
-							"label":   "Runs inside this cluster",
-							"type":    "bool",
-							"default": false,
-							"description": "On when this module is deployed into the cluster itself: it then " +
-								"uses the pod's own service account and no credentials are stored anywhere. " +
-								"Off means a kubeconfig is needed.",
-						},
-						{
 							"key":   "kubeconfig",
 							"label": "Kubeconfig",
 							// A multi-line field rather than a password box: a kubeconfig is a

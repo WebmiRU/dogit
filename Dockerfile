@@ -52,6 +52,20 @@ RUN apk add --no-cache \
         tzdata \
  && update-ca-certificates
 
+# kubectl, for the modules that talk to a Kubernetes cluster from outside it.
+#
+# For looking at a cluster by hand — which is the only reason it is here: "what does
+# the cluster actually think is there" is a question an operator needs to be able to
+# ask without building a new image. The modules themselves do their work through the
+# API, because a command-line tool in a hot path is a thing that changes shape between
+# versions.
+ARG KUBECTL_VERSION=v1.31.4
+RUN apk add --no-cache curl \
+ && curl -fsSL -o /usr/local/bin/kubectl \
+        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+ && chmod +x /usr/local/bin/kubectl \
+ && kubectl version --client=true
+
 # The conventional "git" login every GitHub-like forge uses: clients connect as
 # git@host and land in this account. Authorisation is decided by dogit, not by
 # the filesystem, so the account only owns the repository data and has no usable

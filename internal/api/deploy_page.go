@@ -155,11 +155,33 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, r, err)
 		return
 	}
-	_ = answer
-
 	s.log.Info("a version was put back", "project", project.Path,
 		"cluster", request.Cluster, "deployment", request.DeploymentID, "user", user.Username)
-	s.writeRaw(w, r, http.StatusOK, answer)
+
+	// A summary, not the module's stream.
+	//
+	// The module narrates as it goes because a revert is a rollout and somebody is
+	// watching pods come up — but that is between the module and this server. What the
+	// browser gets is one object it asked for and can parse: handing the ndjson
+	// straight through left the page failing to read its own answer.
+	var last struct {
+		Deployment *struct {
+			ID        string `json:"id"`
+			Image     string `json:"image"`
+			Cluster   string `json:"cluster"`
+			Namespace string `json:"namespace"`
+			Workload  string `json:"workload"`
+			State     string `json:"state"`
+			Reason    string `json:"reason"`
+		} `json:"deployment"`
+	}
+	for _, line := range bytes.Split(answer, []byte{byte(10)}) {
+		if len(bytes.TrimSpace(line)) > 0 {
+			_ = json.Unmarshal(line, &last)
+		}
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"deployment": last.Deployment})
 }
 
 // deployModuleFor is the deploy module this project's deployments are read from.

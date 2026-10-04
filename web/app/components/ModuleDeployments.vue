@@ -40,6 +40,10 @@ interface Deployment {
 /** How many rows a page holds. A page that grows without end is not a page. */
 const PAGE = 20
 
+// A toast, because a banner at the top of a long panel is the one place a refusal will
+// not be seen — and "nothing happened" is what an unnoticeable failure looks like.
+const { add: notify } = useNotifyPool()
+
 const deployments = ref<Deployment[]>([])
 const loading = ref(true)
 const busy = ref(false)
@@ -163,8 +167,19 @@ async function load() {
       reason.value = 'No deploy module is installed on this instance.'
       return
     }
-    deployments.value = answer.deployments ?? []
-    page.value = 1
+    const arrived = answer.deployments ?? []
+
+    // Only put it in state when it is different.
+    //
+    // This page re-reads itself every few seconds, and a table that is rebuilt whether
+    // or not anything happened takes the DOM out from under whoever is reading it: the
+    // selection collapses, the page jumps back to the top, and the text somebody was
+    // about to copy is no longer the text they were copying. A list that is not
+    // scrolling should not repaint.
+    if (JSON.stringify(arrived) !== JSON.stringify(deployments.value)) {
+      deployments.value = arrived
+      page.value = 1
+    }
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -202,9 +217,14 @@ async function revertTo(deployment: Deployment) {
       workload: deployment.workload,
       deployment_id: deployment.id,
     })
+    notify(`${shortImage(deployment.image)} is being put back`, { type: 'success' })
     await load()
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
+    const message = caught instanceof ApiError ? caught.message : 'the request failed'
+    error.value = message
+    // Said where it is being looked for. A refusal that only appears somewhere else on
+    // the page is a refusal nobody reads, and the button looks broken rather than busy.
+    notify(message, { type: 'error', timer: 0 })
   } finally {
     busy.value = false
   }
