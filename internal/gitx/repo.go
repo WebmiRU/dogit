@@ -311,6 +311,21 @@ func (g *Git) Tags(ctx context.Context, repoPath string) ([]Ref, error) {
 	return refs, nil
 }
 
+// IsTag says whether a revision names a tag.
+//
+// Asked of git rather than guessed from the name, because a branch and a tag may be
+// called the same thing and only git knows which one a run would actually build. A run
+// triggered by the wrong kind of ref gets the wrong rules, and that is not something to
+// discover from a deployment.
+func (g *Git) IsTag(ctx context.Context, repoPath, name string) bool {
+	out, err := g.run(ctx, repoPath, nil, "for-each-ref", "--format=%(refname)",
+		"refs/tags/"+name)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
 // Refs lists branches and tags together.
 func (g *Git) Refs(ctx context.Context, repoPath string) ([]Ref, error) {
 	branches, err := g.Branches(ctx, repoPath)

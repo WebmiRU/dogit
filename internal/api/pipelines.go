@@ -1,6 +1,7 @@
 package api
 
 import (
+	"os"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ewolf/dogit/internal/gitx"
+	"github.com/ewolf/dogit/internal/hooks"
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/modulehost"
 	"github.com/ewolf/dogit/internal/pipeline"
@@ -50,6 +52,9 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		// Job runs one named job on its own. Without it the whole configuration runs,
 		// which is what a push does and what most people mean by "run the pipeline".
 		Job string `json:"job"`
+		// Source says why this run is happening. Set by the core when a tag triggers
+		// it; a client asking for a different reason is not believed.
+		Source string `json:"-"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, r, err)
@@ -59,6 +64,12 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 	ref := strings.TrimSpace(req.Ref)
 	if ref == "" {
 		ref = project.DefaultBranch
+	}
+	// A run started by a tag says so, so that a page and a notification can tell a
+	// release from a build somebody kicked off by hand.
+	source := models.PipelineSourceWeb
+	if req.Source != "" {
+		source = models.PipelineSource(req.Source)
 	}
 	// A pipeline runs against a commit, so a ref that does not resolve is refused
 	// here rather than by a runner three seconds later: "no commit on that branch"
@@ -83,18 +94,39 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobs := jobsFrom(config, ref, req.Job)
+	// A run triggered by a tag is on a tag, and the rules have to be able to tell.
+	isTag := s.git.IsTag(r.Context(), rc.RepoDir, ref)
+	pipelineRef := pipeline.RefFor(ref, sha, isTag)
+
+	jobs := jobsFrom(config, pipelineRef, req.Job)
 	if len(jobs) == 0 {
 		s.writeError(w, r, errBadRequestf(
 			"nothing to run for %q in %s", ref, pipeline.ConfigFileName))
 		return
 	}
 
-	// Who wrote the change and what it says. Read once here so the run remembers it:
-	// later the branch will have moved, and the list has to keep describing the
-	// commit it was actually made against.
+	created, err := s.startRun(r.Context(), project, config, pipelineRef, source, jobs, user)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	run := created
+
+	s.writeJSON(w, r, http.StatusCreated, map[string]any{"pipeline": s.pipelineView(r, run, nil)})
+}
+
+// startRun files a pipeline and says so, for every reason a pipeline is started.
+//
+// One place, because the three reasons — a person, a tag, a push — must not drift apart
+// in what they announce. A run that files silently leaves a page showing nothing and a
+// notification that never arrives, and the two are worst noticed exactly when somebody
+// is waiting.
+func (s *Server) startRun(ctx context.Context, project *models.Project, config *pipeline.Config,
+	ref pipeline.Ref, source models.PipelineSource, jobs []store.Job, user *models.User,
+) (*store.Pipeline, error) {
+
 	commit := store.Commit{}
-	if head := s.commitInfo(r.Context(), rc.RepoDir, sha); head != nil {
+	if head := s.commitInfo(ctx, s.repos.PathFor(project), ref.SHA); head != nil {
 		commit = store.Commit{
 			Title:       head.Subject,
 			AuthorName:  head.AuthorName,
@@ -102,21 +134,25 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	created, err := s.store.Pipelines().CreatePipeline(r.Context(), project.ID, ref, sha,
-		"manual", config.VariablesAsStrings(), &user.ID, commit, jobs)
+	created, err := s.store.Pipelines().CreatePipeline(ctx, project.ID, ref.Name, ref.SHA,
+		string(source), variablesFor(config, ref), &user.ID, commit, jobs)
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		return nil, err
 	}
-	pipeline := created
+	run := created
 
-	s.log.Info("pipeline created", "project", project.Path, "pipeline", pipeline.IID,
-		"ref", ref, "by", user.Username)
+	s.log.Info("pipeline created", "project", project.Path, "pipeline", run.IID,
+		"ref", ref.Name, "source", string(source), "by", user.Username)
 
-	s.publishPipeline(r.Context(), project.ID, nil, models.EventPipelineCreated, map[string]any{
-		"pipeline_iid": pipeline.IID,
-		"ref":          ref,
-		"sha":          sha,
+	s.publishPipeline(ctx, project.ID, nil, models.EventPipelineCreated, map[string]any{
+		"pipeline_iid": run.IID,
+		"ref":          ref.Name,
+		"sha":          ref.SHA,
+		"source":       string(source),
+		// The tag, when there is one. Carried so that a page or a notification can
+		// say "v1.01" rather than "a run", which is the whole reason a release is a
+		// separate kind of event.
+		"tag": ref.Tag(),
 	})
 
 	// The deployment's plan, sent with the run rather than when the deployment starts.
@@ -130,19 +166,129 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 	// The step list is the core's to give: the module that carries the deployment out
 	// is not asked to describe it in advance, and a client that kept its own copy of
 	// the phases would be drawing a list of what might happen rather than what will.
-	s.publishDeployPlan(r.Context(), project, config, pipeline, jobs)
+	s.publishDeployPlan(ctx, project, config, run, jobs)
 	// Queued with the facts, not with a sentence: what a channel says about this is
 	// that channel's business. The text here is only for a module with nothing of
 	// its own to say.
 	started := notifyContext{
 		Event:    "pipeline.started",
 		Project:  projectContext(project),
-		Pipeline: pipelineContext(pipeline, project, store.PipelineRunning),
+		Pipeline: pipelineContext(run, project, store.PipelineRunning),
 	}
-	s.notifyEvent(r.Context(), "pipeline.started", started,
-		notificationSummary(started, project))
+	s.notifyEvent(ctx, "pipeline.started", started, notificationSummary(started, project))
 
-	s.writeJSON(w, r, http.StatusCreated, map[string]any{"pipeline": s.pipelineView(r, pipeline, nil)})
+	return run, nil
+}
+
+// WatchPushes starts runs for tags that arrive by git rather than through a form.
+//
+// The same run either way, on purpose. A tag pushed from somebody's laptop and a tag
+// typed into this interface are the same decision about the same commit, and the one
+// that silently did nothing would be discovered in production rather than before it —
+// which is the worst way to find out that a feature you were told works does not.
+//
+// Runs in the background, off the durable log rather than off the hook: the hook is a
+// short-lived process for somebody's push and must not be held up by a build queue.
+func (s *Server) WatchPushes(ctx context.Context) {
+	updates, unsubscribe := s.events.Subscribe(64)
+	defer unsubscribe()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, open := <-updates:
+			if !open {
+				return
+			}
+			if event.Kind != models.EventPush {
+				continue
+			}
+			s.startRunsForPushedTags(ctx, event)
+		}
+	}
+}
+
+// startRunsForPushedTags is one push, read for the tags in it.
+func (s *Server) startRunsForPushedTags(ctx context.Context, event models.Event) {
+	var raw hooks.Payload
+	if err := json.Unmarshal(event.Payload, &raw); err != nil {
+		s.log.Debug("push event carried something unreadable", "error", err)
+		return
+	}
+
+	for _, update := range raw.RefUpdates {
+		// Deleting a tag deploys nothing. Whatever it released stays released: taking
+		// something out of production because a name was removed from a repository is
+		// not what anybody means by removing a tag.
+		if strings.HasPrefix(update.Ref, "refs/tags/") && !isZeroSHA(update.NewSHA) {
+			name := strings.TrimPrefix(update.Ref, "refs/tags/")
+			s.startRunForPushedTag(ctx, raw.ProjectPath, name, update.NewSHA)
+		}
+	}
+}
+
+func (s *Server) startRunForPushedTag(ctx context.Context, projectPath, name, sha string) {
+	project, err := s.store.Projects().ByPath(ctx, projectPath)
+	if err != nil {
+		s.log.Warn("a tag arrived for a project that is gone", "project", projectPath,
+			"tag", name, "error", err)
+		return
+	}
+	// Whoever pushed is not carried over: this runs with no request behind it, and
+	// inventing an author for somebody else's push would put their name on a run they
+	// did not start. An unattributed release is better than a wrong one.
+	_ = s.startRunForRef(ctx, project, name, sha, true)
+}
+
+// isZeroSHA is git's way of saying a ref is gone.
+func isZeroSHA(sha string) bool {
+	return sha == "" || strings.Trim(sha, "0") == ""
+}
+
+// startRunForRef starts a run for a ref that something else decided on — a tag arriving,
+// or a push — and says why it did not when it did not.
+//
+// Returns nothing rather than an error in the ordinary cases, because a tag is created
+// whether or not it starts anything: refusing to tag a commit because no build was
+// configured for tags would make the tag itself the thing that cannot be done.
+func (s *Server) startRunForRef(ctx context.Context, project *models.Project,
+	name, sha string, isTag bool) *store.Pipeline {
+
+	if !project.AllowPipelineTrigger {
+		return nil
+	}
+
+	config, err := s.pipelineConfig(ctx, s.repos.PathFor(project), sha)
+	if err != nil {
+		s.log.Info("no pipeline configuration for this ref", "project", project.Path,
+			"ref", name, "error", err)
+		return nil
+	}
+
+	ref := pipeline.RefFor(name, sha, isTag)
+	jobs := jobsFrom(config, ref, "")
+	if len(jobs) == 0 {
+		s.log.Info("nothing runs for this ref", "project", project.Path, "ref", name)
+		return nil
+	}
+
+	source := models.PipelineSourceTag
+	if !isTag {
+		source = models.PipelineSourcePush
+	}
+
+	user := userFrom(ctx)
+	if user == nil {
+		user = &models.User{}
+	}
+	run, err := s.startRun(ctx, project, config, ref, source, jobs, user)
+	if err != nil {
+		s.log.Warn("a run could not be started for this ref", "project", project.Path,
+			"ref", name, "error", err)
+		return nil
+	}
+	return run
 }
 
 // pipelineConfig reads a project's configuration from a commit.
@@ -171,7 +317,44 @@ func (s *Server) pipelineConfig(ctx context.Context, repoDir, sha string) (*pipe
 // A job whose rules exclude this branch is left out entirely rather than created
 // and skipped: a pipeline page listing a deploy job that is not going to deploy is
 // noise, and one listing it as skipped invites somebody to read the reason.
-func jobsFrom(config *pipeline.Config, ref, only string) []store.Job {
+// expandBuild is the run's variables written into the build's own fields.
+//
+// Only the fields that name things, because only those are ever written as variables
+// and rewriting a dockerfile path or a build argument on every run would be a surprise
+// with no upside.
+func expandBuild(build map[string]any, variables map[string]string) map[string]any {
+	if build == nil {
+		return nil
+	}
+	expanded := make(map[string]any, len(build))
+	for key, value := range build {
+		if text, ok := value.(string); ok {
+			expanded[key] = os.Expand(text, func(name string) string {
+				return variables[name]
+			})
+			continue
+		}
+		expanded[key] = value
+	}
+	return expanded
+}
+
+// variablesFor is what a run's scripts are told about the run itself.
+//
+// Written here rather than in the runner because the runner is told the answer, not
+// asked for it: a build script that had to guess whether it is on a tag would be one
+// git call away from building the wrong thing.
+func variablesFor(config *pipeline.Config, ref pipeline.Ref) map[string]string {
+	variables := config.VariablesAsStrings()
+	variables["CI_COMMIT_REF_NAME"] = ref.Name
+	variables["CI_COMMIT_SHA"] = ref.SHA
+	variables["CI_COMMIT_SHORT_SHA"] = ref.ShortSHA()
+	variables["CI_COMMIT_BRANCH"] = ref.Branch()
+	variables["CI_COMMIT_TAG"] = ref.Tag()
+	return variables
+}
+
+func jobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []store.Job {
 	jobs := []store.Job{}
 	for _, name := range config.Order {
 		spec, ok := config.Jobs[name]
@@ -195,7 +378,10 @@ func jobsFrom(config *pipeline.Config, ref, only string) []store.Job {
 			Script:       script,
 			AllowFailure: spec.AllowFailure,
 			Needs:        spec.Needs,
-			Build:        spec.Build,
+			// The build's own fields, with the run's answers in them. A tag written
+			// in the file as $CI_COMMIT_TAG is how a repository says "name the image
+			// after whatever this run is" without knowing what that will be.
+			Build: expandBuild(spec.Build, variablesFor(config, ref)),
 		})
 	}
 

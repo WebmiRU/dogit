@@ -246,6 +246,7 @@ type job struct {
 	ProjectPath string         `json:"project_path"`
 	SHA         string         `json:"-"`
 	Build       map[string]any `json:"build,omitempty"`
+	Variables   map[string]string `json:"variables,omitempty"`
 }
 
 // claim is the core's answer to "is there anything for me".
@@ -419,7 +420,7 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 					if err := core.progress(ctx, job.ID, phase, message); err != nil {
 						log.Printf("module-runner: could not report %s: %v", phase, err)
 					}
-				})
+				}, jobEnvironment(job, answer.Registry))
 			if err != nil {
 				buildErr = err
 				return
@@ -490,6 +491,17 @@ func jobEnvironment(job *job, registry map[string]any) map[string]string {
 		"CI_JOB_ID":       fmt.Sprintf("%d", job.ID),
 		"CI_JOB_NAME":     job.Name,
 		"CI_JOB_STAGE":    job.Stage,
+	}
+	// What the run is about, as the core recorded it. Passed through rather than
+	// worked out here: a build script that had to decide for itself whether it is on a
+	// tag would be one git call away from tagging the wrong image.
+	for _, name := range []string{
+		"CI_COMMIT_REF_NAME", "CI_COMMIT_SHA", "CI_COMMIT_SHORT_SHA",
+		"CI_COMMIT_BRANCH", "CI_COMMIT_TAG",
+	} {
+		if value := job.Variables[name]; value != "" {
+			environment[name] = value
+		}
 	}
 
 	// A job that builds is told where to push and under what name, and gets a
@@ -571,6 +583,22 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 	return nil
 }
 
+// imageTagFor is what an image built without a name of its own is called.
+//
+// The tag when the run has one, the short commit otherwise. Never "latest": that name
+// means nothing, moves by itself, and is the usual way the wrong image reaches
+// production — and here every deploy is named by digest anyway, so a tag is a label for
+// a person, not an address for the system.
+func imageTagFor(environment map[string]string) string {
+	if tag := environment["CI_COMMIT_TAG"]; tag != "" {
+		return tag
+	}
+	if sha := environment["CI_COMMIT_SHORT_SHA"]; sha != "" {
+		return sha
+	}
+	return "latest"
+}
+
 // buildAndPush builds the image a job asked for and pushes it to the registry.
 //
 // progress is where docker's own words go as they happen. It is not optional
@@ -578,7 +606,7 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 // the whole of it and then says one line. Somebody watching has nothing to watch.
 func buildAndPush(ctx context.Context, cfg config, workspace string,
 	registry map[string]any, build map[string]any, progress io.Writer,
-	announce func(phase, message string)) (string, error) {
+	announce func(phase, message string), environment map[string]string) (string, error) {
 
 	if registry == nil {
 		return "", errors.New("this instance has no registry to push to")
@@ -590,7 +618,7 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	}
 	tag, _ := build["tag"].(string)
 	if tag == "" {
-		tag = "latest"
+		tag = imageTagFor(environment)
 	}
 	full := image + ":" + tag
 

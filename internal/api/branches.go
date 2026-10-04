@@ -163,8 +163,20 @@ func (s *Server) handleCreateTag(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("tag created", "project", rc.Project.Path, "tag", name,
 		"user", userFrom(r.Context()).Username)
 
+	// A tag is a decision somebody made, and in this system a decision somebody made is
+	// usually a decision to release. So creating one starts a run, the same run a push
+	// of the same tag starts — which is the point: whether the tag arrived through this
+	// form or through git on somebody's laptop must not change what happens next.
+	//
+	// A tag on a project whose pipelines are turned off, or whose configuration has
+	// nothing to run for a tag, simply starts nothing. That is not a failure: the tag
+	// was created, which is what was asked for, and a build nobody configured is not
+	// an error to raise against the person who tagged a commit.
+	run := s.startRunForRef(r.Context(), rc.Project, name, sha, true)
+
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{
-		"tag": map[string]any{"name": name, "target": sha, "type": "tag"},
+		"tag":      map[string]any{"name": name, "target": sha, "type": "tag"},
+		"pipeline": run,
 	})
 }
 

@@ -36,6 +36,9 @@ func Serve(ctx context.Context, args []string) error {
 	// Consume the durable event log so subscribers see hook-published events, and
 	// run the periodic housekeeping (expired tokens, stale modules, sessions).
 	go a.Events.RunTail(ctx, 0)
+	// A tag pushed with git starts a run the same way one typed into the interface
+	// does. Started after the tail so a push already sitting in the log is seen.
+	go apiSrv.WatchPushes(ctx)
 	interruptOpenRemovals(ctx, a)
 	startJanitor(ctx, a)
 

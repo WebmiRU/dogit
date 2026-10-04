@@ -212,6 +212,13 @@ func (h *memoryHistory) Log(_ context.Context, id uuid.UUID, lines []LogLine) er
 	return nil
 }
 
+// Images answers with nothing: these tests are about deployments, and a catalogue
+// question asked of a test double should say "not what this is for" rather than make up
+// an answer every test would then depend on.
+func (h *memoryHistory) Images(_ context.Context, _, _, _ string, _, _ int) ([]KnownImage, int, error) {
+	return nil, 0, nil
+}
+
 func (h *memoryHistory) LogOf(_ context.Context, id uuid.UUID) ([]LogLine, error) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()

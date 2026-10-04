@@ -172,7 +172,7 @@ func TestWhenAJobRuns(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 			job := config.Jobs["b"]
-			if got := RunsOn(job, tc.branch, false); got != tc.want {
+			if got := RunsOn(job, Ref{Name: tc.branch}, false); got != tc.want {
 				t.Errorf("runs on %q = %v, want %v", tc.branch, got, tc.want)
 			}
 		})
@@ -213,5 +213,50 @@ image:
 	}
 	if build["tag"] != "${CI_COMMIT_SHORT_SHA}" {
 		t.Errorf("tag = %v", build["tag"])
+	}
+}
+
+// A release is a tag, and a tag is not a branch.
+//
+// Each case is a rule and a run, and what is being checked is that a rule written about
+// one is never answered by the other. The dangerous direction is a branch rule matching a
+// tag, because that is a deployment nobody asked for.
+func TestRulesTellTagsFromBranches(t *testing.T) {
+	cases := []struct {
+		name string
+		job  string
+		ref  Ref
+		want bool
+	}{
+		{"a tag rule matches its tag", "b:\n  rules:\n    - if: $CI_COMMIT_TAG == \"v*\"\n",
+			Ref{Name: "v1.01", IsTag: true}, true},
+		{"a tag rule does not match another tag", "b:\n  rules:\n    - if: $CI_COMMIT_TAG == \"v*\"\n",
+			Ref{Name: "nightly", IsTag: true}, false},
+		{"a tag rule does not match a branch named like a tag", "b:\n  rules:\n    - if: $CI_COMMIT_TAG == \"v*\"\n",
+			Ref{Name: "v1.01"}, false},
+		{"a branch rule does not match a tag", "b:\n  rules:\n    - if: $CI_COMMIT_BRANCH == \"main\"\n",
+			Ref{Name: "v1.01", IsTag: true}, false},
+		{"a branch rule matches its branch", "b:\n  rules:\n    - if: $CI_COMMIT_BRANCH == \"main\"\n",
+			Ref{Name: "main"}, true},
+		{"refs/tags says tags only", "b:\n  rules:\n    - if: $CI_COMMIT_REF_NAME == \"refs/tags/v*\"\n",
+			Ref{Name: "v1.01", IsTag: true}, true},
+		{"a plain name is not a tag pattern", "b:\n  rules:\n    - if: $CI_COMMIT_REF_NAME == \"v*\"\n",
+			Ref{Name: "v1.01", IsTag: true}, false},
+		{"an unknown variable matches nothing", "b:\n  rules:\n    - if: $CI_NOW == \"whatever\"\n",
+			Ref{Name: "main"}, false},
+		{"the short sha is what a label says", "b:\n  rules:\n    - if: $CI_COMMIT_SHORT_SHA == \"abc1234\"\n",
+			Ref{Name: "main", SHA: "abc1234def"}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config, err := Parse([]byte(tc.job))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := RunsOn(config.Jobs["b"], tc.ref, false); got != tc.want {
+				t.Errorf("runs on %+v = %v, want %v", tc.ref, got, tc.want)
+			}
+		})
 	}
 }

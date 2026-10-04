@@ -73,6 +73,10 @@ type PipelineSource string
 
 const (
 	PipelineSourcePush         PipelineSource = "push"
+	// PipelineSourceTag is a run started by a tag being created. Its own source
+	// because a release and a build somebody kicked off by hand are different events:
+	// one was chosen, and the page and the notifications should be able to say which.
+	PipelineSourceTag          PipelineSource = "tag"
 	PipelineSourceWeb          PipelineSource = "web"
 	PipelineSourceSchedule     PipelineSource = "schedule"
 	PipelineSourceMergeRequest PipelineSource = "merge_request_event"

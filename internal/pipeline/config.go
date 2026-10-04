@@ -244,7 +244,53 @@ func Exists(checkout string) bool {
 	return err == nil
 }
 
-// RunsOn says whether a job should run for a branch.
+// Ref is what a run is happening against: a branch, a tag, or a bare commit.
+//
+// A run triggered by a tag is not on a branch, and pretending otherwise is how a rule
+// written for branches comes to match a release. So a tag is a tag here, and the two are
+// never interchangeable.
+type Ref struct {
+	Name   string
+	SHA    string
+	IsTag  bool
+}
+
+// ShortSHA is the commit this run is about, abbreviated the way a person would write it
+// on a label.
+func (r Ref) ShortSHA() string {
+	if len(r.SHA) > 7 {
+		return r.SHA[:7]
+	}
+	if r.SHA == "" {
+		return ""
+	}
+	return r.SHA
+}
+
+// Tag is the tag this run was triggered by, or empty when it was not a tag.
+func (r Ref) Tag() string {
+	if !r.IsTag {
+		return ""
+	}
+	return r.Name
+}
+
+// Branch is the branch this run is against, which is empty for a tag: a tag does not
+// name a branch, and reporting the commit's default branch as though it did would let a
+// branch rule match a release by accident.
+func (r Ref) Branch() string {
+	if r.IsTag {
+		return ""
+	}
+	return r.Name
+}
+
+// RefFor is the ref a run was started against.
+func RefFor(name, sha string, isTag bool) Ref {
+	return Ref{Name: name, SHA: sha, IsTag: isTag}
+}
+
+// RunsOn says whether a job should run for a ref.
 //
 // A job with a `rules` list runs only when one of its rules says so. That is the
 // opposite of the obvious reading, and getting it wrong is how a deployment ends up
@@ -253,10 +299,10 @@ func Exists(checkout string) bool {
 // A rule whose condition this build cannot read matches nothing. Refusing is the
 // whole point: a pipeline that guesses at what it does not understand is a pipeline
 // that publishes something somebody told it not to.
-func RunsOn(job JobSpec, branch string, changes bool) bool {
+func RunsOn(job JobSpec, ref Ref, changes bool) bool {
 	if len(job.Rules) > 0 {
 		for _, rule := range job.Rules {
-			if !ruleRuns(rule, branch, changes) {
+			if !ruleRuns(rule, ref, changes) {
 				continue
 			}
 			return rule.When != "never"
@@ -265,23 +311,23 @@ func RunsOn(job JobSpec, branch string, changes bool) bool {
 	}
 
 	// `only` narrows and `except` removes. Both absent means the job runs.
-	if len(job.Only.Refs) > 0 && !matchesBranch(job.Only.Refs, branch) {
+	if len(job.Only.Refs) > 0 && !matchesBranch(job.Only.Refs, ref) {
 		return false
 	}
-	if matchesBranch(job.Except.Refs, branch) {
+	if matchesBranch(job.Except.Refs, ref) {
 		return false
 	}
 	return true
 }
 
 // ruleRuns is one rule's condition. A condition nobody here reads matches nothing.
-func ruleRuns(rule Rule, branch string, changes bool) bool {
+func ruleRuns(rule Rule, ref Ref, changes bool) bool {
 	if rule.If == "" {
 		// A rule with only `changes` is about files, not branches.
 		return len(rule.Changes) > 0 && changes
 	}
 	if strings.HasPrefix(strings.TrimSpace(rule.If), "$") {
-		return matchesBranchIf(rule.If, branch)
+		return matchesRefIf(rule.If, ref)
 	}
 	return false
 }
@@ -291,15 +337,40 @@ type RuleCondition struct {
 	Refs []string `yaml:"refs"`
 }
 
-func matchesBranch(patterns []string, branch string) bool {
+func matchesBranch(patterns []string, ref Ref) bool {
 	for _, pattern := range patterns {
-		if pattern == branch || pattern == "*" {
+		if matchesRefName(pattern, ref) {
 			return true
 		}
-		if strings.HasSuffix(pattern, "/*") &&
-			strings.HasPrefix(branch, strings.TrimSuffix(pattern, "*")) {
-			return true
+	}
+	return false
+}
+
+// matchesRefName is one pattern against a ref.
+//
+// A pattern that starts with "refs/tags/" is about tags and the rest are about branches.
+// Writing that in the pattern rather than in a separate field means the yml keeps
+// saying what to match and this keeps deciding how, which is the direction that ages
+// better.
+func matchesRefName(pattern string, ref Ref) bool {
+	wantsTags := strings.HasPrefix(pattern, "refs/tags/")
+	name := pattern
+	if wantsTags {
+		name = strings.TrimPrefix(pattern, "refs/tags/")
+	}
+	if name == "*" {
+		return true
+	}
+	// "v*" is a prefix. Written with a star at the end because that is how people write
+	// it, and a star in the middle is a pattern nobody means and this does not guess.
+	if strings.HasSuffix(name, "*") {
+		if wantsTags == ref.IsTag {
+			return strings.HasPrefix(ref.Name, strings.TrimSuffix(name, "*"))
 		}
+		return false
+	}
+	if wantsTags == ref.IsTag {
+		return name == ref.Name
 	}
 	return false
 }
@@ -316,7 +387,9 @@ func isKnownCondition(condition string) bool {
 	if !strings.HasPrefix(trimmed, "$") {
 		return false
 	}
-	for _, variable := range []string{"$CI_COMMIT_BRANCH", "$CI_COMMIT_REF_NAME"} {
+	for _, variable := range []string{
+		"$CI_COMMIT_BRANCH", "$CI_COMMIT_REF_NAME", "$CI_COMMIT_TAG", "$CI_COMMIT_SHA",
+	} {
 		if strings.HasPrefix(trimmed, variable) &&
 			(trimmed == variable ||
 				strings.HasPrefix(trimmed[len(variable):], " ==") ||
@@ -328,6 +401,17 @@ func isKnownCondition(condition string) bool {
 }
 
 func matchesBranchIf(condition, branch string) bool {
+	return matchesRefIf(condition, Ref{Name: branch})
+}
+
+// matchesRefIf is one `if:` condition against a ref, read with the small language this
+// understands: a variable, == or !=, and a pattern on the right.
+//
+// A variable that means nothing on this run — $CI_COMMIT_BRANCH on a tag — is not
+// quietly treated as matching. That is the whole point of refusing: a rule that said
+// "branch == main" and then ran for a tag because the branch was empty is a deployment
+// nobody asked for.
+func matchesRefIf(condition string, ref Ref) bool {
 	if condition == "" {
 		return false
 	}
@@ -336,23 +420,56 @@ func matchesBranchIf(condition, branch string) bool {
 		return false
 	}
 
-	// $CI_COMMIT_BRANCH == "main"
 	for _, operator := range []string{"==", "!="} {
-		if index := strings.Index(trimmed, operator); index >= 0 {
-			left := strings.TrimSpace(trimmed[:index])
-			right := strings.Trim(strings.TrimSpace(trimmed[index+2:]), `"'`)
-			if left != "$CI_COMMIT_BRANCH" && left != "$CI_COMMIT_REF_NAME" {
-				return false
-			}
-			equal := right == branch || right == "*" ||
-				(strings.HasSuffix(right, "/*") && strings.HasPrefix(branch, strings.TrimSuffix(right, "*")))
-			if operator == "==" {
-				return equal
-			}
-			return !equal
+		index := strings.Index(trimmed, operator)
+		if index < 0 {
+			continue
 		}
+		left := strings.TrimSpace(trimmed[:index])
+		right := strings.Trim(strings.TrimSpace(trimmed[index+2:]), `"'`)
+
+		value, known := refVariable(left, ref)
+		if !known {
+			return false
+		}
+		// The variable on the left says what the pattern on the right is being compared
+		// as. "$CI_COMMIT_TAG == \"v*\"" is about tags without saying so twice, while
+		// "$CI_COMMIT_REF_NAME == \"v*\"" is about branches unless it says
+		// "refs/tags/". Getting this from the pattern alone would make the first one mean
+		// "a branch called v-something", which is not what anybody writing it meant.
+		pattern := right
+		if isTagVariable(left) && !strings.HasPrefix(pattern, "refs/") {
+			pattern = "refs/tags/" + pattern
+		}
+		equal := matchesRefName(pattern, Ref{Name: value, IsTag: ref.IsTag})
+		if operator == "==" {
+			return equal
+		}
+		return !equal
 	}
 	return false
+}
+
+// isTagVariable says whether a variable only has a value on a tag run.
+func isTagVariable(name string) bool {
+	return name == "$CI_COMMIT_TAG"
+}
+
+// refVariable is what a variable says on this run, and whether it says anything at all.
+func refVariable(name string, ref Ref) (string, bool) {
+	switch name {
+	case "$CI_COMMIT_BRANCH":
+		return ref.Branch(), true
+	case "$CI_COMMIT_REF_NAME":
+		return ref.Name, true
+	case "$CI_COMMIT_TAG":
+		return ref.Tag(), true
+	case "$CI_COMMIT_SHA":
+		return ref.SHA, true
+	case "$CI_COMMIT_SHORT_SHA":
+		return ref.ShortSHA(), true
+	}
+	return "", false
 }
 
 // writtenOrder is the order the top-level keys appear in the file.

@@ -130,6 +130,11 @@ type Job struct {
 	// the job so a deploy is part of the run that caused it: same log, same retry,
 	// same place on the pipeline page.
 	Deploy map[string]any `json:"deploy,omitempty"`
+	// Variables are the run's own answers: what ref it is on, what tag, which commit.
+	// Carried on the job because the runner is handed the job and nothing else, and
+	// asking the core back would be a round trip per job to be told what the core wrote
+	// down when it filed the run.
+	Variables map[string]string `json:"variables,omitempty"`
 	// ProjectPath and ProjectID are carried on the job rather than looked up, so a
 	// runner on another machine needs one round trip rather than two.
 	ProjectPath string    `json:"project_path"`
@@ -467,6 +472,7 @@ func (r *PipelineRepo) JobByID(ctx context.Context, id int64) (*Job, error) {
 	var job Job
 	var build []byte
 	var deploy []byte
+	var variables []byte
 
 	err := r.s.pool.QueryRow(ctx, jobColumns+`
 		FROM jobs j
@@ -475,7 +481,7 @@ func (r *PipelineRepo) JobByID(ctx context.Context, id int64) (*Job, error) {
 		WHERE j.id = $1`, id).Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage,
 		&job.Status, &job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs,
 		&build, &deploy, &job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
-		&job.ProjectID, &job.ProjectPath)
+		&job.ProjectID, &job.ProjectPath, &variables)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}
@@ -487,6 +493,12 @@ func (r *PipelineRepo) JobByID(ctx context.Context, id int64) (*Job, error) {
 	decodeJSONB(build, &job.Build)
 	if len(job.Build) == 0 {
 		job.Build = nil
+	}
+
+	job.Variables = map[string]string{}
+	decodeJSONB(variables, &job.Variables)
+	if len(job.Variables) == 0 {
+		job.Variables = nil
 	}
 
 	job.Deploy = map[string]any{}
@@ -523,17 +535,18 @@ func (r *PipelineRepo) JobsOfPipeline(ctx context.Context, pipelineID int64) ([]
 const jobColumns = `
 	SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.runner_id, j.image,
 	       j.script, j.allow_failure, j.needs, j.build, j.deploy, j.started_at, j.finished_at,
-	       j.duration_ms, j.created_at, p.project_id, pr.path`
+	       j.duration_ms, j.created_at, p.project_id, pr.path, p.variables`
 
 func scanJob(rows pgx.Rows) (*Job, error) {
 	var job Job
 	var build []byte
 	var deploy []byte
+	var variables []byte
 
 	if err := rows.Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
 		&job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs, &build, &deploy,
 		&job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
-		&job.ProjectID, &job.ProjectPath); err != nil {
+		&job.ProjectID, &job.ProjectPath, &variables); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
 
@@ -541,6 +554,12 @@ func scanJob(rows pgx.Rows) (*Job, error) {
 	decodeJSONB(build, &job.Build)
 	if len(job.Build) == 0 {
 		job.Build = nil
+	}
+
+	job.Variables = map[string]string{}
+	decodeJSONB(variables, &job.Variables)
+	if len(job.Variables) == 0 {
+		job.Variables = nil
 	}
 
 	job.Deploy = map[string]any{}
