@@ -1385,6 +1385,12 @@ func jobView(r *http.Request, job *store.Job) map[string]any {
 	if job.ProjectID != uuid.Nil {
 		view["project_id"] = job.ProjectID
 	}
+	// What the run is about, so a runner can name an image after it without asking.
+	// Absent when the run had no variables of its own, which keeps an ordinary build
+	// from carrying an empty object around.
+	if len(job.Variables) > 0 {
+		view["variables"] = job.Variables
+	}
 	if len(job.Build) > 0 {
 		view["build"] = job.Build
 	}
