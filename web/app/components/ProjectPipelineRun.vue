@@ -746,6 +746,10 @@ watch(() => props.runIid, async () => {
 .dot.badge-green { background: #3fb950; }
 .dot.badge-danger { background: #f85149; }
 .dot.badge-warning { background: #d29922; }
+/* Waiting, in the blue an avatar is drawn in: hsl(220 55% 32%).
+   Without a rule of its own the dot in this state takes no background of its own and shows through as
+   nothing at all */
+.dot.badge-blue { background: hsl(220 55% 32%); }
 .dot.badge-neutral { background: #6e7681; }
 .dot.badge-private { background: #a371f7; }
 

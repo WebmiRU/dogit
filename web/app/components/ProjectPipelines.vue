@@ -781,6 +781,11 @@ td a:hover {
 .stage-mark.badge-danger { color: #f85149; }
 .stage-mark.badge-warning { color: #d29922; }
 .stage-mark.badge-neutral { color: #6e7681; }
+/* Waiting, in the blue an avatar is drawn in: hsl(220 55% 32%).
+   Without a rule of its own a mark in this state takes currentColor, which is the
+   page's text colour — a pale blue-grey that reads as "dimmed" rather than as
+   waiting, and that no other mark on the page is allowed to be. */
+.stage-mark.badge-blue { color: hsl(220 55% 32%); }
 .stage-mark.badge-private { color: #a371f7; }
 
 /* The stage's jobs, under the mark that opened them. Positioned rather than in
