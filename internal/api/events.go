@@ -296,11 +296,17 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 
 	started := time.Now()
 	eventsSent := 0
+	pingsSent := 0
 	var lastWriteErr string
+	// Why it ended, said out loud. A socket closed with 1000 is a clean close, which
+	// means this side decided, and a decision with no reason given is the hardest kind
+	// of fault to argue with later.
+	reason := "done"
 	defer func() {
 		s.log.Info("event socket closed", "user", user.Username,
 			"project", filterName(projectID), "for", time.Since(started).Round(time.Second),
-			"events", eventsSent, "write_error", lastWriteErr)
+			"events", eventsSent, "pings", pingsSent,
+			"reason", reason, "write_error", lastWriteErr)
 	}()
 
 	lastSent := after
@@ -336,6 +342,30 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		return len(entries), true
 	}
 
+	// Somebody has to keep reading, always.
+	//
+	// A control frame is dealt with while the connection is being read from: nobody is
+	// looking at the socket, the answer to our ping sits in it unread, and a connection
+	// that is perfectly healthy times out waiting for its own pong. So one goroutine
+	// reads and discards for as long as the socket is open, and the loop below is free
+	// to do nothing but send.
+	reading := make(chan struct{})
+	go func() {
+		defer close(reading)
+		for {
+			_, _, err := conn.Read(r.Context())
+			if err != nil {
+				return
+			}
+		}
+	}()
+	defer func() {
+		// The loop below may be waiting on the bus or a timer, and a socket the client
+		// has stopped using should not keep it waiting.
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		<-reading
+	}()
+
 	// The backlog, in as many reads as it takes, until a page comes back short.
 	for {
 		written, ok := send()
@@ -359,13 +389,16 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 	for {
 		select {
 		case <-r.Context().Done():
+			reason = "request context: " + r.Context().Err().Error()
 			return
 
 		case <-ping.C:
 			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 			err := conn.Ping(ctx)
 			cancel()
+			pingsSent++
 			if err != nil {
+				reason = "ping failed"
 				lastWriteErr = err.Error()
 				return
 			}
@@ -373,11 +406,13 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		case <-settle.C:
 			settled = true
 			if _, ok := send(); !ok {
+				reason = "the send loop gave up"
 				return
 			}
 
 		case ev, open := <-events:
 			if !open {
+				reason = "the event bus closed"
 				return
 			}
 			if projectID != nil && (ev.ProjectID == nil || *ev.ProjectID != *projectID) {
