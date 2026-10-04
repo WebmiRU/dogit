@@ -145,7 +145,10 @@ func (s *Server) Register(r chi.Router) {
 
 		// The event feed the frontend follows. A WebSocket will replace the polling
 		// without changing what a page has to do.
-		authenticated.Get("/events", s.handleEventStream)
+		// Both shapes of the same feed: a stream to follow, and a cursor read for
+	// anything that would rather ask. See internal/api/events.go.
+	authenticated.Get("/events", s.handleEventStream)
+	authenticated.Get("/events/stream", s.handleEventLive)
 
 		// Module administration: an administrator sees and configures modules,
 		// and a user mints the tokens they present to them.
