@@ -413,6 +413,19 @@ func (d *Deployer) Finish(ctx context.Context, id uuid.UUID, state State, reason
 func (d *Deployer) finish(ctx context.Context, record Deployment, phase Phase, state State,
 	reason string) (Deployment, error) {
 
+	// The outcome is written with a context that does not care whether the caller is
+	// still there.
+	//
+	// This matters more than it looks. A deployment that is cut short — the core going
+	// away, a browser closing, a proxy giving up — is exactly a deployment that must
+	// still be recorded as finished, because the record that says "running" is what
+	// holds the place, and a place held by a record nobody will ever close cannot be
+	// deployed to again. Writing the outcome on the caller's context loses it in
+	// precisely the case it exists for.
+	finishing, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	ctx = finishing
+
 	if phase != "" {
 		if err := d.history.Phase(ctx, record.ID, state, phase, reason); err != nil {
 			return record, err

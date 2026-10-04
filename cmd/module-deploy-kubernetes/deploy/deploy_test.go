@@ -40,7 +40,14 @@ func newFake() *fakeClient {
 	}
 }
 
-func (f *fakeClient) Apply(_ context.Context, object k8s.Object) (k8s.State, error) {
+// A cancelled context fails here, the way it does against a real cluster: the caller
+// has gone, and anything that would take time to talk to the API server no longer
+// does. A fake that ignored it would say a deployment worked when nobody was there to
+// receive it.
+func (f *fakeClient) Apply(ctx context.Context, object k8s.Object) (k8s.State, error) {
+	if err := ctx.Err(); err != nil {
+		return k8s.State{}, err
+	}
 	if err := f.failOn[object.Ref()]; err != nil {
 		return k8s.State{}, err
 	}
@@ -433,5 +440,44 @@ func TestFinishedJobsAreRemoved(t *testing.T) {
 
 	if len(client.deleted) != 1 || !strings.Contains(client.deleted[0], "migrate") {
 		t.Errorf("the finished job was not removed: %v", client.deleted)
+	}
+}
+
+// A deployment the caller walked away from still has to be recorded as finished.
+//
+// This is the case the whole rule depends on. The record that says "running" is what
+// holds a place; a deployment cut short by the core going away is written on the
+// caller's context, which is already cancelled, so the outcome is lost — and the place
+// is then held by a record nobody will ever close, for ever.
+func TestACancelledCallerStillLeavesTheRecordFinished(t *testing.T) {
+	client := newFake()
+	history := newHistory()
+	deployer := New(client, history, nil)
+
+	// A context the caller has already walked away from, which is what the core's own
+	// timeout looks like from in here.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := deployer.Run(ctx, Request{
+		Project:   "app",
+		Cluster:   "c",
+		Namespace: "n",
+		Image:     "reg/app@sha256:abc",
+		Manifests: []k8s.Object{{
+			APIVersion: "apps/v1", Kind: "Deployment", Namespace: "n", Name: "app",
+			Body: []byte("apiVersion: apps/v1\nkind: Deployment\n"),
+		}},
+	})
+	if err == nil {
+		t.Fatal("a deployment on a cancelled context was reported as having worked")
+	}
+
+	current, err := history.Current(context.Background(), "app", "c", "n")
+	if err != nil || current == nil {
+		t.Fatalf("read the deployment back: %v", err)
+	}
+	if current.State == StateRunning {
+		t.Error("the record is still running: the place is now held for ever")
 	}
 }
