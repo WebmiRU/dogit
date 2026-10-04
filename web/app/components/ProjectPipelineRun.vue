@@ -84,6 +84,19 @@ const consumed = ref<Record<number, number>>({})
 const followLoopRunning = ref(false)
 
 /**
+ * What has already been said about this run on this page.
+ *
+ * 'failed' is seeded because it is the case that was wrong: a run that failed
+ * while nobody was looking announced itself the moment somebody opened it, which
+ * reads as though opening the page caused the failure.
+ */
+/** Whether this page has seen the run for itself, rather than reading about it. */
+let sawItLive = false
+
+/** What has already been announced on this page, so that it is said once. */
+let outcome: 'passed' | 'failed' | '' = '' 
+
+/**
  * Where each deploying job has got to, while it is getting there.
  *
  * Kept here rather than in the job itself because it is not part of the job: it is the
@@ -153,7 +166,21 @@ const pending = computed(() => jobs.value.some((job) => job.status === 'pending'
 
 /** The jobs of each stage, in the order the stages appear in the pipeline. */
 const stages = computed<PipelineStage[]>(() => {
-  if (pipeline.value?.stages?.length) return pipeline.value.stages
+  // Whether the run is over at all. A stage that never started because an earlier
+  // one failed is not "still to come": drawn in blue next to a red stage it reads as
+  // a run that is going to carry on, which is the opposite of what happened.
+  const over = pipeline.value?.status === 'failed' || pipeline.value?.status === 'canceled'
+
+  // The stages the API sends are used, but not as they are: it calls such a stage
+  // pending, because its jobs are — and it does not know that pending here means
+  // never, rather than not yet. The jobs are the facts; what they add up to is
+  // worked out here.
+  if (pipeline.value?.stages?.length) {
+    return pipeline.value.stages.map((stage) => ({
+      ...stage,
+      status: over && stage.status === 'pending' ? 'skipped' : stage.status,
+    }))
+  }
 
   // A run read from somewhere without stage grouping still has to be laid out
   // somehow, and the job's own stage name is the truth in that case.
@@ -167,11 +194,13 @@ const stages = computed<PipelineStage[]>(() => {
     }
     grouped.get(stage)!.push(job)
   }
+
   return order.map((name) => {
     const inside = grouped.get(name) ?? []
+    const status = inside[0]?.status ?? 'pending'
     return {
       name,
-      status: inside[0]?.status ?? 'pending',
+      status: over && status === 'pending' ? 'skipped' : status,
       job_count: inside.length,
       jobs: inside.map((job) => ({ iid: job.iid, name: job.name, status: job.status })),
     }
@@ -294,15 +323,31 @@ async function followLoop() {
 
     if (selectedJob.value) await fetchLog(selectedJob.value)
 
+    // A run that was already over when this page opened has not been watched, and
+    // an outcome nobody watched happen is not news on this page: it was announced
+    // where the reader came from, and saying it here repeats it — once per visit.
+    if (jobs.value.some((job) => job.status === 'running' || job.status === 'pending')
+      || pipeline.value?.status === 'running') {
+      sawItLive = true
+    }
+
     if (jobs.value.some((job) => job.status === 'running')) continue
 
     // Nothing more will be written; one last read so the final lines are shown.
     await load()
 
-    if (pipeline.value?.status === 'success') {
-      notify(`Pipeline #${props.runIid} passed`, { type: 'success' })
-    } else if (pipeline.value?.status === 'failed') {
-      notify(`Pipeline #${props.runIid} failed`, { type: 'error' })
+    // Only an outcome this page watched happen. A run that was already over when
+    // the page was opened was announced on the list the reader came from, and
+    // saying it again here means the same fact twice for one visit — and every
+    // time the page is opened afresh after that.
+    if (sawItLive && !outcome) {
+      if (pipeline.value?.status === 'success') {
+        notify(`Pipeline #${props.runIid} passed`, { type: 'success' })
+        outcome = 'passed'
+      } else if (pipeline.value?.status === 'failed') {
+        notify(`Pipeline #${props.runIid} failed`, { type: 'error' })
+        outcome = 'failed'
+      }
     }
     return
   }

@@ -262,12 +262,25 @@ function avatar(src?: string, person?: string) {
   return src
 }
 
-/** The stages as marks in order, coloured by how each one went. */
-function stageMarks(stages: PipelineStage[] | undefined) {
-  return (stages ?? []).map((stage) => ({
-    ...stage,
-    title: `${stage.name}: ${statusText[stage.status]}`,
-  }))
+/**
+ * The stages as marks in order, coloured by how each one went.
+ *
+ * A stage that never started because an earlier one failed is drawn grey, not blue.
+ * It arrives from the API as "pending", because its jobs are — and pending next to
+ * a failed stage reads as a run that is still going to carry on. Which is the
+ * opposite of what happened, and is what somebody sees on every failed run here.
+ */
+function stageMarks(run: ModulePipeline) {
+  const over = run.status === 'failed' || run.status === 'canceled'
+
+  return (run.stages ?? []).map((stage) => {
+    const status = over && stage.status === 'pending' ? 'skipped' : stage.status
+    return {
+      ...stage,
+      status,
+      title: `${stage.name}: ${statusText[status]}`,
+    }
+  })
 }
 
 /** Whether the run is still going, which is the only thing that makes the clock matter. */
@@ -453,7 +466,7 @@ watch(() => props.projectPath, () => load())
           <td class="col-stages" @mouseleave="closeStage">
             <div class="stages">
               <button
-                v-for="stage in stageMarks(run.stages)"
+                v-for="stage in stageMarks(run)"
                 :key="stage.name"
                 type="button"
                 class="stage-mark"
@@ -498,7 +511,8 @@ watch(() => props.projectPath, () => load())
               class="download"
               disabled
               title="No artifacts have been declared yet"
-            >⬇ <span class="download-label">Download artifacts</span> <span class="chev">▾</span></button>
+              aria-label="Download artifacts"
+            ><span class="download-arrow">⬇</span></button>
           </td>
         </tr>
       </tbody>
@@ -600,11 +614,14 @@ watch(() => props.projectPath, () => load())
 
 /* Artifacts, not yet implemented. Disabled rather than hidden so that the
    column's position is already where the button will be. */
+/* Just the arrow. It is disabled until there is something to download, and a wide
+   button saying so on every row of a list of runs is a lot of words about nothing. */
 .download {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 5px 10px;
+  padding: 5px 7px;
   font: inherit;
   font-size: 12px;
   color: var(--text-muted);
@@ -615,8 +632,9 @@ watch(() => props.projectPath, () => load())
   opacity: 0.6;
 }
 
-.download .chev {
-  opacity: 0.6;
+.download-arrow {
+  font-size: 14px;
+  line-height: 1;
 }
 
 /* The rows are positioned so that a popover opened from one is not painted over
