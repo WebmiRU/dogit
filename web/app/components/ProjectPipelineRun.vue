@@ -94,6 +94,15 @@ const followLoopRunning = ref(false)
  */
 const deployProgress = ref<Record<number, DeployProgress>>({})
 
+/**
+ * Everything each deployment has said, not just the latest thing.
+ *
+ * The steps are drawn from the whole run of a deployment rather than from the last
+ * message: a later step saying anything would otherwise wipe the ticks of every step
+ * before it, which is a list that goes backwards as the work goes on.
+ */
+const deploySeen = ref<Record<number, DeployProgress[]>>({})
+
 function noteProgress(event: InstanceEvent) {
   const payload = event.payload ?? {}
   const jobID = Number(payload.job_id ?? 0)
@@ -104,17 +113,23 @@ function noteProgress(event: InstanceEvent) {
   // leave a progress bar behind on some other row.
   if (!next && !payload.phase) return
 
-  deployProgress.value = {
-    ...deployProgress.value,
-    [jobID]: {
-      phase: String(payload.phase ?? next?.phase ?? ''),
-      message: payload.message as string,
-      ready: Number(payload.ready ?? next?.ready ?? 0),
-      desired: Number(payload.desired ?? next?.desired ?? 0),
-      step: Number(payload.step ?? next?.step ?? 0),
-      of: Number(payload.of ?? next?.of ?? 0),
-    },
+  const said: DeployProgress = {
+    phase: String(payload.phase ?? next?.phase ?? ''),
+    message: payload.message as string,
+    ready: Number(payload.ready ?? next?.ready ?? 0),
+    desired: Number(payload.desired ?? next?.desired ?? 0),
+    step: Number(payload.step ?? next?.step ?? 0),
+    of: Number(payload.of ?? next?.of ?? 0),
   }
+
+  const before = deploySeen.value[jobID] ?? []
+  // Only appended when it says something new, so a page left open for an hour does not
+  // accumulate ten thousand copies of the same line.
+  const last = before[before.length - 1]
+  if (!last || last.phase !== said.phase || last.message !== said.message) {
+    deploySeen.value = { ...deploySeen.value, [jobID]: [...before, said] }
+  }
+  deployProgress.value = { ...deployProgress.value, [jobID]: said }
 }
 
 /** Nothing running means nothing is being reported about. */
@@ -506,9 +521,10 @@ watch(() => props.runIid, async () => {
                 <!-- Only while a deployment is actually under way: a progress bar that
                      outlives the deployment is a stale claim that something is moving,
                      which is worse than no bar at all. -->
-                <DeployProgressBar
+                <DeploySteps
                   v-if="visibleProgress[selectedJob.id]"
                   :progress="visibleProgress[selectedJob.id]"
+                  :seen="deploySeen[selectedJob.id]"
                 />
                 <details v-if="selectedJob.script?.length" class="script">
                   <summary class="muted small">

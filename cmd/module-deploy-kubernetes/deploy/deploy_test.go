@@ -118,6 +118,12 @@ func (f *fakeClient) Revisions(_ context.Context, _, _ string) ([]k8s.Revision, 
 	return nil, nil
 }
 
+// Counts answers what the watching code asks, so a test sees the same numbers a page
+// would: no pods yet, none of the old ones left.
+func (f *fakeClient) Counts(_ context.Context, _, _, _ string) (k8s.RolloutCounts, error) {
+	return k8s.RolloutCounts{Ready: 1, Desired: 1}, nil
+}
+
 // appliedRefs is what reached the cluster, in order.
 func (f *fakeClient) appliedRefs() []string {
 	out := make([]string, 0, len(f.applied))

@@ -130,6 +130,33 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 
 	started := time.Now()
 
+	// The core's own steps, on the same channel the module narrates on.
+	//
+	// The steps that belong to this program — the image was built, the image was pushed
+	// — happen before the module is called at all, and they used to be absent from the
+	// page entirely. A list of steps that starts at "applying manifests" reads as though
+	// the image appeared from nowhere; these two say where it came from, and they travel
+	// through the same pipe as the rest so the page has one list rather than two.
+	report := func(progress deployProgress) {
+		if progress.Message == "" {
+			return
+		}
+		stream := "out"
+		if progress.Failed {
+			stream = "err"
+		}
+		_, _ = s.appendJobOutput(ctx, job, stream, progressLine(progress))
+		s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, map[string]any{
+			"job_id":  job.ID,
+			"phase":   progress.Phase,
+			"message": progress.Message,
+			"ready":   progress.Ready,
+			"desired": progress.Desired,
+			"step":    progress.Step,
+			"of":      progress.Of,
+		})
+	}
+
 	log("Deploying to %s\n", spec.Target)
 	log("  target:    %s\n", spec.Target)
 	log("  cluster:   %s\n", spec.Cluster)
@@ -141,11 +168,26 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// and is refused here rather than sent on to be applied as though it were what
 	// the run produced: the whole point of rolling out by digest is that the thing
 	// being deployed is the thing that was tested.
+	// Step one is over before this function is called — the build job that produced the
+	// image has already passed, and the deploy only exists because of it. Said here
+	// rather than inferred by whoever is reading, because a page that shows a list of
+	// steps starting at "push" is a page that has forgotten something.
+	if _, built := builtImage(ctx, s, pipelineRun, job.ID); built != "" {
+		report(deployProgress{Phase: "build", Message: fmt.Sprintf(
+			"the image was built by %q", built)})
+	}
+
 	image, err := s.imageForDeploy(ctx, job, pipelineRun, log)
 	if err != nil {
 		return err
 	}
 	log("  image:     %s\n", image)
+
+	// The push happened with the build, in the runner; what is known here is that the
+	// registry holds it and what exactly it holds, which is the part that decides what
+	// gets rolled out.
+	report(deployProgress{Phase: "push", Message: fmt.Sprintf(
+		"the registry holds it as %s", shortDigest(image))})
 
 	manifests, err := s.readDeployManifests(ctx, repoDir, pipelineRun.SHA, spec.Manifests, log)
 	if err != nil {
@@ -286,6 +328,19 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 
 	log("Deployed in %s.\n", time.Since(started).Round(time.Second))
 	return nil
+}
+
+// shortDigest is an image reference cut down to something a log line can carry.
+func shortDigest(image string) string {
+	at := strings.Index(image, "@")
+	if at < 0 {
+		return image
+	}
+	digest := strings.TrimPrefix(image[at+1:], "sha256:")
+	if len(digest) > 12 {
+		digest = digest[:12]
+	}
+	return "sha256:" + digest
 }
 
 // deployProgress is one thing the module is doing, as it tells it.

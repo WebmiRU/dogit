@@ -114,6 +114,10 @@ type Client interface {
 	// place. Naming the image says what should run, and says it whether or not the
 	// cluster still has any idea what ran before.
 	SetImage(ctx context.Context, namespace, name, image string, timeout time.Duration) (Rollout, error)
+
+	// Counts says how far a rollout has got, in the numbers a person watching asks
+	// about.
+	Counts(ctx context.Context, namespace, name, image string) (RolloutCounts, error)
 }
 
 // Revision is one point in a workload's history.
@@ -567,6 +571,59 @@ func (c *clusterClient) SetImage(ctx context.Context, namespace, name, image str
 	}
 
 	return c.awaitImage(ctx, namespace, name, image, timeout)
+}
+
+// RolloutCounts is how a rollout is going, in the two numbers a person actually asks
+// about: how many pods are running the new image, and how many of the old ones are
+// still up.
+//
+// Both, because "3 of 3 ready" on its own is a moment rather than a state — the old
+// pods are usually still terminating when the new ones report ready, and somebody
+// watching wants to see that drain rather than be told it finished.
+type RolloutCounts struct {
+	Ready       int
+	Desired     int
+	OldUp       int
+	OldScaledTo int
+}
+
+// Counts reads a workload's pods and says how far along it is.
+//
+// "Old" means still running a different image, rather than being an earlier
+// revision number. Those are nearly the same thing and the second is bookkeeping: what
+// somebody watching wants to know is whether the pods that used to be serving traffic
+// are still up, and the only honest answer is the one about the image they run.
+func (c *clusterClient) Counts(ctx context.Context, namespace, name, image string) (RolloutCounts, error) {
+	deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return RolloutCounts{}, fmt.Errorf("read deployment %s: %w", name, err)
+	}
+
+	desired := int32(1)
+	if deployment.Spec.Replicas != nil {
+		desired = *deployment.Spec.Replicas
+	}
+	counts := RolloutCounts{Desired: int(desired), Ready: int(deployment.Status.ReadyReplicas)}
+
+	pods, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		// Not knowing is not knowing; the counts read so far are still true.
+		return counts, nil
+	}
+
+	for index := range pods.Items {
+		pod := pods.Items[index]
+		if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
+			continue
+		}
+
+		for _, container := range pod.Spec.Containers {
+			if container.Image != image {
+				counts.OldUp++
+			}
+		}
+	}
+	return counts, nil
 }
 
 // awaitImage waits until a workload is running the image it was asked for.

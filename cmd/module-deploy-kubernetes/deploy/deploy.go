@@ -463,7 +463,7 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 
 	// Watching, as with a deploy: the pods are the progress.
 	stop := d.watchRollout(ctx, Request{Progress: request.Progress, Rollout: workload,
-		Namespace: namespace})
+		Namespace: namespace, Image: target.Image})
 	rollout, err := d.client.SetImage(ctx, namespace, workload, target.Image, timeout)
 	stop()
 	if err != nil {
@@ -540,6 +540,7 @@ const (
 	StepPull    = "pull"
 	StepApply   = "apply"
 	StepRollout = "rollout"
+	StepRetire  = "retire"
 	StepPost    = "post"
 )
 
@@ -655,7 +656,12 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) func() {
 	go func() {
 		defer close(finished)
 
-		lastReady, lastDesired := int32(-1), int32(-1)
+		// Reported as two facts rather than one, because they are two things
+		// happening at different times: the new pods come up, and the old ones go
+		// away. A single "3 of 3 ready" is a moment — the old pods are usually still
+		// terminating at that point — and somebody watching wants to watch that drain
+		// rather than be told it is over.
+		lastReady, lastOld := -1, -1
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
@@ -668,21 +674,29 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) func() {
 			case <-ticker.C:
 			}
 
-			rollout, err := d.client.Rollout(ctx, request.Namespace, request.Rollout)
+			counts, err := d.client.Counts(ctx, request.Namespace, request.Rollout, request.Image)
 			if err != nil {
 				continue
 			}
-			if rollout.Ready == lastReady && rollout.Desired == lastDesired {
+			if counts.Ready == lastReady && counts.OldUp == lastOld {
 				continue
 			}
-			lastReady, lastDesired = rollout.Ready, rollout.Desired
+			lastReady, lastOld = counts.Ready, counts.OldUp
 
-			request.Progress(Progress{
-				Phase:   StepRollout,
-				Message: rollout.Reason,
-				Ready:   int(rollout.Ready),
-				Desired: int(rollout.Desired),
-			})
+			if counts.Ready > 0 {
+				request.Progress(Progress{
+					Phase:   StepRollout,
+					Message: fmt.Sprintf("%d of %d running the new image", counts.Ready, counts.Desired),
+					Ready:   counts.Ready,
+					Desired: counts.Desired,
+				})
+			}
+			if counts.OldUp > 0 {
+				request.Progress(Progress{
+					Phase:   StepRetire,
+					Message: fmt.Sprintf("%d pod(s) still running the previous image", counts.OldUp),
+				})
+			}
 		}
 	}()
 
