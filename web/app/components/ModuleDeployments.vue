@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { injectLocalEvent } from '~/lib/eventSocket'
 /**
  * What is deploying now, and what has been deployed.
  *
@@ -417,88 +416,7 @@ onMounted(async () => {
   })
 })
 
-// TEMPORARY. A scripted run of the progress the cluster would send, one tick a
-// second, fed into the interface from inside the browser.
-//
-// It exists because the real thing is not watchable on demand: a deploy here takes
-// a second or two, so there is no way to sit and look at the card while a step
-// moves, and a spinner that has never been watched is a spinner nobody has seen
-// work. Everything it drives is the same path a real event drives, so what is being
-// checked is the page and not the delivery — that still has to be checked against a
-// real run.
-//
-// Delete this and the button with it.
-let fakeTimer: ReturnType<typeof setInterval> | undefined
-
-// A tick a second, and no stage held for more than about four: long enough to see
-// the spinner turn and the numbers move, short enough that watching the whole thing
-// is not a commitment.
-const fakeScript: Array<[string, string]> = [
-  ['build', 'building k8s/Dockerfile from .'],
-  ['build', 'pulling nginx:alpine'],
-  ['build', 'copying index.html into the image'],
-  ['push', 'pushing to 192.168.1.103:8091'],
-  ['push', 'layer 5 of 10 pushed'],
-  ['push', 'the registry holds it as sha256:9f12c4a0e7b3'],
-  ['prepare', 'preparing 2 manifest(s) for local-k3s/dogit-dev'],
-  ['pull', 'the cluster can pull from dogit-registry'],
-  ['apply', 'applied Deployment versions'],
-  ['apply', 'applied Service versions'],
-  ['rollout', '1 of 3 running the new image'],
-  ['retire', '2 pod(s) still running the previous image'],
-  ['rollout', '2 of 3 running the new image'],
-  ['retire', '1 pod(s) still running the previous image'],
-  ['rollout', '3 of 3 running the new image'],
-  ['', 'finished'],
-]
-
-function startFakeDeploy() {
-  if (fakeTimer) return
-  let index = 0
-  const tick = () => {
-    const step = fakeScript[index]
-    if (!step) {
-      stopFakeDeploy()
-      return
-    }
-    index += 1
-
-    const [phase, message] = step
-    // The pod counts come from the words the real module uses, so the numbers on
-    // the card are produced the same way they are in production rather than typed
-    // in beside them.
-    const of = /(\d+) of (\d+)/.exec(message)
-
-    injectLocalEvent({
-      id: Date.now(),
-      kind: 'deploy.operation',
-      created_at: new Date().toISOString(),
-      project_path: props.projectPath,
-      payload: {
-        job_id: 0,
-        phase,
-        message,
-        ready: of ? Number(of[1]) : 0,
-        desired: of ? Number(of[2]) : 0,
-        step: 0,
-        of: 0,
-      },
-    })
-
-    if (index >= fakeScript.length) stopFakeDeploy()
-  }
-
-  tick()
-  fakeTimer = setInterval(tick, 1000)
-}
-
-function stopFakeDeploy() {
-  if (fakeTimer) clearInterval(fakeTimer)
-  fakeTimer = undefined
-}
-
 onBeforeUnmount(() => {
-  stopFakeDeploy()
   stopHistory?.()
   stopOperation?.()
 })
@@ -551,11 +469,6 @@ watch(() => props.module.id, load)
           <h3 class="block-title">The last operation</h3>
           <span class="muted small">what it did</span>
           <span class="spacer" />
-          <!-- TEMPORARY: a scripted run, so the progress can be watched working
-               without waiting for a real cluster to be slow on purpose. -->
-          <button class="btn btn-small" type="button" @click="startFakeDeploy">
-            Pretend a deploy is running
-          </button>
         </div>
 
         <div v-for="place in places" :key="place.place" class="running-place">

@@ -54,6 +54,18 @@ export function openEventSocket() {
   if (stream || opening) return
   if (import.meta.server) return
 
+  // Not while the page is still loading.
+  //
+  // A connection opened during load is one the browser may abandon when the load
+  // finishes — and it says so, in the console, as "the event stream was aborted
+  // during page load". Waiting costs nothing: the events that matter arrive after
+  // somebody starts reading, and everything sent before this is a backlog the same
+  // connection replays on its own.
+  if (document.readyState !== 'complete') {
+    window.addEventListener('load', () => openEventSocket(), { once: true })
+    return
+  }
+
   opening = true
   const opened = new EventSource('/api/v1/events/stream', { withCredentials: true })
 
@@ -97,27 +109,6 @@ export function onEvent(listener: Listener): () => void {
   listeners.add(listener)
   return () => {
     listeners.delete(listener)
-  }
-}
-
-/**
- * Feeds an event to the listeners as though the socket had sent it.
- *
- * TEMPORARY, and for the interface only. It exists so the deploy card's progress can
- * be watched working without waiting for a real cluster to be slow on purpose: the
- * steps, the spinner and the pod counter are driven from the same place a real
- * event would drive them from, so what is being checked is the page.
- *
- * It proves nothing about delivery. Anything that depends on events actually
- * arriving has to be checked against a real run.
- */
-export function injectLocalEvent(event: InstanceEvent) {
-  for (const listener of [...listeners]) {
-    try {
-      listener(event)
-    } catch {
-      // A page's mistake must not stop the others hearing about it.
-    }
   }
 }
 
