@@ -157,7 +157,13 @@ type stuckHistory struct {
 	*memoryHistory
 }
 
-// Finish does nothing: the deployment it belongs to is still running.
+// Counts does nothing: the deployment it belongs to never got as far as counting.
+// The tests here are about a rollout that cannot finish, and the counts are not
+// what they are checking.
+func (s *stuckHistory) Counts(_ context.Context, _ uuid.UUID, _, _, _ int) error {
+	return nil
+}
+
 func (s *stuckHistory) Finish(_ context.Context, _ uuid.UUID, _ State, _ string) error {
 	return nil
 }
@@ -198,7 +204,26 @@ func (h *memoryHistory) Phase(_ context.Context, _ uuid.UUID, _ State, _ Phase, 
 	return nil
 }
 
-// Finish closes the deployment and frees the lock.
+// Counts writes the rollout's numbers onto the record, the way the real history does.
+func (h *memoryHistory) Counts(_ context.Context, id uuid.UUID, wanted, ready, retired int) error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	for _, records := range h.records {
+		for index := range records {
+			if records[index].ID != id {
+				continue
+			}
+			records[index].PodsWanted = wanted
+			records[index].PodsReady = ready
+			records[index].PodsRetired = retired
+			h.records[lockKey(records[index].Project, records[index].Cluster,
+				records[index].Namespace)] = records
+		}
+	}
+	return nil
+}
+
 func (h *memoryHistory) Finish(_ context.Context, id uuid.UUID, state State, reason string) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()

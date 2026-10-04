@@ -443,6 +443,12 @@ func viewOf(record deploy.Deployment) map[string]any {
 		"phase":      record.Phase,
 		"reason":     record.Reason,
 		"started_at": record.StartedAt,
+		// How many pods this operation dealt with. Sent whenever there were any,
+		// so a row with no rollout on it — a failed apply, a revert of something
+		// that never ran — says nothing rather than saying zero of zero.
+		"pods_wanted":  record.PodsWanted,
+		"pods_ready":   record.PodsReady,
+		"pods_retired": record.PodsRetired,
 	}
 	if record.FinishedAt != nil {
 		out["finished_at"] = *record.FinishedAt

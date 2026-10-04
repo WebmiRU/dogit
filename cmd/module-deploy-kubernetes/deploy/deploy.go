@@ -129,6 +129,16 @@ type Deployment struct {
 	Reason     string
 	StartedAt  time.Time
 	FinishedAt *time.Time
+	// Pods are the counts the rollout passed through: how many were wanted, how
+	// many were running the new image, and how many were still on the old one when
+	// it was over.
+	//
+	// Kept because a deployment is remembered by what it did and this is most of
+	// it. Without them the history says an operation succeeded, which is the one
+	// fact about it that cannot be read off anything.
+	PodsWanted  int
+	PodsReady   int
+	PodsRetired int
 }
 
 // History is what a module remembers, so that a rollback has something to go back to.
@@ -146,6 +156,11 @@ type History interface {
 	Phase(ctx context.Context, id uuid.UUID, state State, phase Phase, reason string) error
 	// Finish closes a deployment, leaving the lock free.
 	Finish(ctx context.Context, id uuid.UUID, state State, reason string) error
+	// Counts records what the rollout actually did: how many pods were wanted, how
+	// many reached the new image, and how many of the old ones went away. Written
+	// while it happens rather than read back afterwards, because the old pods are
+	// gone by then and their number is not.
+	Counts(ctx context.Context, id uuid.UUID, wanted, ready, retired int) error
 	// Current is the last deployment that reached a decision, which is what a rollback
 	// returns to.
 	Current(ctx context.Context, project, cluster, namespace string) (*Deployment, error)
@@ -272,15 +287,24 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 	if request.WaitForRollout && request.Rollout != "" {
 		// Watching: the count of pods is the thing somebody watching actually wants,
 		// and it is only knowable by asking the cluster as it goes.
-		stop := d.watchRollout(ctx, request)
+		stop, counted := d.watchRollout(ctx, request)
 		err := d.wait(ctx, request)
 		stop()
+
+		// What the rollout did, kept before anything else can go wrong. A deployment
+		// that fails halfway through still rolled some containers out, and a history
+		// that only remembers success and failure cannot say how far it got.
+		wanted, ready, retired := counted()
+		if err := d.history.Counts(ctx, record.ID, wanted, ready, retired); err != nil {
+			d.logf("record what the rollout did: %v", err)
+		}
+
 		if err != nil {
 			request.report(Progress{Phase: StepRollout, Message: err.Error(), Failed: true})
 			return d.fail(ctx, record, PhaseApply, err)
 		}
 		request.report(Progress{Phase: StepRollout,
-			Message: "every pod is running the new image"})
+			Message: fmt.Sprintf("every pod is running the new image (%d of %d)", ready, wanted)})
 	}
 
 	// Post: judged separately, and never mistaken for the deployment having worked.
@@ -462,13 +486,14 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 	}
 
 	// Watching, as with a deploy: the pods are the progress.
-	stop := d.watchRollout(ctx, Request{Progress: request.Progress, Rollout: workload,
+	stop, counted := d.watchRollout(ctx, Request{Progress: request.Progress, Rollout: workload,
 		Namespace: namespace, Image: target.Image})
 	rollout, err := d.client.SetImage(ctx, namespace, workload, target.Image, timeout)
 	stop()
 	if err != nil {
 		return Deployment{}, err
 	}
+	wanted, ready, retired := counted()
 	d.logf("put %s back on %s: %s", target.Image, workload, rollout.Reason)
 
 	report(request.Progress, Progress{Phase: StepApply, Message: fmt.Sprintf(
@@ -494,6 +519,12 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 	reverted, err = d.history.Begin(ctx, reverted)
 	if err != nil {
 		return reverted, err
+	}
+
+	// The rollback is a deployment like any other, and it rolled containers out like
+	// any other: its history row says so.
+	if err := d.history.Counts(ctx, reverted.ID, wanted, ready, retired); err != nil {
+		d.logf("record what the rollback rolled out: %v", err)
 	}
 
 	report(request.Progress, Progress{Phase: StepRollout, Ready: int(rollout.Ready),
@@ -645,9 +676,13 @@ func pullSecretFor(request Request) string {
 //
 // Only reports when the numbers actually move. A page that repaints the same "2 of 3"
 // every two seconds is harder to read than one that says nothing until it changes.
-func (d *Deployer) watchRollout(ctx context.Context, request Request) func() {
+// watchRollout follows a rollout while it happens, and returns two things: how to
+// stop following, and what the last counts it saw were.
+func (d *Deployer) watchRollout(ctx context.Context, request Request) (func(), func() (int, int, int)) {
+	var wanted, ready, retired int
+
 	if request.Progress == nil || request.Rollout == "" {
-		return func() {}
+		return func() {}, func() (int, int, int) { return wanted, ready, retired }
 	}
 
 	stop := make(chan struct{})
@@ -682,6 +717,7 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) func() {
 				continue
 			}
 			lastReady, lastOld = counts.Ready, counts.OldUp
+			wanted, ready, retired = counts.Desired, counts.Ready, counts.OldUp
 
 			if counts.Ready > 0 {
 				request.Progress(Progress{
@@ -703,5 +739,5 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) func() {
 	return func() {
 		close(stop)
 		<-finished
-	}
+	}, func() (int, int, int) { return wanted, ready, retired }
 }

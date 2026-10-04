@@ -115,23 +115,25 @@ export function watchEvents(options: WatchOptions): () => void {
     const existing = open.get(key)
     if (existing) {
       existing.refs++
-      existing.stream.addEventListener('event', handle)
+      existing.stream.addEventListener('message', handle)
       return
     }
 
     const stream = new EventSource(`/api/v1/events/stream${wanted ? `?${wanted}` : ''}`, {
       withCredentials: true,
     })
-    // The feed carries no name of its own, so it arrives as the default message
-    // event rather than under a type.
-    stream.addEventListener('event', handle)
+    // "message", not "event": the feed sends no event name, and a stream line with
+    // no name arrives under the default type. Listening for "event" waits for a
+    // message that is never coming, and the connection looks perfectly healthy
+    // while saying nothing for ever.
+    stream.addEventListener('message', handle)
     open.set(key, { stream, refs: 1 })
   }
 
   const release = (which: string) => {
     const held = open.get(which)
     if (!held) return
-    held.stream.removeEventListener('event', handle)
+    held.stream.removeEventListener('message', handle)
     held.refs--
     if (held.refs > 0) return
     held.stream.close()

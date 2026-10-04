@@ -29,6 +29,7 @@ type History interface {
 	Begin(ctx context.Context, d deploy.Deployment) (deploy.Deployment, error)
 	Phase(ctx context.Context, id uuid.UUID, state deploy.State, phase deploy.Phase, reason string) error
 	Finish(ctx context.Context, id uuid.UUID, state deploy.State, reason string) error
+	Counts(ctx context.Context, id uuid.UUID, wanted, ready, retired int) error
 	Current(ctx context.Context, project, cluster, namespace string) (*deploy.Deployment, error)
 	// ByID is one deployment by identity, which is how a revert names the row
 	// somebody clicked on.
@@ -86,8 +87,18 @@ func (h *postgresHistory) migrate(ctx context.Context) error {
 			phase       TEXT NOT NULL DEFAULT '',
 			reason      TEXT NOT NULL DEFAULT '',
 			started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-			finished_at TIMESTAMPTZ
+			finished_at TIMESTAMPTZ,
+			pods_wanted  INT NOT NULL DEFAULT 0,
+			pods_ready   INT NOT NULL DEFAULT 0,
+			pods_retired INT NOT NULL DEFAULT 0
 		)`,
+		// Added to a table that already exists as well as described in the CREATE
+		// above. A module is upgraded by being restarted, and an installation that
+		// had records before this version would otherwise start failing to read its
+		// own history — which is the one thing it cannot recover from by itself.
+		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pods_wanted  INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pods_ready   INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pods_retired INT NOT NULL DEFAULT 0`,
 		// One deployment at a time per place. The index is the lock: a second one
 		// cannot be begun while this exists, so the rule holds even if two tasks reach
 		// this module at the same moment and even if this module is running twice.
@@ -179,9 +190,25 @@ func (h *postgresHistory) Finish(ctx context.Context, id uuid.UUID, state deploy
 	return err
 }
 
+// Counts writes down what a rollout did to the pods.
+//
+// Its own statement rather than part of Finish: the counts are known while the
+// rollout runs, and a deployment that fails halfway has still rolled some of them
+// out. Waiting for the end to write them down would lose exactly the records worth
+// having.
+func (h *postgresHistory) Counts(ctx context.Context, id uuid.UUID, wanted, ready, retired int) error {
+
+	_, err := h.pool.Exec(ctx, `
+		UPDATE deployments
+		SET pods_wanted = $2, pods_ready = $3, pods_retired = $4
+		WHERE id = $1`, id, wanted, ready, retired)
+	return err
+}
+
 func (h *postgresHistory) Current(ctx context.Context, project, cluster, namespace string) (*deploy.Deployment, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT id, project, cluster, namespace, image, workload, state, phase, reason, started_at, finished_at
+		SELECT id, project, cluster, namespace, image, workload, state, phase, reason,
+		       started_at, finished_at, pods_wanted, pods_ready, pods_retired
 		FROM deployments
 		WHERE project = $1 AND cluster = $2 AND namespace = $3
 		ORDER BY started_at DESC LIMIT 1`, project, cluster, namespace)
@@ -204,7 +231,8 @@ func (h *postgresHistory) Current(ctx context.Context, project, cluster, namespa
 // it has deployed, not what it deployed to one place it already knows the name of.
 func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace string) ([]deploy.Deployment, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT id, project, cluster, namespace, image, workload, state, phase, reason, started_at, finished_at
+		SELECT id, project, cluster, namespace, image, workload, state, phase, reason,
+		       started_at, finished_at, pods_wanted, pods_ready, pods_retired
 		FROM deployments
 		WHERE project = $1
 		  AND ($2 = '' OR cluster = $2)
@@ -238,7 +266,8 @@ func scanDeployment(rows scanner) (deploy.Deployment, error) {
 	var record deploy.Deployment
 	if err := rows.Scan(&record.ID, &record.Project, &record.Cluster, &record.Namespace,
 		&record.Image, &record.Workload, &record.State, &record.Phase, &record.Reason,
-		&record.StartedAt, &record.FinishedAt); err != nil {
+		&record.StartedAt, &record.FinishedAt,
+		&record.PodsWanted, &record.PodsReady, &record.PodsRetired); err != nil {
 		return deploy.Deployment{}, fmt.Errorf("read a deployment: %w", err)
 	}
 	record.FromOurRegistry = strings.HasSuffix(record.Image, "@sha256:") ||
