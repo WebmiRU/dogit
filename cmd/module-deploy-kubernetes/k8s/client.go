@@ -14,6 +14,8 @@ package k8s
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -85,6 +87,13 @@ type Client interface {
 
 	// Get reads one object back.
 	Get(ctx context.Context, ref Object) (*unstructured.Unstructured, error)
+
+	// EnsurePullSecret writes the credential a namespace pulls private images with.
+	//
+	// Part of the client's interface rather than something the deployer assembles,
+	// because a Secret of the right shape is a thing this cluster understands and a
+	// hand-rolled one is a thing only this module does.
+	EnsurePullSecret(ctx context.Context, namespace string, secret PullSecret) error
 
 	// Delete removes an object. Used for the Jobs afterwards, which are the only thing
 	// here dogit removes: everything else in the manifest was meant to be there.
@@ -481,4 +490,87 @@ func withCurrentContext(document []byte, context string) ([]byte, error) {
 
 	parsed.CurrentContext = context
 	return clientcmd.Write(*parsed)
+}
+
+// PullSecret is what a cluster needs to pull an image from a registry that will not
+// serve anonymously.
+type PullSecret struct {
+	// Name is the Secret to create or update in the namespace.
+	Name string
+	// Address is the registry host:port, which is what the auth entry is keyed by and
+	// what has to match the image name exactly.
+	Address string
+	// Token is the bearer token, already scoped to one project and one registry.
+	Token string
+	// Username pairs with the token. Registries that issue a token rather than a
+	// password want the token in the password field and anything here, which is the
+	// Docker convention every client follows.
+	Username string
+}
+
+// dockerConfigJSON is a docker config holding exactly one entry.
+//
+// Built by hand rather than by walking a map: the shape is fixed, it is written once,
+// and a dependency to serialise a three-key document would be a dependency this
+// module otherwise does not have.
+func dockerConfigJSON(secret PullSecret) []byte {
+	entry := map[string]string{
+		"username": secret.Username,
+		"password": secret.Token,
+	}
+	if entry["username"] == "" {
+		// A token is not a password and some registries care: an empty username with a
+		// token is what an anonymous bearer pull looks like.
+		entry["username"] = "<token>"
+	}
+
+	auth := base64.StdEncoding.EncodeToString(
+		[]byte(entry["username"] + ":" + entry["password"]))
+
+	document := map[string]any{
+		"auths": map[string]any{
+			secret.Address: map[string]any{"auth": auth},
+		},
+	}
+
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		// Unreachable for a document of strings, and returning nothing would write a
+		// Secret nobody can use.
+		return []byte(`{"auths":{}}`)
+	}
+	return encoded
+}
+
+// EnsurePullSecret creates or replaces the pull secret in a namespace.
+//
+// Replaced rather than merged, because a credential that has been rotated must not
+// leave the old one behind: a namespace holding two secrets for the same registry
+// means the cluster will keep using whichever it found first, which may be the one
+// that was revoked.
+func (c *clusterClient) EnsurePullSecret(ctx context.Context, namespace string, secret PullSecret) error {
+	body := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"type":       "kubernetes.io/dockerconfigjson",
+		"metadata": map[string]any{
+			"name":      secret.Name,
+			"namespace": namespace,
+		},
+		"data": map[string]any{
+			".dockerconfigjson": base64.StdEncoding.EncodeToString(dockerConfigJSON(secret)),
+		},
+	}
+
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("describe the pull secret: %w", err)
+	}
+	if _, err := c.Apply(ctx, Object{
+		APIVersion: "v1", Kind: "Secret", Namespace: namespace,
+		Name: secret.Name, Body: encoded,
+	}); err != nil {
+		return fmt.Errorf("write the pull secret: %w", err)
+	}
+	return nil
 }

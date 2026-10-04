@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -45,6 +46,15 @@ type deployRequest struct {
 	Post []jobRequest `json:"post"`
 
 	// Rollout names the workload to wait for, and WaitForRollout says whether to wait.
+	// Registry is the credential the cluster pulls with, when it will not serve the
+	// image on its own. Nil means the registry is open to the cluster and there is
+	// nothing to write.
+	Registry *struct {
+		Address    string `json:"address"`
+		Token      string `json:"token"`
+		SecretName string `json:"secret_name"`
+	} `json:"registry"`
+
 	WaitForRollout bool   `json:"wait_for_rollout"`
 	Rollout        string `json:"rollout"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
@@ -121,8 +131,21 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		log.Printf(format, args...)
 	})
 
+	// The credential the cluster pulls with, when the core sent one. A cluster that
+	// cannot pull is a rollout that never finishes, and the message for that is a
+	// timeout with no cause in it.
+	var pullSecret *k8s.PullSecret
+	if request.Registry != nil && request.Registry.Token != "" {
+		pullSecret = &k8s.PullSecret{
+			Name:    pullSecretName(request.Registry.SecretName),
+			Address: request.Registry.Address,
+			Token:   request.Registry.Token,
+		}
+	}
+
 	record, err := deployer.Run(ctx, deploy.Request{
 		Project:        request.Project,
+		PullSecret:     pullSecret,
 		Cluster:        cluster.Name,
 		Namespace:      namespace,
 		Image:          request.Image,
@@ -138,10 +161,20 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		// The deployment is reported as what it did, not as an error page: the record
-		// is the answer, and a caller that only gets a status code has to ask again
-		// for something it already sent us.
-		writeJSON(w, http.StatusOK, map[string]any{"deployment": viewOf(record)})
+		// Said plainly, rather than as the record of a deployment that is somehow
+		// running. "Another deployment to this place is in progress" and a record
+		// saying "running" with nothing after it are the same answer as far as a
+		// reader is concerned, and only one of them can be acted on.
+		var busy deploy.ErrBusy
+		if errors.As(err, &busy) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": map[string]any{"message": err.Error()},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"deployment": viewOf(record), "error": err.Error(),
+		})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deployment": viewOf(record)})
@@ -319,6 +352,18 @@ func (c *coreClient) handleTestCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// pullSecretName is the Secret this module writes, whatever the core asked for.
+//
+// Fixed rather than taken from the request: a name is written into every pod template
+// this deployment applies, and one that came from a request could be a name of
+// somebody else's existing secret.
+func pullSecretName(requested string) string {
+	if strings.TrimSpace(requested) == "" {
+		return "dogit-registry"
+	}
+	return requested
 }
 
 func jobs(substitution k8s.Substitution, requests []jobRequest, namespace string) []deploy.Job {

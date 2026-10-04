@@ -62,6 +62,12 @@ type deployRequest struct {
 		ConfigMaps []string `json:"config_maps"`
 	} `json:"expect"`
 
+	// Registry is the credential the cluster pulls with, when it will not serve the
+	// image on its own. Omitted rather than sent empty: a module that is told there is
+	// no credential writes nothing, and a module told to write an empty one writes a
+	// Secret that fails in a more confusing way.
+	Registry *registryCredential `json:"registry,omitempty"`
+
 	WaitForRollout bool `json:"wait_for_rollout"`
 	TimeoutSeconds int  `json:"timeout_seconds"`
 
@@ -69,6 +75,15 @@ type deployRequest struct {
 	// rollback can say what it returned to, without asking the core again.
 	Ref string `json:"ref"`
 	Sha string `json:"sha"`
+}
+
+// registryCredential is what a cluster needs to pull this project's images.
+type registryCredential struct {
+	// Address is the registry host:port, which has to match the image name exactly.
+	Address string `json:"address"`
+	Token   string `json:"token"`
+	// SecretName is what the module should call the Secret it writes.
+	SecretName string `json:"secret_name"`
 }
 
 type deployManifest struct {
@@ -179,6 +194,20 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		Ref:            pipelineRun.Ref,
 		Sha:            pipelineRun.SHA,
 	}
+	// The credential the cluster pulls with.
+	//
+	// The registry is private by default, so a cluster given nothing to pull with will
+	// sit at ImagePullBackOff and the deployment will fail on a rollout timeout with no
+	// cause in it. Minted per project, for a pull and nothing else, and it goes to the
+	// module and nowhere else.
+	credential, err := s.registryCredential(ctx, job, image)
+	if err != nil {
+		log("  registry:   %v\n", err)
+	} else if credential != nil {
+		log("  registry:   %s (the cluster will pull with a credential of ours)\n", credential.Address)
+	}
+	request.Registry = credential
+
 	request.Expect.Secrets = spec.Expect.Secrets
 	request.Expect.ConfigMaps = spec.Expect.ConfigMaps
 
@@ -677,4 +706,55 @@ func (s *Server) buildTag(ctx context.Context, run *store.Pipeline) string {
 		}
 	}
 	return ""
+}
+
+// registryCredential is what this project's cluster pulls its images with, or nil
+// when there is nothing to say.
+//
+// Nil rather than an error for a missing registry: a deployment of an image from
+// somewhere else is a real thing somebody does, and refusing it would be dogit
+// deciding that images come from dogit.
+// The image is passed in rather than read off the job, because a deploy job builds
+// nothing: its own build is empty, and a credential asked for from it is a credential
+// for nothing at all — which is how a private registry ends up being pulled from with
+// no way in and a rollout that times out with no cause.
+func (s *Server) registryCredential(ctx context.Context, job *store.Job, image string) (*registryCredential, error) {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return nil, nil
+	}
+
+	registry, err := s.store.Integrations().ByKind(ctx, registryKind)
+	if err != nil {
+		return nil, fmt.Errorf("no registry is installed on this instance")
+	}
+
+	repository, _ := splitImage(image)
+	if repository == "" {
+		return nil, nil
+	}
+
+	token, err := s.resolveToken(ctx, registry, job)
+	if err != nil {
+		return nil, err
+	}
+
+	return &registryCredential{
+		Address:    registryHostFrom(repository),
+		Token:      token,
+		SecretName: "dogit-registry",
+	}, nil
+}
+
+// registryHostFrom is the host and port out of an image name.
+//
+// Only that, because it is what an auth entry is keyed by: a credential filed under
+// "registry:5000/group/project" is a credential no client will ever look up, and the
+// failure is a pod that cannot pull with nothing in the log to say why.
+func registryHostFrom(image string) string {
+	host := image
+	if index := strings.Index(host, "/"); index >= 0 {
+		host = host[:index]
+	}
+	return registryHost(host)
 }

@@ -55,6 +55,11 @@ type Request struct {
 	Cluster string
 	// Namespace is where in the cluster.
 	Namespace string
+	// PullSecret is the credential the cluster needs to pull Image, when the registry
+	// will not serve it anonymously. Empty means the registry is public to the cluster
+	// and there is nothing to arrange.
+	PullSecret *k8s.PullSecret
+
 	// Image is what to substitute for the placeholder, digest and all. Empty means the
 	// repository's manifests are applied as they are, which is only right for a deploy
 	// that changes nothing about what runs — so it has to be asked for deliberately.
@@ -201,14 +206,27 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 
 	// Pre: jobs that must pass before anything moves.
 	for _, job := range request.Pre {
+		job.Object.Body = k8s.WithPullSecret(job.Object.Body, job.Object.Kind, pullSecretFor(request))
 		if err := d.runJob(ctx, substitution, request, job); err != nil {
 			return d.fail(ctx, record, PhasePre, err)
 		}
 	}
 
+	// The credential the cluster pulls with, before anything is applied: a namespace
+	// whose pods cannot pull is a namespace whose pods never start, and finding that
+	// out from a rollout timeout is a long way round.
+	secretName := ""
+	if request.PullSecret != nil {
+		if err := d.client.EnsurePullSecret(ctx, request.Namespace, *request.PullSecret); err != nil {
+			return d.fail(ctx, record, PhaseApply, err)
+		}
+		secretName = request.PullSecret.Name
+		d.logf("wrote the pull secret %s", secretName)
+	}
+
 	// Apply: what the repository wrote, with one thing changed.
 	for _, object := range request.Manifests {
-		body := substitution.Apply(object.Body)
+		body := k8s.WithPullSecret(substitution.Apply(object.Body), object.Kind, secretName)
 		written := object
 		written.Body = body
 
@@ -227,6 +245,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 
 	// Post: judged separately, and never mistaken for the deployment having worked.
 	for _, job := range request.Post {
+		job.Object.Body = k8s.WithPullSecret(job.Object.Body, job.Object.Kind, pullSecretFor(request))
 		if err := d.runJob(ctx, substitution, request, job); err != nil {
 			failed, finishErr := d.finish(ctx, record, PhasePost, StateFailed, err.Error())
 			if finishErr != nil {
@@ -427,4 +446,12 @@ func (d *Deployer) fail(ctx context.Context, record Deployment, phase Phase, cau
 		return failed, errors.Join(cause, writeErr)
 	}
 	return failed, cause
+}
+
+// pullSecretFor is the name of the pull secret a request carries, or empty.
+func pullSecretFor(request Request) string {
+	if request.PullSecret == nil {
+		return ""
+	}
+	return request.PullSecret.Name
 }

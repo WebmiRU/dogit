@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/restmapper"
+	sigsyaml "sigs.k8s.io/yaml"
 )
 
 // yamlUnmarshal reads a manifest.
@@ -204,4 +205,111 @@ func ImagesIn(body []byte) []string {
 		found = append(found, value)
 	}
 	return found
+}
+
+// podSpecPath is where the pod template lives in a manifest, by kind.
+//
+// Every one of these is a pod spec reached through a different route, and a manifest
+// that gets it wrong gets no pull secret at all — which looks exactly like a registry
+// that will not serve the image, and sends whoever is reading the log to the wrong
+// place entirely.
+var podSpecPaths = map[string][]string{
+	"Deployment":  {"spec", "template", "spec"},
+	"StatefulSet": {"spec", "template", "spec"},
+	"DaemonSet":   {"spec", "template", "spec"},
+	"ReplicaSet":  {"spec", "template", "spec"},
+	"Job":         {"spec", "template", "spec"},
+	// A CronJob keeps its pod three levels further down, and a manifest that stops one
+	// level early leaves every job it creates with no pull secret at all.
+	"CronJob": {"spec", "jobTemplate", "spec", "template", "spec"},
+	"Pod":     {"spec"},
+}
+
+// WithPullSecret puts a pull secret on the pod template of a manifest.
+//
+// Only when the manifest actually has a pod template: a Service or a ConfigMap is not
+// left alone, because writing a field that does not belong on a kind is how an apply
+// fails with a message about a field nobody mentioned.
+func WithPullSecret(body []byte, kind, secretName string) []byte {
+	if secretName == "" {
+		return body
+	}
+
+	// sigs.k8s.io/yaml rather than the apimachinery one: that one converts to JSON,
+	// and a manifest written back as JSON is a different file from the one the
+	// repository holds — comments gone, quoting changed, anchors resolved.
+	var object map[string]any
+	if err := sigsyaml.Unmarshal(body, &object); err != nil {
+		return body
+	}
+
+	fields, isWorkload := podSpecPaths[kind]
+	if !isWorkload {
+		return body
+	}
+
+	target := object
+	for _, path := range fields {
+		next, ok := target[path].(map[string]any)
+		if !ok {
+			return body
+		}
+		target = next
+	}
+
+	if !setPullSecret(target, secretName) {
+		return body
+	}
+	return reMarshal(object, body)
+}
+
+// setPullSecret adds the secret to a pod spec, without dropping the ones already
+// there.
+//
+// Added rather than replaced: somebody who wrote a secret of their own into the
+// repository meant it, and dogit removing it would break a deployment it had no part
+// in. A secret of the same name is replaced, because ours is the one that matters.
+func setPullSecret(spec map[string]any, secretName string) bool {
+	existing, _ := spec["imagePullSecrets"].([]any)
+
+	already := false
+	kept := make([]any, 0, len(existing)+1)
+	for _, one := range existing {
+		entry, ok := one.(map[string]any)
+		if ok && entry["name"] == secretName {
+			// Ours, and the only one that can be ours: keep it where it was, so a
+			// manifest that already asks for the secret comes back byte for byte.
+			if !already {
+				kept = append(kept, one)
+			}
+			already = true
+			continue
+		}
+		kept = append(kept, one)
+	}
+
+	if already {
+		return len(kept) != len(existing)
+	}
+	spec["imagePullSecrets"] = append(kept, map[string]any{"name": secretName})
+	return true
+}
+
+// reMarshal is the object back as YAML, or the original bytes if it will not go.
+//
+// The original on failure, because a manifest that cannot be written back is one that
+// cannot be deployed at all, and applying it as it was written is better than applying
+// nothing with an error about YAML.
+//
+// Note what this costs: the round trip through a Go map rewrites the document, so a
+// manifest that gains a pull secret loses its comments and its quoting. Only the
+// manifests that actually change are rewritten — one that already asks for the secret
+// is returned byte for byte — and the alternative, editing the YAML as text, is a
+// parser that will be wrong in a way nothing reports.
+func reMarshal(object map[string]any, original []byte) []byte {
+	encoded, err := sigsyaml.Marshal(object)
+	if err != nil {
+		return original
+	}
+	return encoded
 }

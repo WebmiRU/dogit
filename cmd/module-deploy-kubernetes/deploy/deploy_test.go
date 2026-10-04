@@ -29,6 +29,8 @@ type fakeClient struct {
 	failOn      map[string]error
 	rollouts    map[string]k8s.Rollout
 	rollbackErr error
+	// pullSecrets is what was written into the namespace, in order.
+	pullSecrets []k8s.PullSecret
 }
 
 func newFake() *fakeClient {
@@ -44,6 +46,13 @@ func (f *fakeClient) Apply(_ context.Context, object k8s.Object) (k8s.State, err
 	}
 	f.applied = append(f.applied, object)
 	return k8s.State{Ref: object.Ref(), Applied: true}, nil
+}
+
+// EnsurePullSecret records what was written, because whether a namespace has the
+// credential is the difference between pods that start and pods that do not.
+func (f *fakeClient) EnsurePullSecret(_ context.Context, namespace string, secret k8s.PullSecret) error {
+	f.pullSecrets = append(f.pullSecrets, secret)
+	return nil
 }
 
 func (f *fakeClient) Get(_ context.Context, ref k8s.Object) (*unstructured.Unstructured, error) {
