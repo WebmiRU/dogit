@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -131,11 +132,30 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	answer, err := s.callDeployModule(r.Context(), module, http.MethodPost, "/revert", body)
+	answer, err := s.callDeployModuleStream(r.Context(), module, "/revert", body, func(line []byte) {
+		// Each line the module sends is relayed as an event, so a page watching the
+		// history sees the pods coming up rather than nothing for two minutes and then
+		// a state change.
+		var progress struct {
+			Phase   string `json:"phase"`
+			Message string `json:"message"`
+			Ready   int    `json:"ready"`
+			Desired int    `json:"desired"`
+			Failed  bool   `json:"failed"`
+		}
+		if json.Unmarshal(line, &progress) != nil || progress.Message == "" {
+			return
+		}
+		s.publishPipeline(r.Context(), project.ID, nil, models.EventJobUpdated, map[string]any{
+			"phase": progress.Phase, "message": progress.Message,
+			"ready": progress.Ready, "desired": progress.Desired,
+		})
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	_ = answer
 
 	s.log.Info("a version was put back", "project", project.Path,
 		"cluster", request.Cluster, "deployment", request.DeploymentID, "user", user.Username)
@@ -229,4 +249,59 @@ func (s *Server) writeRaw(w http.ResponseWriter, r *http.Request, status int, bo
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+// callDeployModuleStream asks a deploy module something and relays each line as it
+// arrives.
+//
+// The same shape as callDeployModule, with the body of the response read line by line
+// as it comes rather than at the end: a revert is a rollout, and the pods coming up
+// one at a time is the part somebody watching actually wants.
+func (s *Server) callDeployModuleStream(ctx context.Context, module *models.Integration,
+	path string, body []byte, onLine func([]byte)) ([]byte, error) {
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(module.Endpoint, "/")+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("could not address the %s module: %w", module.Kind, err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/x-ndjson")
+
+	// No timeout at all, as for a deploy: the module decides how long a rollout takes.
+	response, err := (&http.Client{Timeout: 0}).Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("the %s module did not answer: %w", module.Kind, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		var refused struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(raw, &refused) == nil && refused.Error.Message != "" {
+			return nil, errBadRequestf("the %s module said: %s", module.Kind, refused.Error.Message)
+		}
+		return nil, fmt.Errorf("the %s module said %s", module.Kind, response.Status)
+	}
+
+	var whole []byte
+	reader := bufio.NewReader(response.Body)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
+			whole = append(whole, trimmed...)
+			whole = append(whole, byte(10))
+			if onLine != nil {
+				onLine(trimmed)
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	return whole, nil
 }

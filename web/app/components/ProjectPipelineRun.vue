@@ -12,7 +12,8 @@
  * than on a page of its own, so the whole shape of the run stays visible while
  * one part of it is being read.
  */
-import type { ModulePipeline, PipelineJob, PipelineStage } from '~/types/pipeline'
+import type { DeployProgress, ModulePipeline, PipelineJob, PipelineStage } from '~/types/pipeline'
+import type { InstanceEvent } from '~/composables/useEvents'
 import { formatDuration, statusClass, statusText } from '~/types/pipeline'
 
 const props = defineProps<{
@@ -81,6 +82,56 @@ const consumed = ref<Record<number, number>>({})
 
 /** True while the following loop is in flight, so a second one is not started. */
 const followLoopRunning = ref(false)
+
+/**
+ * Where each deploying job has got to, while it is getting there.
+ *
+ * Kept here rather than in the job itself because it is not part of the job: it is the
+ * last thing the module said, and it changes many times a minute while the job's own
+ * status stays "running" the whole time. Drawn as it arrives and dropped when the job
+ * stops running — there is no progress after the end, and a stale bar is worse than no
+ * bar because it looks current.
+ */
+const deployProgress = ref<Record<number, DeployProgress>>({})
+
+function noteProgress(event: InstanceEvent) {
+  const payload = event.payload ?? {}
+  const jobID = Number(payload.job_id ?? 0)
+  if (!jobID || typeof payload.message !== 'string') return
+
+  const next = deployProgress.value[jobID]
+  // Only a deployment says anything about phases; a test job finishing must not
+  // leave a progress bar behind on some other row.
+  if (!next && !payload.phase) return
+
+  deployProgress.value = {
+    ...deployProgress.value,
+    [jobID]: {
+      phase: String(payload.phase ?? next?.phase ?? ''),
+      message: payload.message as string,
+      ready: Number(payload.ready ?? next?.ready ?? 0),
+      desired: Number(payload.desired ?? next?.desired ?? 0),
+      step: Number(payload.step ?? next?.step ?? 0),
+      of: Number(payload.of ?? next?.of ?? 0),
+    },
+  }
+}
+
+/** Nothing running means nothing is being reported about. */
+const finishedJobs = computed(() =>
+  new Set(
+    jobs.value
+      .filter((job) => job.status !== 'running' && job.status !== 'pending')
+      .map((job) => job.id),
+  ),
+)
+const visibleProgress = computed(() => {
+  const out: Record<number, DeployProgress> = {}
+  for (const [id, progress] of Object.entries(deployProgress.value)) {
+    if (!finishedJobs.value.has(Number(id))) out[Number(id)] = progress
+  }
+  return out
+})
 
 const running = computed(() => jobs.value.some((job) => job.status === 'running'))
 const pending = computed(() => jobs.value.some((job) => job.status === 'pending'))
@@ -320,8 +371,9 @@ onMounted(async () => {
   // keeps listening, so a job retried from another page — or a run started from the
   // list — is picked up without a reload.
   stopWatching = watchEvents({
-    kinds: ['pipeline.created', 'pipeline.updated'],
+    kinds: ['pipeline.created', 'pipeline.updated', 'job.updated'],
     project: () => props.projectPath,
+    onEvent: noteProgress,
     onChange: () => {
       if (!followLoopRunning.value && (running.value || pending.value)) void follow()
     },
@@ -443,6 +495,7 @@ watch(() => props.runIid, async () => {
                 <strong>{{ selectedJob.name }}</strong>
                 <span class="muted small">{{ selectedJob.stage }}</span>
                 <div class="spacer" />
+                <span v-if="selectedJob.status === 'running'" class="spinner small" />
                 <span class="muted small mono">{{ selectedJob.image }}</span>
                 <span v-if="selectedJob.duration_ms" class="muted small mono">
                   {{ formatDuration(selectedJob.duration_ms) }}
@@ -450,6 +503,13 @@ watch(() => props.runIid, async () => {
               </div>
 
               <div class="card-body">
+                <!-- Only while a deployment is actually under way: a progress bar that
+                     outlives the deployment is a stale claim that something is moving,
+                     which is worse than no bar at all. -->
+                <DeployProgressBar
+                  v-if="visibleProgress[selectedJob.id]"
+                  :progress="visibleProgress[selectedJob.id]"
+                />
                 <details v-if="selectedJob.script?.length" class="script">
                   <summary class="muted small">
                     Script ({{ selectedJob.script.length }} lines)

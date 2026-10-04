@@ -49,6 +49,15 @@ export interface WatchOptions {
    * project it may not see.
    */
   project?: string | (() => string | undefined)
+  /**
+   * Called with each event that was wanted, payload and all.
+   *
+   * Off by default and normally wrong: the signal is not the data, and a page that
+   * draws from a payload is drawing from something that was true when it was sent.
+   * It exists for the one thing that cannot be re-read — a deployment's progress,
+   * which is gone by the time anybody could ask what it was.
+   */
+  onEvent?: (event: Event) => void
   /** How often to ask when the server has not said. */
   intervalMS?: number
   /** Called when one of the watched kinds arrives. */
@@ -89,6 +98,13 @@ export function watchEvents(options: WatchOptions): () => void {
       // The signal is not the data: whatever this page shows is fetched again from
       // the endpoint it trusts, so nothing is ever drawn from a payload.
       if (interesting) options.onChange?.()
+
+      if (options.onEvent) {
+        for (const event of answer.events ?? []) {
+          if (watched && !watched.has(event.kind)) continue
+          options.onEvent(event)
+        }
+      }
     } catch {
       // A poll that failed is not a reason to stop watching: the page is over a
       // network that blips, and the next one tries again.

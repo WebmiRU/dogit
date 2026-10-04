@@ -131,6 +131,15 @@ const images = computed(() => {
   return out
 })
 
+/**
+ * The image each place is running right now, from the newest successful deployment.
+ *
+ * Used to say so on the row it matches and to stop that row offering to put itself
+ * back: it is already there, and a button that would do nothing while reporting that
+ * it did something is worse than no button.
+ */
+const live = computed(() => new Set(places.value.map((one) => one.deployment.id)))
+
 const filtered = computed(() => {
   if (!stateFilter.value) return deployments.value
   return deployments.value.filter((one) => one.state === stateFilter.value)
@@ -312,8 +321,12 @@ watch(() => props.module.id, load)
                 <button
                   class="btn btn-small"
                   type="button"
-                  :disabled="busy || !isLive(deployment)"
-                  title="Put this image back on the workload"
+                  :disabled="busy || !isLive(deployment) || live.has(deployment.id)"
+                  :title="
+                    live.has(deployment.id)
+                      ? 'This is the image running now, so there is nothing to put back'
+                      : 'Put this image back on the workload'
+                  "
                   @click="revertTo(deployment)"
                 >
                   Revert to this
@@ -457,6 +470,10 @@ th {
   align-items: center;
   gap: 10px;
   margin-top: 10px;
+}
+
+.live {
+  margin-left: 6px;
 }
 
 .nowrap {

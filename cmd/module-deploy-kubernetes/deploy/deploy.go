@@ -89,6 +89,14 @@ type Request struct {
 	Workload string
 	// Timeout is how long to wait. Zero means the target's own.
 	Timeout time.Duration
+
+	// Progress says what is happening, as it happens.
+	//
+	// Called throughout and never waited on: this is what somebody is watching while
+	// a rollout runs, and the alternative — a page that says "deploying" until it is
+	// either done or wrong — cannot tell them which of a hundred pods is unhappy.
+	// A nil Progress is fine and means nothing is watching.
+	Progress func(Progress)
 	// KeepJobs leaves the phase Jobs in place after they finish. Off by default: a Job
 	// that has run and succeeded is history, and a namespace that accumulates them is a
 	// namespace nobody can read.
@@ -211,10 +219,19 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 	}
 	d.logf("deployment started: %s to %s/%s", record.ID, request.Cluster, request.Namespace)
 
+	// Every phase says what it is about to do, so a watcher is never left with a
+	// deployment that has started and nothing further to show for it.
+	request.report(Progress{Phase: StepPrepare, Message: fmt.Sprintf(
+		"preparing %d manifest(s) for %s/%s", len(request.Manifests), request.Cluster, request.Namespace)})
+
 	// Pre: jobs that must pass before anything moves.
-	for _, job := range request.Pre {
+	for index, job := range request.Pre {
+		request.report(Progress{Phase: StepPre, Step: index + 1, Of: len(request.Pre),
+			Message: fmt.Sprintf("running the pre-step job %s", job.Name)})
 		job.Object.Body = k8s.WithPullSecret(job.Object.Body, job.Object.Kind, pullSecretFor(request))
 		if err := d.runJob(ctx, substitution, request, job); err != nil {
+			request.report(Progress{Phase: StepPre, Step: index + 1, Of: len(request.Pre),
+				Message: err.Error(), Failed: true})
 			return d.fail(ctx, record, PhasePre, err)
 		}
 	}
@@ -229,10 +246,16 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		}
 		secretName = request.PullSecret.Name
 		d.logf("wrote the pull secret %s", secretName)
+		request.report(Progress{Phase: StepPull, Message: fmt.Sprintf(
+			"the cluster can pull from %s", secretName)})
+	} else {
+		request.report(Progress{Phase: StepPull, Message: "the image needs no credential"})
 	}
 
 	// Apply: what the repository wrote, with one thing changed.
-	for _, object := range request.Manifests {
+	for index, object := range request.Manifests {
+		request.report(Progress{Phase: StepApply, Step: index + 1, Of: len(request.Manifests),
+			Message: fmt.Sprintf("applying %s %s", object.Kind, object.Name)})
 		body := k8s.WithPullSecret(substitution.Apply(object.Body), object.Kind, secretName)
 		written := object
 		written.Body = body
@@ -241,17 +264,29 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 			return d.fail(ctx, record, PhaseApply, err)
 		}
 		d.logf("applied %s", written.Ref())
+		request.report(Progress{Phase: StepApply, Step: index + 1, Of: len(request.Manifests),
+			Message: fmt.Sprintf("applied %s %s", written.Kind, written.Name)})
 	}
 
 	// The rollout itself, when somebody asked to wait for it.
 	if request.WaitForRollout && request.Rollout != "" {
-		if err := d.wait(ctx, request); err != nil {
+		// Watching: the count of pods is the thing somebody watching actually wants,
+		// and it is only knowable by asking the cluster as it goes.
+		stop := d.watchRollout(ctx, request)
+		err := d.wait(ctx, request)
+		stop()
+		if err != nil {
+			request.report(Progress{Phase: StepRollout, Message: err.Error(), Failed: true})
 			return d.fail(ctx, record, PhaseApply, err)
 		}
+		request.report(Progress{Phase: StepRollout,
+			Message: "every pod is running the new image"})
 	}
 
 	// Post: judged separately, and never mistaken for the deployment having worked.
-	for _, job := range request.Post {
+	for index, job := range request.Post {
+		request.report(Progress{Phase: StepPost, Step: index + 1, Of: len(request.Post),
+			Message: fmt.Sprintf("running the post-step job %s", job.Name)})
 		job.Object.Body = k8s.WithPullSecret(job.Object.Body, job.Object.Kind, pullSecretFor(request))
 		if err := d.runJob(ctx, substitution, request, job); err != nil {
 			failed, finishErr := d.finish(ctx, record, PhasePost, StateFailed, err.Error())
@@ -426,11 +461,18 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		timeout = 10 * time.Minute
 	}
 
+	// Watching, as with a deploy: the pods are the progress.
+	stop := d.watchRollout(ctx, Request{Progress: request.Progress, Rollout: workload,
+		Namespace: namespace})
 	rollout, err := d.client.SetImage(ctx, namespace, workload, target.Image, timeout)
+	stop()
 	if err != nil {
 		return Deployment{}, err
 	}
 	d.logf("put %s back on %s: %s", target.Image, workload, rollout.Reason)
+
+	report(request.Progress, Progress{Phase: StepApply, Message: fmt.Sprintf(
+		"%s now runs %s", workload, target.Image)})
 
 	// A new record rather than a change to the old one.
 	//
@@ -454,6 +496,9 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		return reverted, err
 	}
 
+	report(request.Progress, Progress{Phase: StepRollout, Ready: int(rollout.Ready),
+		Desired: int(rollout.Desired), Message: rollout.Reason})
+
 	reverted, err = d.finish(ctx, reverted, PhaseApply, StateReverted,
 		fmt.Sprintf("the image of deployment %s was put back on %s; a migration, a ConfigMap and "+
 			"anything else applied alongside were left as they are", request.ID, workload))
@@ -461,6 +506,55 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		return reverted, err
 	}
 	return reverted, nil
+}
+
+// Progress is one thing that is happening, or has happened, in a deployment.
+//
+// A flat shape on purpose: this crosses a process boundary as JSON and is rendered by
+// something that is not this module, and every level of nesting is a place the two can
+// disagree about what a field means.
+type Progress struct {
+	// Phase is which part of the deployment this is: prepare, pull, apply, rollout.
+	Phase string `json:"phase"`
+	// Step and of say where in that phase, so a rollout of four manifests reads "3 of 4"
+	// rather than three lines in a row with nothing to count.
+	Step int `json:"step,omitempty"`
+	Of   int `json:"of,omitempty"`
+	// Message is the sentence to show, in this module's words.
+	Message string `json:"message"`
+	// Ready and Desired are the pods, when this is about pods.
+	Ready   int `json:"ready,omitempty"`
+	Desired int `json:"desired,omitempty"`
+	// Failed is set once something has gone wrong, and the message says what.
+	Failed bool `json:"failed,omitempty"`
+	// Done ends the stream.
+	Done bool `json:"done,omitempty"`
+	// Deployment is the record, sent once at the end.
+	Deployment *Deployment `json:"deployment,omitempty"`
+}
+
+// The phases a deployment goes through, in the order they happen.
+const (
+	StepPrepare = "prepare"
+	StepPre     = "pre"
+	StepPull    = "pull"
+	StepApply   = "apply"
+	StepRollout = "rollout"
+	StepPost    = "post"
+)
+
+// report is the progress callback, or nothing at all.
+func (r Request) report(progress Progress) {
+	report(r.Progress, progress)
+}
+
+// report says something happened, to whoever is watching. A nil callback means
+// nothing is, which is a normal way to run this.
+func report(to func(Progress), progress Progress) {
+	if to == nil {
+		return
+	}
+	to(progress)
 }
 
 // RevertRequest is which deployment to go back to, and where.
@@ -473,6 +567,8 @@ type RevertRequest struct {
 	Workload  string
 	Namespace string
 	Timeout   time.Duration
+	// Progress says what is happening, as it happens.
+	Progress func(Progress)
 }
 
 // Finish closes a deployment from outside Run, which is what a rollback does.
@@ -537,4 +633,61 @@ func pullSecretFor(request Request) string {
 		return ""
 	}
 	return request.PullSecret.Name
+}
+
+// watchRollout asks the cluster how the rollout is going, until told to stop.
+//
+// Returns the function that stops it. Poll rather than watch: a watch on Deployment
+// status needs a resource version and re-establishes itself, and a number that is
+// read every couple of seconds answers the only question anybody watching has — how
+// many of the pods are up.
+//
+// Only reports when the numbers actually move. A page that repaints the same "2 of 3"
+// every two seconds is harder to read than one that says nothing until it changes.
+func (d *Deployer) watchRollout(ctx context.Context, request Request) func() {
+	if request.Progress == nil || request.Rollout == "" {
+		return func() {}
+	}
+
+	stop := make(chan struct{})
+	finished := make(chan struct{})
+
+	go func() {
+		defer close(finished)
+
+		lastReady, lastDesired := int32(-1), int32(-1)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			rollout, err := d.client.Rollout(ctx, request.Namespace, request.Rollout)
+			if err != nil {
+				continue
+			}
+			if rollout.Ready == lastReady && rollout.Desired == lastDesired {
+				continue
+			}
+			lastReady, lastDesired = rollout.Ready, rollout.Desired
+
+			request.Progress(Progress{
+				Phase:   StepRollout,
+				Message: rollout.Reason,
+				Ready:   int(rollout.Ready),
+				Desired: int(rollout.Desired),
+			})
+		}
+	}()
+
+	return func() {
+		close(stop)
+		<-finished
+	}
 }

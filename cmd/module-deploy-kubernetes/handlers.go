@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -129,6 +130,10 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	keepJobs := request.KeepJobs || boolSetting(settings, "keep_jobs")
 
+	// The answer is a stream, not a value: a deployment takes minutes, and a caller
+	// that hears nothing until the end is watching a spinner rather than a rollout.
+	stream := newProgressWriter(w)
+
 	deployer := deploy.New(client, c.history, func(format string, args ...any) {
 		log.Printf(format, args...)
 	})
@@ -146,6 +151,7 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	record, err := deployer.Run(ctx, deploy.Request{
+		Progress:       stream.send,
 		Project:        request.Project,
 		PullSecret:     pullSecret,
 		Cluster:        cluster.Name,
@@ -162,24 +168,22 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		KeepJobs:       keepJobs,
 	})
 
-	if err != nil {
-		// Said plainly, rather than as the record of a deployment that is somehow
-		// running. "Another deployment to this place is in progress" and a record
-		// saying "running" with nothing after it are the same answer as far as a
-		// reader is concerned, and only one of them can be acted on.
-		var busy deploy.ErrBusy
-		if errors.As(err, &busy) {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error": map[string]any{"message": err.Error()},
-			})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"deployment": viewOf(record), "error": err.Error(),
-		})
+	// However it went, the last line says so and carries the record. The status is 200
+	// either way: the request was answered, and the answer is what happened rather than
+	// whether it was what was hoped for — so a reader takes the last line and is never
+	// left guessing from a status code.
+	//
+	// One place it is not 200: a place that is already being deployed to was never
+	// deployed at all, so there is no record and no stream to say anything into.
+	var busy deploy.ErrBusy
+	if errors.As(err, &busy) {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deployment": viewOf(record)})
+	if err != nil {
+		stream.send(deploy.Progress{Phase: string(record.Phase), Message: err.Error(), Failed: true})
+	}
+	stream.send(deploy.Progress{Done: true, Message: "finished", Deployment: &record})
 }
 
 // clusterFor resolves which cluster, which namespace, and a client for it.
@@ -255,24 +259,33 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A stream, like a deploy: putting a version back is a rollout too, and the pods
+	// coming up one at a time is exactly what somebody watching wants to see.
+	stream := newProgressWriter(w)
+
 	deployer := deploy.New(client, c.history, func(format string, args ...any) {
 		log.Printf(format, args...)
 	})
 
 	record, err := deployer.Revert(ctx, deploy.RevertRequest{
+		Progress:  stream.send,
 		ID:        id,
 		Workload:  request.Workload,
 		Namespace: namespace,
 		Timeout:   timeoutFrom(mustSettings(ctx, c, request.Project), "default_rollout_timeout", 10*time.Minute),
 	})
-	if err != nil {
-		// Refused, and said as a refusal: a revert that changed nothing and reported
-		// success is the answer that makes people believe their cluster is somewhere
-		// it is not.
+	// A refusal before anything was written is a refusal; anything after is part of the
+	// stream, so that a revert that started and then failed is told rather than
+	// silently turned into a page that stops updating.
+	var busy deploy.ErrBusy
+	if errors.As(err, &busy) || (err != nil && record.ID == uuid.Nil) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deployment": viewOf(record)})
+	if err != nil {
+		stream.send(deploy.Progress{Message: err.Error(), Failed: true})
+	}
+	stream.send(deploy.Progress{Done: true, Message: "finished", Deployment: &record})
 }
 
 // mustSettings is the module's settings for a project, or empty.
@@ -472,4 +485,39 @@ type namespaceMissingError struct{ cluster string }
 func (e *namespaceMissingError) Error() string {
 	return "cluster " + e.cluster + " has no namespace and this deployment did not name one; " +
 		"dogit does not guess a namespace and does not create one"
+}
+
+// progressWriter streams a deployment's progress as ndjson.
+//
+// One JSON object per line, and every line complete on its own, because the reader on
+// the other side is a page that shows whatever has arrived so far: it has to be able
+// to draw after the first line rather than after the last. It also means a caller that
+// goes away mid-deployment has still been told everything that happened up to that
+// point — which is the case that lost a rollout once already.
+type progressWriter struct {
+	writer  http.ResponseWriter
+	encoder *json.Encoder
+}
+
+func newProgressWriter(w http.ResponseWriter) *progressWriter {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	// Said before anything is written: a proxy that waits for a complete body would
+	// buffer the whole deployment and undo the entire point.
+	w.WriteHeader(http.StatusOK)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return &progressWriter{writer: w, encoder: json.NewEncoder(w)}
+}
+
+// send writes one line, and flushes it.
+//
+// Flushed every time: a rollout of two minutes is useless to somebody if the lines
+// arrive all at once at the end of it.
+func (p *progressWriter) send(progress deploy.Progress) {
+	_ = p.encoder.Encode(progress)
+	if flusher, ok := p.writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -101,25 +102,6 @@ type deployStep struct {
 	Image      string   `json:"image"`
 	Command    []string `json:"command"`
 	Body       string   `json:"body"`
-}
-
-// deployAnswer is what the module says it did.
-//
-// The record is the answer. A module that ran and failed has still done something,
-// and a caller that only got a status code would have to ask again about a
-// deployment it already started.
-type deployAnswer struct {
-	Deployment struct {
-		ID        string `json:"id"`
-		State     string `json:"state"`
-		Phase     string `json:"phase"`
-		Reason    string `json:"reason"`
-		Image     string `json:"image"`
-		Cluster   string `json:"cluster"`
-		Namespace string `json:"namespace"`
-		Workload  string `json:"workload"`
-	} `json:"deployment"`
-	Error string `json:"error"`
 }
 
 // imagePlaceholder is what the manifests write where the image goes.
@@ -227,11 +209,12 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		return fmt.Errorf("could not address the %s module: %w", spec.Target, err)
 	}
 	call.Header.Set("Content-Type", "application/json")
+	call.Header.Set("Accept", "application/x-ndjson")
 
-	// A deployment is not something to time out on the way out: the module decides
-	// how long a rollout takes, and cutting it off here would leave a cluster doing
-	// something the core has stopped watching, which is the state nobody can answer
-	// a question about.
+	// A deployment is not something to time out on the way out: the module decides how
+	// long a rollout takes, and cutting it off here would leave a cluster doing
+	// something the core has stopped watching, which is the state nobody can answer a
+	// question about.
 	client := &http.Client{Timeout: 0}
 	response, err := client.Do(call)
 	if err != nil {
@@ -240,44 +223,106 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	}
 	defer response.Body.Close()
 
-	raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if response.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		message := strings.TrimSpace(string(raw))
 		log("The %s module refused: %s\n", spec.Target, message)
 		return fmt.Errorf("the %s module refused: %s", spec.Target, message)
 	}
 
-	var answer deployAnswer
-	if err := json.Unmarshal(raw, &answer); err != nil {
-		log("The %s module's answer could not be read: %v\n", spec.Target, err)
-		return fmt.Errorf("the %s module's answer could not be read: %w", spec.Target, err)
-	}
+	// The module narrates as it goes, and everything it says goes into the job's log
+	// as it arrives rather than at the end. This log is what the pipeline page shows,
+	// and a deployment that reports itself only once it has finished is a spinner with
+	// words in it.
+	//
+	// It is published as an event too, so a page that is watching shows the pods coming
+	// up instead of waiting to be told that the whole thing is over.
+	var (
+		failed  string
+		arrived int
+	)
+	reader := bufio.NewReader(response.Body)
+	for {
+		line, readErr := reader.ReadBytes('\n')
 
-	// The module's own words about what happened, kept as its own. The core does not
-	// improve on them: "3 of 3 updated" and "rolled back to sha256:..." are facts
-	// about a cluster that only the module was in a position to learn.
-	for _, line := range strings.Split(answer.Deployment.Reason, "\n") {
-		if strings.TrimSpace(line) != "" {
-			log("  %s\n", strings.TrimSpace(line))
+		if trimmed := strings.TrimSpace(string(line)); trimmed != "" {
+			var progress deployProgress
+			if json.Unmarshal([]byte(trimmed), &progress) == nil && progress.Message != "" {
+				arrived++
+				stream := "out"
+				if progress.Failed {
+					stream = "err"
+					failed = progress.Message
+				}
+				_, _ = s.appendJobOutput(ctx, job, stream, progressLine(progress))
+
+				s.publishPipeline(ctx, project.ID, nil, models.EventJobUpdated, map[string]any{
+					"job_id":  job.ID,
+					"phase":   progress.Phase,
+					"message": progress.Message,
+					"ready":   progress.Ready,
+					"desired": progress.Desired,
+					"step":    progress.Step,
+					"of":      progress.Of,
+				})
+			}
+		}
+
+		if readErr != nil {
+			break
 		}
 	}
 
-	if answer.Error != "" {
-		log("%s\n", answer.Error)
-		return fmt.Errorf("%s", answer.Error)
+	if failed != "" {
+		return fmt.Errorf("%s", failed)
+	}
+	if arrived == 0 {
+		// Silence after a deployment is not a result. It means the stream ended before
+		// anything was said, and the cluster may or may not have been touched at all.
+		return fmt.Errorf("the %s module said nothing about what it did", spec.Target)
 	}
 
-	switch answer.Deployment.State {
-	case "succeeded", "rolled_back":
-		log("Deployed in %s.\n", time.Since(started).Round(time.Second))
-		return nil
-	case "":
-		log("The module said nothing about what it did.\n")
-		return fmt.Errorf("the %s module did not report a state", spec.Target)
-	default:
-		log("The deployment %s: %s\n", answer.Deployment.State, answer.Deployment.Reason)
-		return fmt.Errorf("the deployment %s: %s", answer.Deployment.State, answer.Deployment.Reason)
+	log("Deployed in %s.\n", time.Since(started).Round(time.Second))
+	return nil
+}
+
+// deployProgress is one thing the module is doing, as it tells it.
+type deployProgress struct {
+	Phase   string `json:"phase"`
+	Step    int    `json:"step"`
+	Of      int    `json:"of"`
+	Message string `json:"message"`
+	Ready   int    `json:"ready"`
+	Desired int    `json:"desired"`
+	Failed  bool   `json:"failed"`
+	Done    bool   `json:"done"`
+}
+
+// progressLine is one step as it goes into the job's log.
+//
+// The phase and the counts come first, because a log read afterwards is scanned for
+// "did it work", and "rollout: 2 of 3 ready — 1 of 1 updated" answers that where a
+// bare sentence does not.
+func progressLine(progress deployProgress) string {
+	var line strings.Builder
+
+	switch progress.Phase {
+	case "prepare", "pre", "pull", "apply", "rollout", "post":
+		line.WriteString(progress.Phase + ": ")
 	}
+
+	switch {
+	case progress.Desired > 0:
+		line.WriteString(fmt.Sprintf("%d of %d ready", progress.Ready, progress.Desired))
+		if progress.Message != "" {
+			line.WriteString(" — ")
+		}
+	case progress.Of > 0:
+		line.WriteString(fmt.Sprintf("%d of %d — ", progress.Step, progress.Of))
+	}
+
+	line.WriteString(progress.Message)
+	return line.String() + "\n"
 }
 
 // imageForDeploy is the image this run produced, resolved to a digest.

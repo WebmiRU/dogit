@@ -555,6 +555,17 @@ func (c *clusterClient) SetImage(ctx context.Context, namespace, name, image str
 		return Rollout{}, fmt.Errorf("read deployment %s: %w", name, err)
 	}
 
+	// Already running it, and said so.
+	//
+	// Setting an image a workload already has changes nothing: no template differs, so
+	// no new pods, so nothing anybody watching would see — and the operation then
+	// reports success. That is the answer that teaches people not to trust the button,
+	// so it is refused with the reason rather than performed quietly.
+	if current := imagesOf(deployment); current == image {
+		return Rollout{}, fmt.Errorf(
+			"%s is already running %s, so there is nothing to put back", name, image)
+	}
+
 	changed := deployment.DeepCopy()
 	for index := range changed.Spec.Template.Spec.Containers {
 		changed.Spec.Template.Spec.Containers[index].Image = image

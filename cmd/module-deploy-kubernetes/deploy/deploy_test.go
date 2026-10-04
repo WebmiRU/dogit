@@ -584,3 +584,27 @@ func TestACancelledCallerStillLeavesTheRecordFinished(t *testing.T) {
 		t.Error("the record is still running: the place is now held for ever")
 	}
 }
+
+// Putting back the image that is already running is refused.
+//
+// It changes nothing — no template differs, so no new pods — and then reports success,
+// which is how a button stops being believed. Said plainly instead.
+func TestARevertToTheImageAlreadyRunningIsRefused(t *testing.T) {
+	client := newFake()
+	client.setImageFails = "reg/app@sha256:aaa"
+	history := newHistory()
+	deployer := &Deployer{client: client, history: history, Now: time.Now}
+
+	deployed, err := deployer.Run(context.Background(), Request{
+		Project: "home-store/www", Cluster: "production", Namespace: "web",
+		Image: "reg/app@sha256:aaa", Placeholder: "IMAGE",
+		Manifests: []k8s.Object{manifestObject("app", "IMAGE")}, Workload: "app",
+	})
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+
+	if _, err := deployer.Revert(context.Background(), RevertRequest{ID: deployed.ID}); err == nil {
+		t.Fatal("putting back the image already running was reported as done")
+	}
+}

@@ -80,6 +80,8 @@ export interface PipelineJob {
   allow_failure: boolean
   /** Present when the job produces an image; the registry module's own shape. */
   build?: Record<string, unknown>
+  /** Present on a job that deploys rather than runs a script. */
+  deploy?: Record<string, unknown>
   duration_ms?: number
   created_at: string
   started_at?: string
@@ -150,4 +152,25 @@ export function formatDuration(ms?: number): string {
   return hours > 0
     ? `${hours}:${pad(minutes)}:${pad(seconds)}`
     : `${pad(minutes)}:${pad(seconds)}`
+}
+
+/**
+ * Where a deployment has got to, while it is getting there.
+ *
+ * Sent as an event while the deployment runs rather than read afterwards: a deploy is
+ * minutes of work and the interesting part of it — which pods are up, what failed —
+ * exists only while it happens. Everything else on this page is either a state or a
+ * number that changes when the job does.
+ */
+export interface DeployProgress {
+  /** Which part of the deployment this is. */
+  phase: 'prepare' | 'pre' | 'pull' | 'apply' | 'rollout' | 'post' | string
+  /** The sentence to show, in the module's words. */
+  message: string
+  /** Pods ready and wanted, while a rollout is happening. */
+  ready?: number
+  desired?: number
+  /** Which of the things this phase had to do, and which it is on. */
+  step?: number
+  of?: number
 }
