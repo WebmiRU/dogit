@@ -423,6 +423,10 @@ func (r *EventRepo) VisibleSince(ctx context.Context, userID uuid.UUID, projectI
 			&payload); err != nil {
 			return nil, err
 		}
+		// Kept on the entry, not only folded into its summary: the summary is written
+		// for a person, and a program watching a deployment needs the phase and the
+		// counts, which are gone by the time anybody could ask what they were.
+		entry.Payload = payload
 		describeEvent(&entry, payload)
 		entries = append(entries, entry)
 	}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -68,6 +69,16 @@ type ActivityEntry struct {
 	Summary     string           `json:"summary"`
 	Detail      string           `json:"detail,omitempty"`
 	Ref         string           `json:"ref,omitempty"`
+	// Payload is the event as it was published, unaltered.
+	//
+	// Present because some events cannot be asked about again: a deployment's
+	// progress is gone by the time anybody could re-read it, and the page watching
+	// a rollout live has no endpoint to ask. Summary and Detail are written for a
+	// person and lose everything a program needs — which phase, how many pods.
+	//
+	// It is not the record itself and deliberately not the whole of it: it is the
+	// signal, so that a page which can re-read what it shows still does.
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
 // RecentActivity returns the newest events across every project the user can see.
