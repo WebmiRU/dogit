@@ -54,6 +54,8 @@ let stream: EventSource | null = null
 let opening = false
 /** A retry is already scheduled, so a refused socket does not queue up a dozen. */
 let retrying = false
+/** How many attempts in a row have failed, which sets how long to wait before the next. */
+let attempts = 0
 /** When the last thing arrived, whether an event or a ping. */
 let lastHeard = Date.now()
 
@@ -139,6 +141,7 @@ export function openEventSocket() {
   })
 
   opened.addEventListener('open', () => {
+    attempts = 0
     const wasOpen = openedYet
     openedYet = true
     stream = opened
@@ -172,12 +175,23 @@ export function openEventSocket() {
     console.warn('[dogit] the event stream did not open; trying again')
     opening = false
     if (stream === opened) stream = null
+
+    // Closed before the replacement is opened, and quietly.
+    //
+    // Leaving it to hang is worse than the message: a browser allows only a handful of
+    // connections to one host, so a few attempts that never opened and were never
+    // closed take up the room the working connection needs. That turns one unlucky
+    // attempt into a page that cannot open any at all.
+    opened.close()
+
     if (!retrying) {
       retrying = true
+      const wait = Math.min(1000 * 2 ** attempts, 15000)
+      attempts += 1
       setTimeout(() => {
         retrying = false
         openEventSocket()
-      }, 1500)
+      }, wait)
     }
   })
 
