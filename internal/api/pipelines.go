@@ -652,6 +652,70 @@ func (s *Server) handleJobKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFinishJob records what a runner did with a job.
+// handleJobProgress takes a runner's word for which part of a job it is on, and
+// announces it.
+//
+// A job's log says what was printed; this says what it meant. A build streams
+// hundreds of lines of layers and pushes, and a page watching it live cannot tell
+// from those which part of the work is being done — so the machine doing the work
+// names the phase, and the same feed the deployment already uses carries it.
+//
+// Refused for a job another runner owns, on the same grounds as finishing one: this
+// is a claim about somebody else's work.
+func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
+	integration := integrationFrom(r.Context())
+
+	jobID, err := strconv.ParseInt(pathParam(r, "jobID"), 10, 64)
+	if err != nil {
+		s.writeError(w, r, errBadRequest("a job id is required"))
+		return
+	}
+
+	job, err := s.store.Pipelines().JobByID(r.Context(), jobID)
+	if err != nil {
+		s.writeError(w, r, errNotFound("no such job"))
+		return
+	}
+	if job.RunnerID == nil || *job.RunnerID != integration.ID {
+		s.writeError(w, r, errForbidden("this job belongs to another runner"))
+		return
+	}
+
+	var req struct {
+		Phase   string `json:"phase"`
+		Message string `json:"message"`
+		Ready   int    `json:"ready"`
+		Desired int    `json:"desired"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	phase := strings.TrimSpace(req.Phase)
+	message := strings.TrimSpace(req.Message)
+	if phase == "" || message == "" {
+		s.writeError(w, r, errBadRequest("a phase and a message are both required"))
+		return
+	}
+
+	project, err := s.store.Projects().ByID(r.Context(), job.ProjectID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, map[string]any{
+		"job_id":  job.ID,
+		"phase":   phase,
+		"message": message,
+		"ready":   req.Ready,
+		"desired": req.Desired,
+	})
+
+	s.writeJSON(w, r, http.StatusNoContent, nil)
+}
+
 func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	integration := integrationFrom(r.Context())
 

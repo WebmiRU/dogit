@@ -22,6 +22,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"net/url"
 	"os"
 	"os/exec"
@@ -402,11 +403,23 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	// which is the one outcome nobody can notice until they deploy it.
 	var buildErr error
 	var buildWait chan struct{}
+
+	// Made before the build starts, not after: docker's own progress is the build's
+	// output, and a build that began before its writer existed would have its first
+	// and longest part kept back until the end.
+	out := newLogWriter(ctx, core, job.ID, "out")
+	errs := newLogWriter(ctx, core, job.ID, "err")
+
 	if len(job.Build) > 0 {
 		buildDone := make(chan struct{})
 		go func() {
 			defer close(buildDone)
-			tag, err := buildAndPush(ctx, cfg, workspace, answer.Registry, job.Build)
+			tag, err := buildAndPush(ctx, cfg, workspace, answer.Registry, job.Build, out,
+				func(phase, message string) {
+					if err := core.progress(ctx, job.ID, phase, message); err != nil {
+						log.Printf("module-runner: could not report %s: %v", phase, err)
+					}
+				})
 			if err != nil {
 				buildErr = err
 				return
@@ -416,11 +429,6 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 		// Waited for below, once the script is done: the job's verdict covers both.
 		buildWait = buildDone
 	}
-
-	// Two writers, one per stream: a build's stderr is the line the reader is
-	// looking for, and merging it into stdout makes it look like progress.
-	out := newLogWriter(ctx, core, job.ID, "out")
-	errs := newLogWriter(ctx, core, job.ID, "err")
 
 	result := runtime.Stream(ctx, handle, spec, out, errs)
 
@@ -564,8 +572,13 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 }
 
 // buildAndPush builds the image a job asked for and pushes it to the registry.
+//
+// progress is where docker's own words go as they happen. It is not optional
+// politeness: a build can take minutes, and without it the job's log is empty for
+// the whole of it and then says one line. Somebody watching has nothing to watch.
 func buildAndPush(ctx context.Context, cfg config, workspace string,
-	registry map[string]any, build map[string]any) (string, error) {
+	registry map[string]any, build map[string]any, progress io.Writer,
+	announce func(phase, message string)) (string, error) {
 
 	if registry == nil {
 		return "", errors.New("this instance has no registry to push to")
@@ -592,7 +605,10 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 
 	// The build itself is plain docker: this is the machine that is allowed to run
 	// it, which is the whole reason this process exists as its own binary.
-	args := []string{"build", "-t", full, "-f", filepathJoin(workspace, file), workspace}
+	// Plain progress, asked for rather than inferred: docker decides between lines
+	// and a spinner by whether it has a terminal, and what we want here is lines.
+	args := []string{"build", "--progress=plain", "-t", full,
+		"-f", filepathJoin(workspace, file), workspace}
 	// Provenance off.
 	//
 	// BuildKit attaches a record of how an image was built and pushes it beside the
@@ -605,8 +621,21 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 		args[len(args)-1] = filepathJoin(workspace, contextPath)
 	}
 
-	if output, err := run(ctx, cfg.dockerBinary, args...); err != nil {
-		return "", fmt.Errorf("docker build: %w: %s", err, lastLines(output, 20))
+	// Two things at once from one stream: the log for whoever is watching, and a
+	// short tail for the error message. A build that fails says why in its last few
+	// lines, and by then the whole of it has already gone to the log.
+	buildTail := newTailWriter(20)
+	if announce != nil {
+		announce("build", "building "+file+" from "+contextPath)
+	}
+	if err := runStreaming(ctx, progress, buildTail, cfg.dockerBinary, args...); err != nil {
+		if announce != nil {
+			announce("build", "the build failed")
+		}
+		return "", fmt.Errorf("docker build: %w: %s", err, buildTail.String())
+	}
+	if announce != nil {
+		announce("build", "the image is built")
 	}
 
 	address, _ := registry["url"].(string)
@@ -639,8 +668,22 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 		return "", fmt.Errorf("docker login: %w: %s", err, strings.TrimSpace(output))
 	}
 
-	if output, err := dockerWithConfig(ctx, configDir, cfg.dockerBinary, "", "push", full); err != nil {
-		return "", fmt.Errorf("docker push: %w: %s", err, lastLines(output, 20))
+	// No --progress here: it is a build flag, and push has never had one. With no
+	// terminal attached docker writes plain lines for both, which is what a log
+	// wants anyway — the spinner is for somebody sitting in front of it.
+	pushTail := newTailWriter(20)
+	push := []string{"--config", configDir, "push", full}
+	if announce != nil {
+		announce("push", "pushing to "+host)
+	}
+	if err := runStreaming(ctx, progress, pushTail, cfg.dockerBinary, push...); err != nil {
+		if announce != nil {
+			announce("push", "the push was refused")
+		}
+		return "", fmt.Errorf("docker push: %w: %s", err, pushTail.String())
+	}
+	if announce != nil {
+		announce("push", "the registry has it as "+digestOf(pushTail.String()))
 	}
 	return full, nil
 }
@@ -665,6 +708,56 @@ func run(ctx context.Context, name string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	output, err := command.CombinedOutput()
 	return string(output), err
+}
+
+// runStreaming runs a command and writes what it says as it says it.
+//
+// Both streams into one writer, because docker splits its output across them
+// without meaning to: progress on stdout, the reason on stderr. Separated, the log
+// reads as a build that printed nothing followed by an error out of nowhere.
+func runStreaming(ctx context.Context, progress, tail io.Writer, name string, args ...string) error {
+	command := exec.CommandContext(ctx, name, args...)
+	both := io.MultiWriter(progress, tail)
+	command.Stdout = both
+	command.Stderr = both
+	return command.Run()
+}
+
+// tailWriter keeps the last few lines and forgets the rest.
+//
+// A build prints thousands of lines; the reason it failed is always in the last
+// few, and holding the whole of it to keep those would mean holding a large build
+// in memory to answer for a sentence.
+type tailWriter struct {
+	lines []string
+	limit int
+}
+
+func newTailWriter(limit int) *tailWriter { return &tailWriter{limit: limit} }
+
+func (t *tailWriter) Write(data []byte) (int, error) {
+	t.lines = append(t.lines, strings.SplitAfter(string(data), "\n")...)
+	if len(t.lines) > t.limit {
+		t.lines = t.lines[len(t.lines)-t.limit:]
+	}
+	return len(data), nil
+}
+
+// digestOf reads the digest out of what docker printed about a push.
+//
+// It is read from the output rather than asked of the registry: the push has just
+// happened, the line is the authority on what was stored, and asking again would be
+// a second request to learn something already in hand.
+func digestOf(output string) string {
+	match := regexp.MustCompile(`digest: (sha256:[0-9a-f]+)`).FindStringSubmatch(output)
+	if len(match) < 2 {
+		return "an unnamed image"
+	}
+	return match[1][:19]
+}
+
+func (t *tailWriter) String() string {
+	return strings.TrimSpace(strings.Join(t.lines, ""))
 }
 
 // lastLines is the end of a build's output, which is where the reason is.
@@ -864,7 +957,10 @@ func (c *coreClient) postAs(ctx context.Context, path string, body any, token st
 	if response.StatusCode == http.StatusUnauthorized {
 		return errUnauthorized
 	}
-	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated {
+	// Any 2xx is the core saying yes. 204 in particular is what a call that has
+	// nothing to return answers with, and treating it as a failure made every
+	// progress report look like something that had gone wrong.
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("core said %d", response.StatusCode)
 	}
 	if out == nil {
@@ -901,6 +997,24 @@ func (c *coreClient) claim(ctx context.Context, tags []string) (claim, error) {
 		return answer, errNothingToDo
 	}
 	return answer, nil
+}
+
+// progress says which part of the work the runner is on.
+//
+// Sent because the log cannot: a build prints layer after layer, and a page
+// watching it live cannot tell from those lines whether the image is being built
+// or pushed. This names the phase, so the deploy page's own step list moves while
+// the build is happening rather than after it.
+//
+// Best effort by design. A progress message that fails to arrive costs a page a
+// step it would have shown a moment later; failing the job over it would mean the
+// core's event feed could break a build, which is the wrong way round.
+func (c *coreClient) progress(ctx context.Context, jobID int64, phase, message string) error {
+	if phase == "" || message == "" {
+		return nil
+	}
+	return c.post(ctx, fmt.Sprintf("/api/v1/module/runner/jobs/%d/progress", jobID),
+		map[string]any{"phase": phase, "message": message}, nil)
 }
 
 // log sends part of a job's output, tagged with which stream it came from.

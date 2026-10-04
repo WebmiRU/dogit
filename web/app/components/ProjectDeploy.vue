@@ -65,7 +65,16 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+
+  // TEMPORARY, for working on the deploy page: the panel opens by itself, because
+  // clicking a button on every reload to see whether anything moved is a tax paid
+  // on every single look at the page. Put the line back when this is done — an
+  // interface that opens its own drawer is not a thing to leave behind.
+  const deployable = deployModules.value[0]
+  if (deployable) administering.value = deployable.id
+})
 </script>
 
 <template>

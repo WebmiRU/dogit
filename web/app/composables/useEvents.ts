@@ -1,51 +1,42 @@
 /**
  * Follows the instance's events.
  *
- * A stream, not a poll. The core holds the connection open and writes an event the
- * moment it happens, so a page hears about a deployment starting as it starts
- * rather than up to a few seconds later, and a page with nothing to watch costs
- * one idle connection instead of a request every few seconds for ever.
+ * Everything comes through one connection that the application opened at its root
+ * (see `app/lib/eventSocket.ts`). A page says here what it cares about — which
+ * kinds, which project — and this file decides whether each event is one of them.
  *
- * Reconnection is the browser's: EventSource retries on its own, and the core is
- * told where to resume with the standard Last-Event-ID header, so a dropped
- * connection neither misses events nor repeats them. The fallback to polling is
- * gone on purpose — the query shape the cursor read speaks is still served, for a
- * script or a proxy that would rather ask than hold a connection open, but a page
- * has no reason to choose it.
+ * The filtering is here rather than in the connection's address on purpose. A
+ * connection that names a project has to be reopened when the reader moves to
+ * another one, and a reopen is a moment when nothing arrives; a page that filters
+ * costs nothing to navigate and misses nothing while it does. Narrowing is not a
+ * question of permission either way: the core sends only what this account may
+ * see, before any of this runs.
  *
  * Events are signals, not records: a page that needs the commits of a branch asks
  * for them again through the endpoint it already has. Pushing the data would only
- * ever be right for one page.
+ * ever be right for one page — the exception being a deployment's progress, which
+ * is gone by the time anybody could ask what it was, and which `onEvent` is for.
  */
-/** An event as the feed carries it: enough to know something happened. */
-export interface InstanceEvent {
-  id: number
-  kind: string
-  created_at: string
-  project_id?: string
-  project_path?: string
-  actor?: string
-  payload?: Record<string, unknown>
-}
+import { onEvent, type InstanceEvent } from '~/lib/eventSocket'
+
+export type { InstanceEvent }
 
 /**
  * What to watch, and what to do about it.
  *
  * `kinds` narrows the feed to what a page cares about, so a page does not reload
  * because somebody's ssh key was added. `project` narrows it to one project, which
- * is what a page inside a project wants: the feed is filtered by the core, so a
- * page never receives an event about a project it may not see.
+ * is what a page inside a project wants.
  */
 export interface WatchOptions {
   /** Reload when one of these kinds arrives. Everything else is ignored. */
   kinds?: string[]
   /**
-   * Narrow the feed to one project.
+   * Narrow to one project.
    *
    * A function, because a page inside a project changes projects without being
    * re-created, and a value read once would keep listening to the project the
-   * reader has already left. The core filters by it, so a page never hears about a
-   * project it may not see.
+   * reader has already left.
    */
   project?: string | (() => string | undefined)
   /**
@@ -61,92 +52,23 @@ export interface WatchOptions {
   onChange?: () => void
 }
 
-/**
- * Connections, one per set of options.
- *
- * Not because the feed is a scarce resource, but because a page inside a project
- * can change project without being re-created: the connection names one project in
- * its address, so following a move to another project means opening another one.
- * Sharing them would mean every page on the instance listening to everything,
- * which is the opposite of what the project filter is for.
- */
-const open = new Map<string, { stream: EventSource; refs: number }>()
-
 /** Starts following and returns a stop function. */
 export function watchEvents(options: WatchOptions): () => void {
   const watched = options.kinds?.length ? new Set(options.kinds) : null
 
-  // What each connection is for, so several pages asking for the same stream share
-  // one rather than each opening their own.
-  const handle = (ev: MessageEvent) => {
-    let event: InstanceEvent
-    try {
-      event = JSON.parse(ev.data) as InstanceEvent
-    } catch {
-      // A line that is not an event is not something to act on, and not something
-      // to stop listening over either.
-      return
-    }
+  return onEvent((event) => {
     if (watched && !watched.has(event.kind)) return
+
+    const project = typeof options.project === 'function' ? options.project() : options.project
+    // An event about no project at all — a module registering, a runner going quiet
+    // — belongs to the instance rather than to a project, and a project page has
+    // no reason to redraw for one. The feed already dropped anything this account
+    // may not see; this is about what this page is for.
+    if (project && event.project_path !== project) return
 
     // The signal is not the data: whatever this page shows is fetched again from
     // the endpoint it trusts, so nothing is ever drawn from a payload.
     options.onChange?.()
     options.onEvent?.(event)
-  }
-
-  // The connection is keyed by the project it is for, and by nothing else: two
-  // pages in one project want the same events and the same filtering, and each
-  // still gets its own callbacks.
-  let key = '__instance__'
-  let started = ''
-  const connect = () => {
-    const project = typeof options.project === 'function' ? options.project() : options.project
-    const wanted = project ? `project=${encodeURIComponent(project)}` : ''
-
-    if (wanted === started) return
-    started = wanted
-
-    // The project changed under a live page: the old connection is about a project
-    // the reader has left.
-    if (key !== '__instance__' || wanted) release(key)
-
-    key = wanted || '__instance__'
-    const existing = open.get(key)
-    if (existing) {
-      existing.refs++
-      existing.stream.addEventListener('message', handle)
-      return
-    }
-
-    const stream = new EventSource(`/api/v1/events/stream${wanted ? `?${wanted}` : ''}`, {
-      withCredentials: true,
-    })
-    // "message", not "event": the feed sends no event name, and a stream line with
-    // no name arrives under the default type. Listening for "event" waits for a
-    // message that is never coming, and the connection looks perfectly healthy
-    // while saying nothing for ever.
-    stream.addEventListener('message', handle)
-    open.set(key, { stream, refs: 1 })
-  }
-
-  const release = (which: string) => {
-    const held = open.get(which)
-    if (!held) return
-    held.stream.removeEventListener('message', handle)
-    held.refs--
-    if (held.refs > 0) return
-    held.stream.close()
-    open.delete(which)
-  }
-
-  connect()
-  // A page can be re-created around the same project without the old one being
-  // disposed first, so the address is checked rather than trusted.
-  const watch = setInterval(connect, 2000)
-
-  return () => {
-    clearInterval(watch)
-    release(key)
-  }
+  })
 }

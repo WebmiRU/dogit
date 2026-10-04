@@ -112,6 +112,10 @@ func (s *Server) Register(r chi.Router) {
 	moduleRoutes.Post("/runner/jobs/{jobID}/key", s.handleJobKey)
 	moduleRoutes.Post("/runner/jobs/{jobID}/log", s.handleAppendJobLog)
 	moduleRoutes.Post("/runner/jobs/{jobID}/finish", s.handleFinishJob)
+	// Where a runner says which part of the work it is on. The log says what was
+	// printed; this says what it meant, which is the difference between a page that
+	// shows a build happening and one that shows a wall of layer output.
+	moduleRoutes.Post("/runner/jobs/{jobID}/progress", s.handleJobProgress)
 
 	// What happened, for the modules that were asked to be told.
 	moduleRoutes.Post("/notifications", s.handleModuleNotifications)

@@ -106,11 +106,14 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 	// only sent once.
 	lastSent := after
 
-	send := func() bool {
+	// Writes everything after the cursor and says how many. Zero means the backlog
+	// is done — which is the only thing that can mean it, since a query that
+	// succeeds with nothing new is not a failure.
+	send := func() (int, bool) {
 		entries, err := s.store.Events().VisibleSince(r.Context(), user.ID, projectID, lastSent,
 			eventStreamCatchUpLimit)
 		if err != nil {
-			return false
+			return 0, false
 		}
 		for _, entry := range entries {
 			payload, err := json.Marshal(entry)
@@ -118,7 +121,7 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", entry.ID, payload); err != nil {
-				return false
+				return len(entries), false
 			}
 			if entry.ID > lastSent {
 				lastSent = entry.ID
@@ -127,13 +130,21 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 		if len(entries) > 0 {
 			flusher.Flush()
 		}
-		return true
+		return len(entries), true
 	}
 
 	// The backlog first, in as many reads as it takes. A client that was closed for
 	// an hour comes back to an hour of events, and stopping at one page of them
 	// would leave it permanently behind.
-	for send() {
+	//
+	// Until a page comes back short. Looping on success instead would never stop:
+	// this connection is meant to stay open, and a read that finds nothing new is
+	// the normal state of a stream that has caught up, not a reason to read again.
+	for {
+		written, ok := send()
+		if !ok || written < eventStreamCatchUpLimit {
+			break
+		}
 	}
 
 	for {
@@ -163,7 +174,7 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 			if projectID != nil && (ev.ProjectID == nil || *ev.ProjectID != *projectID) {
 				continue
 			}
-			if !send() {
+			if _, ok := send(); !ok {
 				return
 			}
 		}

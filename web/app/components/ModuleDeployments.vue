@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { injectLocalEvent } from '~/lib/eventSocket'
 /**
  * What is deploying now, and what has been deployed.
  *
@@ -174,20 +175,18 @@ const live = computed(() => new Set(places.value.map((one) => one.deployment.id)
  * read it are exactly the times nothing is happening.
  */
 /**
- * The pods, while there are pods to count.
+ * What the card's edge says: working, fine, or broken.
  *
- * Only while a rollout is under way: afterwards the numbers are a fact about the
- * history, and the history has its own row for it. Shown only when the operation
- * says it wants more than nothing, so a step that reports no pods of its own does
- * not draw a bar reading 0 / 0.
+ * Read from the operation itself rather than worked out for the edge, so the edge
+ * and the steps under it cannot disagree — a green edge beside a red step leaves
+ * the reader deciding which of the two to believe.
  */
-const pods = computed(() => {
-  const progress = active.value
-  if (!progress || progress.phase !== 'rollout') return null
-  const desired = Number(progress.desired ?? 0)
-  const ready = Number(progress.ready ?? 0)
-  if (desired <= 0) return null
-  return { ready, desired, percent: Math.min(100, Math.round((ready / desired) * 100)) }
+const cardState = computed<'working' | 'ok' | 'bad'>(() => {
+  if (active.value) return 'working'
+  if (activeSeen.value.some((one) => one.failed)) return 'bad'
+  const last = deployments.value[0]
+  if (last && (last.state === 'failed' || last.state === 'abandoned')) return 'bad'
+  return 'ok'
 })
 
 const idleProgress = computed<DeployProgress | null>(() => {
@@ -418,7 +417,88 @@ onMounted(async () => {
   })
 })
 
+// TEMPORARY. A scripted run of the progress the cluster would send, one tick a
+// second, fed into the interface from inside the browser.
+//
+// It exists because the real thing is not watchable on demand: a deploy here takes
+// a second or two, so there is no way to sit and look at the card while a step
+// moves, and a spinner that has never been watched is a spinner nobody has seen
+// work. Everything it drives is the same path a real event drives, so what is being
+// checked is the page and not the delivery — that still has to be checked against a
+// real run.
+//
+// Delete this and the button with it.
+let fakeTimer: ReturnType<typeof setInterval> | undefined
+
+// A tick a second, and no stage held for more than about four: long enough to see
+// the spinner turn and the numbers move, short enough that watching the whole thing
+// is not a commitment.
+const fakeScript: Array<[string, string]> = [
+  ['build', 'building k8s/Dockerfile from .'],
+  ['build', 'pulling nginx:alpine'],
+  ['build', 'copying index.html into the image'],
+  ['push', 'pushing to 192.168.1.103:8091'],
+  ['push', 'layer 5 of 10 pushed'],
+  ['push', 'the registry holds it as sha256:9f12c4a0e7b3'],
+  ['prepare', 'preparing 2 manifest(s) for local-k3s/dogit-dev'],
+  ['pull', 'the cluster can pull from dogit-registry'],
+  ['apply', 'applied Deployment versions'],
+  ['apply', 'applied Service versions'],
+  ['rollout', '1 of 3 running the new image'],
+  ['retire', '2 pod(s) still running the previous image'],
+  ['rollout', '2 of 3 running the new image'],
+  ['retire', '1 pod(s) still running the previous image'],
+  ['rollout', '3 of 3 running the new image'],
+  ['', 'finished'],
+]
+
+function startFakeDeploy() {
+  if (fakeTimer) return
+  let index = 0
+  const tick = () => {
+    const step = fakeScript[index]
+    if (!step) {
+      stopFakeDeploy()
+      return
+    }
+    index += 1
+
+    const [phase, message] = step
+    // The pod counts come from the words the real module uses, so the numbers on
+    // the card are produced the same way they are in production rather than typed
+    // in beside them.
+    const of = /(\d+) of (\d+)/.exec(message)
+
+    injectLocalEvent({
+      id: Date.now(),
+      kind: 'deploy.operation',
+      created_at: new Date().toISOString(),
+      project_path: props.projectPath,
+      payload: {
+        job_id: 0,
+        phase,
+        message,
+        ready: of ? Number(of[1]) : 0,
+        desired: of ? Number(of[2]) : 0,
+        step: 0,
+        of: 0,
+      },
+    })
+
+    if (index >= fakeScript.length) stopFakeDeploy()
+  }
+
+  tick()
+  fakeTimer = setInterval(tick, 1000)
+}
+
+function stopFakeDeploy() {
+  if (fakeTimer) clearInterval(fakeTimer)
+  fakeTimer = undefined
+}
+
 onBeforeUnmount(() => {
+  stopFakeDeploy()
   stopHistory?.()
   stopOperation?.()
 })
@@ -436,7 +516,7 @@ watch(() => props.module.id, load)
          A card and not a row: it is the only thing on this page that is moving, and a
          row among a table of finished work reads as another entry in the history
          rather than as the present. Its own background says so before a word does. -->
-    <section v-if="active" class="card active-card">
+    <section v-if="active" class="card active-card" :class="cardState">
       <div class="card-body">
         <div class="block-head">
           <h3 class="block-title">Deploying now</h3>
@@ -449,20 +529,7 @@ watch(() => props.module.id, load)
           </span>
         </div>
 
-        <!-- How many of the pods are up. It arrives with the step that is waiting
-             for them, and it is the number somebody watching a rollout actually
-             wants: the step list says which phase is being worked on, and this says
-             whether it is getting anywhere. Without it a rollout that is stuck at
-             zero looks exactly like one that is thirty seconds from finishing. -->
-        <p v-if="pods" class="pods">
-          <span class="pods-count mono">{{ pods.ready }} / {{ pods.desired }}</span>
-          <span class="muted small">pods ready</span>
-          <span class="pods-bar" aria-hidden="true">
-            <span class="pods-fill" :style="{ width: pods.percent + '%' }" />
-          </span>
-        </p>
-
-        <DeploySteps :progress="active" :seen="activeSeen" />
+        <DeploySteps :progress="active" :seen="activeSeen" live />
 
         <details class="log">
           <summary class="muted small">Where the whole of this is written down</summary>
@@ -478,11 +545,17 @@ watch(() => props.module.id, load)
          the last operation did, not an absence of operations. "Nothing is deploying"
          was true and useless — it described the moment rather than the thing on
          screen, and the thing on screen is a record of a run. -->
-    <section v-else class="card active-card idle">
+    <section v-else class="card active-card idle" :class="cardState">
       <div class="card-body">
         <div class="block-head">
           <h3 class="block-title">The last operation</h3>
           <span class="muted small">what it did</span>
+          <span class="spacer" />
+          <!-- TEMPORARY: a scripted run, so the progress can be watched working
+               without waiting for a real cluster to be slow on purpose. -->
+          <button class="btn btn-small" type="button" @click="startFakeDeploy">
+            Pretend a deploy is running
+          </button>
         </div>
 
         <div v-for="place in places" :key="place.place" class="running-place">
@@ -494,6 +567,8 @@ watch(() => props.module.id, load)
 
         <!-- The steps are here even when nothing is moving, so the list is something
              to read rather than something to catch. -->
+        <!-- Not live: this is the last operation's steps, and an arrow moving here
+             would be claiming work that finished long ago. -->
         <DeploySteps v-if="idleProgress" :progress="idleProgress" />
       </div>
     </section>
@@ -698,8 +773,20 @@ watch(() => props.module.id, load)
   background: var(--bg-inset);
 }
 
-.active-card.idle {
-  border-left-color: var(--border-strong);
+/* The edge is the card's verdict, in the same three colours as the marks beside the
+   steps: yellow while something is moving, green when the last one ended well, red
+   when it did not. Read at a glance from across a page, which is what an edge is
+   for. */
+.active-card.working {
+  border-left-color: var(--yellow);
+}
+
+.active-card.ok {
+  border-left-color: var(--green);
+}
+
+.active-card.bad {
+  border-left-color: var(--red);
 }
 
 /* The rollout's own number, big enough to read while watching and not so big that
