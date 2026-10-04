@@ -366,6 +366,10 @@ function goToPage(to: number) {
  */
 let loadingNow = false
 let loadAgain = false
+let lastLoadedAt = 0
+
+/** How close together two loads may be and still both be worth making. */
+const LOAD_SETTLE_MS = 250
 
 /**
  * The catalogue of images, asked for as its own question.
@@ -424,9 +428,12 @@ async function loadImages() {
           : null,
       }
     })
-  } catch {
-    // A catalogue that cannot be read leaves the tab as it was: an empty list and no
-    // claim that there are no images, which would be a different and wrong statement.
+  } catch (caught) {
+    // Said out loud rather than swallowed. An empty list and no claim that there are
+    // no images is the right thing to draw, but it is indistinguishable from "there are
+    // none" unless the failure says so, and a catalogue that silently reads as empty is
+    // worse than one that admits it could not be read.
+    console.warn('[dogit] the image catalogue could not be read', caught)
   }
 }
 
@@ -438,6 +445,14 @@ function goToImagePage(to: number) {
 }
 
 async function load() {
+  // A reconnection, a finished operation and the buffer of recent events arriving are
+  // three honest reasons to ask again, and all three arrive within a hair of each other.
+  // Twenty identical requests in a millisecond is not a careful page reloading itself.
+  // Past that hair something did happen, and the load goes through.
+  if (Date.now() - lastLoadedAt < LOAD_SETTLE_MS) {
+    loadAgain = true
+    return
+  }
   if (loadingNow) {
     loadAgain = true
     return
@@ -653,7 +668,10 @@ watch(() => props.module.id, load)
           @click="tab = 'operations'"
         >
           Operations
-          <span class="count">{{ deployments.length }}</span>
+          <!-- How many there are, not how many have been fetched. The two used to be
+               the same number, which is exactly why a reader who counted the rows and
+               read the tab was told two different things once the list was paged. -->
+          <span class="count">{{ total }}</span>
         </button>
         <button
           class="tab"
@@ -662,7 +680,7 @@ watch(() => props.module.id, load)
           @click="tab = 'images'"
         >
           Images
-          <span class="count">{{ images.length }}</span>
+          <span class="count">{{ imageTotal }}</span>
         </button>
       </nav>
     </template>
