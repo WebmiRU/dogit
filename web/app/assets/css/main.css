@@ -8,6 +8,10 @@
   --text-muted: #9aa3b2;
   --accent: #4c8dff;
   --accent-soft: rgba(76, 141, 255, 0.12);
+  /* A light, transparent yellow: for marking a row somebody asked to see. Blue is
+     wrong for it here because the rows are already on a blue-tinted surface, and a
+     highlight that is a shade of the background highlights nothing. */
+  --yellow-soft: rgba(210, 153, 34, 0.16);
   --green: #3fb950;
   --red: #f85149;
   --yellow: #d29922;

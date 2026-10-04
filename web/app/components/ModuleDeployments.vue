@@ -41,8 +41,11 @@ interface Deployment {
   finished_at?: string
 }
 
-/** How many operations a page holds. */
+/** How many rows a page holds, for both lists: twenty is what fits without scrolling
+ *  past the end of it, and an operations list that stops at twenty is the whole
+ *  history this instance has. */
 const PAGE = 20
+const IMAGE_PAGE = 20
 
 const { add: notify } = useNotifyPool()
 
@@ -62,6 +65,10 @@ const page = ref(1)
  * for; images are what they open once something went wrong.
  */
 const tab = ref<'operations' | 'images'>('operations')
+
+/** The image to be shown, when somebody arrived here by clicking one. */
+const wanted = ref('')
+const imagePage = ref(1)
 
 /** The operation under way, as the module describes it step by step. */
 const active = ref<DeployProgress | null>(null)
@@ -198,6 +205,33 @@ const images = computed<KnownImage[]>(() => {
 
   return order.map((digest) => byDigest.get(digest)!)
 })
+
+/**
+ * Goes to that image on the images tab and points at it.
+ *
+ * The images tab rather than an action here, because putting an image back is a
+ * decision made against the list of what could go in — the operations are a record of
+ * what happened, and offering the same action in both places makes two doors onto one
+ * room.
+ */
+function showImage(image: string) {
+  const at = image.indexOf('@')
+  const digest = at >= 0 ? image.slice(at + 1) : image
+
+  wanted.value = digest
+  tab.value = 'images'
+
+  // Straight onto the page that holds it. Somebody who clicked an image in an operation
+  // three pages back should not have to go looking for it.
+  const index = images.value.findIndex((one) => one.digest.endsWith(digest))
+  if (index >= 0) imagePage.value = Math.floor(index / IMAGE_PAGE) + 1
+}
+
+/** The images on this page. */
+const imagePageCount = computed(() => Math.max(1, Math.ceil(images.value.length / IMAGE_PAGE)))
+const shownImages = computed(() =>
+  images.value.slice((imagePage.value - 1) * IMAGE_PAGE, imagePage.value * IMAGE_PAGE),
+)
 
 /** The operations on this page, newest first. */
 const pageCount = computed(() => Math.max(1, Math.ceil(deployments.value.length / PAGE)))
@@ -451,36 +485,35 @@ watch(() => props.module.id, load)
               <tr>
                 <th>When</th>
                 <th>Image</th>
-                <th>State</th>
-                <th v-if="props.canManage" class="actions-col">Actions</th>
+                <th>Status</th>
+                <th>What happened</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="one in shown" :key="one.id">
                 <td class="nowrap">{{ when(one.started_at) }}</td>
-                <td class="mono small">{{ shortImage(one.image) }}</td>
+                <td class="mono small">
+                  <button
+                    v-if="one.image"
+                    class="link"
+                    type="button"
+                    @click="showImage(one.image)"
+                  >
+                    {{ shortImage(one.image) }}
+                  </button>
+                  <span v-else>—</span>
+                </td>
                 <td class="state-cell">
                   <div class="badges">
                     <span class="badge" :class="badgeClass(one.state)">{{ one.state }}</span>
                     <span v-if="live.has(one.id)" class="badge badge-green">running now</span>
                   </div>
-                  <div v-if="one.reason" class="muted small reason">{{ one.reason }}</div>
                 </td>
-                <td v-if="props.canManage" class="actions-col">
-                  <button
-                    class="btn btn-small"
-                    type="button"
-                    :disabled="busy || !isLive(one) || live.has(one.id)"
-                    :title="
-                      live.has(one.id)
-                        ? 'This is the image running now, so there is nothing to put back'
-                        : 'Put this image back on the workload'
-                    "
-                    @click="revertTo(one)"
-                  >
-                    Revert to this
-                  </button>
-                </td>
+                <!-- Its own column, not under the status: a status and a sentence are
+                     two different facts and reading them as one — a badge with a
+                     paragraph hanging off it — makes the paragraph look like part of
+                     the status. -->
+                <td class="what-cell">{{ one.reason || '—' }}</td>
               </tr>
             </tbody>
             </table>
@@ -511,26 +544,59 @@ watch(() => props.module.id, load)
           <p v-if="images.length === 0" class="muted small">No images yet.</p>
 
           <ul v-else class="image-list">
-            <li v-for="image in images" :key="image.digest" class="image">
+            <li
+              v-for="image in shownImages"
+              :key="image.digest"
+              class="image"
+              :class="{ wanted: wanted && image.digest.endsWith(wanted) }"
+            >
               <span class="image-name mono">{{ shortImage(image.digest) }}</span>
               <span class="muted small">
                 {{ image.times }} operation{{ image.times === 1 ? '' : 's' }},
                 {{ image.succeeded }} successful
               </span>
-              <span v-if="image.live" class="badge badge-green">running now</span>
+              <span v-if="image.live && live.has(image.live.id)" class="badge badge-green">
+                running now
+              </span>
               <button
-                v-if="props.canManage && image.live"
+                v-if="props.canManage && image.live && !live.has(image.live.id)"
                 class="btn btn-small"
                 type="button"
                 :disabled="busy"
-                title="Put this image back on the workload"
+                :title="
+                  live.has(image.live.id)
+                    ? 'This is the image running now, so there is nothing to put back'
+                    : 'Put this image back on the workload'
+                "
                 @click="revertTo(image.live)"
               >
                 Revert to this
               </button>
-              <span v-else class="muted small">not in the cluster now</span>
+              <span v-else-if="!image.live || !live.has(image.live.id)" class="muted small">
+                not in the cluster now
+              </span>
             </li>
           </ul>
+
+          <div v-if="imagePageCount > 1" class="pager">
+            <button
+              class="btn btn-small"
+              type="button"
+              :disabled="imagePage === 1"
+              @click="imagePage--"
+            >
+              Newer
+            </button>
+            <span class="muted small">Page {{ imagePage }} of {{ imagePageCount }}</span>
+            <button
+              class="btn btn-small"
+              type="button"
+              :disabled="imagePage === imagePageCount"
+              @click="imagePage++"
+            >
+              Older
+            </button>
+          </div>
         </section>
       </div>
     </template>
@@ -715,6 +781,46 @@ th {
   flex: 1 1 100%;
   font-size: 12px;
   word-break: break-all;
+}
+
+/* The image somebody arrived here to look at. Held rather than scrolled to, because
+   the page it is on may change under them, and a row that flashes and goes is worse
+   than one that stays. */
+.image.wanted {
+  background: var(--yellow-soft);
+  border-radius: 4px;
+  padding-left: 8px;
+  margin-left: -8px;
+}
+
+/* An image in a row of operations is a link to that image, not an action on it. */
+.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+}
+
+.link:hover {
+  color: var(--text);
+}
+
+/* The status is a badge and nothing else, so the column has room for one and the
+   sentence beside it is a sentence in its own right. */
+.state-cell {
+  min-width: 130px;
+}
+
+.what-cell {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .pager {

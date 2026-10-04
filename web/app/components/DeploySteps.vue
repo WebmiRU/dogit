@@ -182,6 +182,7 @@ const podFraction = computed(() => {
 }
 
 .label {
+  display: block;
   font-size: 13px;
 }
 
@@ -202,6 +203,7 @@ const podFraction = computed(() => {
    rather than in a separate error box. */
 .detail {
   display: block;
+  margin-top: 1px;
   font-size: 12px;
   color: var(--text-muted);
   word-break: break-word;
