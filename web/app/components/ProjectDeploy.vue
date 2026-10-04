@@ -132,7 +132,7 @@ onMounted(load)
             </tr>
 
             <tr v-if="administering === module.id" class="detail-row">
-              <td colspan="3">
+              <td colspan="3" class="admin-cell">
                 <ModuleDeployments
                   :project-id="props.projectId"
                   :project-path="props.projectPath"
@@ -186,6 +186,13 @@ th {
 .detail-row td {
   background: var(--bg-inset);
   padding: 14px 12px;
+}
+
+/* The admin panel has a table of its own, a place list and a list of images. It is
+   given room rather than a fixed column, because a history squeezed into a card reads
+   as a summary and somebody will act on it. */
+.admin-cell {
+  width: 100%;
 }
 
 .small {
