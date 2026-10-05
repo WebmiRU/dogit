@@ -102,6 +102,7 @@ func (s *Server) Register(r chi.Router) {
 	moduleRoutes.Post("/heartbeat", s.handleModuleHeartbeat)
 	moduleRoutes.Get("/me", s.handleModuleSelf)
 	moduleRoutes.Get("/settings", s.handleModuleSelfSettings)
+	moduleRoutes.Get("/targets", s.handleModuleSelfTargets)
 	// A module saying it changed something of its own. The core cannot watch for
 	// this: the browser asks the module directly, with a credential the core minted
 	// and cannot present.

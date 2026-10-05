@@ -153,10 +153,12 @@ type config struct {
 
 // manifest is what this module says it does.
 //
-// The settings are the clusters, as a list rather than a flat set of keys: one cluster
-// is a set of values that belong together, and a second cluster of a different kind —
-// one in the cluster itself, one reached through a kubeconfig somebody copied — cannot
-// be expressed as "the" chat id or "the" kubeconfig.
+// The clusters are rows rather than a settings key holding a list, because that is what
+// they are: one cluster is a set of values that belong together, it is written at a
+// level and inherited from the ones above, and a project may be allowed one and not
+// another. A list in a setting can express none of those three things. What is left as
+// settings is what is genuinely a value of this module — how long to wait, and whether
+// to tidy up afterwards.
 func manifest() map[string]any {
 	return map[string]any{
 		"version":     "0.1.0",
@@ -171,51 +173,24 @@ func manifest() map[string]any {
 		// cluster is.
 		"database": true,
 
+		// Where this module may deploy. A row is one cluster: a set of values that
+		// belong together, written at a level and inherited downwards, switchable at
+		// each of them. So it is a row of the core's own rows rather than one settings
+		// key holding a list, which is the same shape a notification module's chats
+		// are — one is a place to send things, this is a place to put a release, and a
+		// project may be allowed one and not the other.
+		//
+		// `name` identifies a row, and it is what a repository names in
+		// `cluster: local-k3s`. Nothing resolves through the label, which is for people.
+		"target": map[string]any{
+			"settings": []string{"name", "kubeconfig", "context", "default_namespace"},
+			"identify": []string{"name"},
+			"title":    "Where this may deploy",
+			"description": "One row per cluster this module may deploy to. A project names one in its " +
+				"configuration and can switch any row off without touching the others.",
+		},
+
 		"settings": []map[string]any{
-			{
-				"key":   "clusters",
-				"label": "Clusters",
-				"type":  "list",
-				"description": "Where this module may deploy. A project picks one of these by name, " +
-					"so the address lives here once rather than in every repository that deploys there.",
-				"items": map[string]any{
-					"add_label": "Add a cluster",
-					"fields": []map[string]any{
-						{
-							"key":   "name",
-							"label": "Name",
-							"type":  "string",
-							"description": "What the project's configuration calls this cluster, such as " +
-								"production-eu. Changing it does not move anything already deployed.",
-						},
-						{
-							"key":   "kubeconfig",
-							"label": "Kubeconfig",
-							// A multi-line field rather than a password box: a kubeconfig is a
-							// document, and pasting one into a single-line input would trim it.
-							"type": "text",
-							"description": "The contents of a kubeconfig, pasted in, for when this module runs " +
-								"outside the cluster. `kubectl config view --raw` prints one. Only an " +
-								"administrator sees this page, so it is shown back like any other " +
-								"setting: a masked credential is one nobody can check is still there.",
-						},
-						{
-							"key":         "context",
-							"label":       "Context",
-							"type":        "string",
-							"description": "Which context in that file to use. Empty means the file's current one.",
-						},
-						{
-							"key":   "default_namespace",
-							"label": "Default namespace",
-							"type":  "string",
-							"description": "Where a project that does not name a namespace deploys to. dogit " +
-								"never creates namespaces: one is somebody's decision, made where they can see " +
-								"what is already in it.",
-						},
-					},
-				},
-			},
 			{
 				"key":         "default_rollout_timeout",
 				"label":       "Rollout timeout",
