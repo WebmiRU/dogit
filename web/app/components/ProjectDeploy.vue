@@ -288,4 +288,16 @@ th {
   align-items: flex-start;
   cursor: pointer;
 }
+
+/* A checkbox is a fixed-size control, and as a flex item it will otherwise stretch to
+   fill the row: what came out was a 564-pixel-wide box with the words pushed to the far
+   side, which reads as a broken page and is a poor thing to aim at.
+   flex-shrink keeps it from being squeezed in the other direction; flex-basis in its
+   own column is what stops the growth. */
+.brake-label input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0;
+  margin: 2px 0 0;
+}
 </style>
