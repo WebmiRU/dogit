@@ -233,6 +233,64 @@ func (s *Server) handleProjectDeployments(w http.ResponseWriter, r *http.Request
 // Refused without the write scope, and refused for anybody who may only look: this
 // changes a running system, and a page that shows what is deployed has no business
 // being able to change it.
+// handleTestDeployCluster asks the module whether one place can be reached.
+//
+// Its own endpoint rather than a row of settings, because the answer is about the world
+// rather than about the configuration: a kubeconfig can be perfectly valid and the
+// cluster unreachable, and the moment to be told that is before a deployment is
+// attempted rather than after a timeout. The module is asked, rather than the core
+// working it out, because what "reachable" means is the module's business — it is the
+// thing that has to get in.
+//
+// The place is named by the name a repository writes in `cluster:`, which is also the
+// name the rows are listed under, so what is tested is what is on the page.
+func (s *Server) handleTestDeployCluster(w http.ResponseWriter, r *http.Request) {
+	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	var request struct {
+		Cluster string `json:"cluster"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if strings.TrimSpace(request.Cluster) == "" {
+		s.writeError(w, r, errBadRequest("say which place to test"))
+		return
+	}
+
+	module, err := s.deployModuleFor(r, project)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if module == nil {
+		s.writeError(w, r, errBadRequest(
+			"no deploy module is installed, so there is nowhere to test"))
+		return
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"project": project.Path,
+		"cluster": request.Cluster,
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	answer, err := s.callDeployModule(r.Context(), module, http.MethodPost, "/clusters/test", body)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.writeRaw(w, r, http.StatusOK, answer)
+}
+
 func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) {
 	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
 	if err != nil {

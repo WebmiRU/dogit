@@ -271,6 +271,7 @@ func (s *Server) projectRoutes() chi.Router {
 	// ask and refuses an undo to anybody but an administrator.
 	projects.Get(base+"/deployments", s.handleProjectDeployments)
 	projects.Post(base+"/deployments/revert", s.handleRevertDeployment)
+	projects.Post(base+"/deploy-clusters/test", s.handleTestDeployCluster)
 	projects.Get(base+"/deploy-images", s.handleProjectDeployImages)
 	projects.Get(base+"/deploy-places", s.handleProjectDeployPlaces)
 	projects.Get(base+"/deploy-plan", s.handleProjectDeployPlan)

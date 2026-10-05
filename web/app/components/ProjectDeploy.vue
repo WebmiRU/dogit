@@ -17,6 +17,7 @@
  *   running system rather than to whoever configures one.
  */
 import type { ModuleRow } from '~/types/module'
+import type { ModuleRow as ModulePlaceRow } from '~/types/notification'
 
 const props = defineProps<{
   projectId: string
@@ -27,7 +28,6 @@ const props = defineProps<{
 /** Which module's settings are open. One at a time: two forms on a page of a list is a page nobody reads. */
 const editing = ref<string>('')
 /** The module whose deployments are shown, or none. */
-const administering = ref<string>('')
 
 /**
  * Whether a push or a tag may start a run by itself.
@@ -37,8 +37,6 @@ const administering = ref<string>('')
  * what somebody reaches for when the thing that is deploying has to stop now, and a
  * commit is not something anyone can safely push while it is happening.
  */
-const autoPaused = ref(false)
-const savingPause = ref(false)
 
 const modules = ref<ModuleRow[]>([])
 const loading = ref(true)
@@ -72,14 +70,6 @@ const headState = computed<'working' | 'bad' | 'ok'>(() => {
  * belongs in a tooltip rather than in the column, because a sentence in every row of
  * the table is worse than no sentence at all.
  */
-const autodeployHint = computed(() =>
-  autoPaused.value
-    ? 'Off. A push builds the image and nothing more: the deployment waits for '
-      + 'somebody to start it by hand.'
-    : 'On. A push to a branch or a tag this repository deploys starts the deployment '
-      + 'itself, without anybody pressing anything.',
-)
-
 const headStateText = computed(() => {
   if (!modules.value.some((one) => one.kind.startsWith('deploy:'))) return 'no deploy module'
   if (deployBusy.value) return 'a deployment is under way'
@@ -110,30 +100,35 @@ const deployModules = computed(() =>
   modules.value.filter((module) => module.kind.startsWith('deploy:')),
 )
 
+/**
+ * The places this project has, as the list above decided them.
+ *
+ * Kept because the blocks below are drawn per place. Without it the page has a list of
+ * places and one set of contents for all of them, which is a page about a project
+ * rather than about anywhere the project is deployed to.
+ */
+const places = ref<ModulePlaceRow[]>([])
+
+/** The module whose job all of this is. There is one in practice; the list is a list. */
+const deployModule = computed<ModuleRow | null>(() => deployModules.value[0] ?? null)
+
+/**
+ * The name a repository writes to reach one place, which is how the history and the
+ * catalogue are asked about it.
+ *
+ * Taken from the row rather than from its label: the label is for people and may have
+ * been changed by anybody, while the name is the word a repository says in `cluster:`
+ * and is therefore the word the records were written under.
+ */
+const clusterOf = (row: ModulePlaceRow) =>
+  String(row.values?.name ?? row.label ?? '')
+
+function onPlaces(rows: ModulePlaceRow[]) {
+  places.value = rows.filter((one) => one.module_kind.startsWith('deploy:'))
+}
+
 function toggleEdit(module: ModuleRow) {
   editing.value = editing.value === module.id ? '' : module.id
-  if (editing.value) administering.value = ''
-}
-
-// Opens the record of what this module deployed, closing the settings.
-//
-// The two are the same row with different things behind it, so opening one closes
-// the other: a page with a settings form and a deployment history open at once is a
-// page where neither can be found.
-function toggleAdmin(module: ModuleRow) {
-  administering.value = administering.value === module.id ? '' : module.id
-  if (administering.value) editing.value = ''
-}
-
-/** Pulls the brake, or lets it out again. */
-async function setAutoPaused(paused: boolean) {
-  savingPause.value = true
-  try {
-    await api.patch(`/projects/${props.projectId}`, { auto_deploy_paused: paused })
-    autoPaused.value = paused
-  } finally {
-    savingPause.value = false
-  }
 }
 
 async function load() {
@@ -143,10 +138,6 @@ async function load() {
     const answer = await api.get<{ modules: ModuleRow[] }>('/modules')
     modules.value = answer.modules ?? []
 
-    const project = await api.get<{ project: { auto_deploy_paused?: boolean } }>(
-      `/projects/${props.projectId}`,
-    )
-    autoPaused.value = project.project?.auto_deploy_paused ?? false
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -156,16 +147,6 @@ async function load() {
 
 onMounted(async () => {
   await load()
-
-  // The first module's record is open before anything is clicked.
-  //
-  // An instance has one deploy module in practice, and this page is opened to find out
-  // what it is doing: whether a rollout is moving, what it printed, what it did last
-  // night. A panel behind a button turns that question into two — click, then look —
-  // and the answer to the first question is usually already there. The button stays,
-  // because it is how somebody gets at a second module, and it still closes.
-  const deployable = deployModules.value[0]
-  if (deployable) administering.value = deployable.id
 })
 </script>
 
@@ -221,9 +202,6 @@ onMounted(async () => {
                  piece of explanation that is worth reading once and not on every
                  glance. It is in the tooltip now, where nothing is pushed out of
                  shape by it. -->
-            <th class="brake-col" :title="autodeployHint">
-              <div>Autodeploy</div>
-            </th>
             <th class="actions-col">Actions</th>
           </tr>
         </thead>
@@ -242,35 +220,9 @@ onMounted(async () => {
                 <span v-else-if="module.status === 'online'" class="badge badge-green">Online</span>
                 <span v-else class="badge badge-warning">{{ module.status }}</span>
               </td>
-              <!-- The brake, as a switch in the table rather than a paragraph above
-                   it. Whether runs start by themselves is a standing fact about this
-                   project, and it belongs beside the module it governs and the state
-                   that module is in — where the eye goes when asking "what will happen
-                   on the next push". -->
-              <td class="brake-col">
-                <!-- The same switch the notification table uses, and deliberately: two
-                   controls that mean the same thing ought to be the same control, and
-                   the eye should not have to learn a second one for the second setting.
-                   A switch and not a choice between On and Off, because there is no third
-                   answer here to make it a choice. -->
-                  <button
-                    class="switch"
-                    :class="{ on: !autoPaused }"
-                    type="button"
-                    :disabled="savingPause || !props.canManage"
-                    :aria-pressed="!autoPaused"
-                    :title="autodeployHint"
-                    @click="setAutoPaused(!autoPaused)"
-                  >
-                    <span class="knob" />
-                  </button>
-              </td>
               <td class="actions-col">
                 <button class="btn btn-small" type="button" @click="toggleEdit(module)">
                   {{ editing === module.id ? 'Done' : 'Edit' }}
-                </button>
-                <button class="btn btn-small" type="button" @click="toggleAdmin(module)">
-                  Admin
                 </button>
               </td>
             </tr>
@@ -305,9 +257,28 @@ onMounted(async () => {
         <ModuleTargets
           kind="deploy:"
           scope="project"
+          layout="blocks"
           :scope-id="props.projectId"
+          :project-id="props.projectId"
           :can-manage="props.canManage"
-        />
+          @rows="onPlaces"
+        >
+          <!-- What is under a place's row is that place's deployment and nothing
+               else: its status, its log, what it has done and which images have ever
+               been on it. Three places give three sets of these, each under its own
+               row, which is the only way to open the second one. -->
+          <template #row="{ row }">
+            <ModuleDeployments
+              v-if="deployModule"
+              :project-id="props.projectId"
+              :project-path="props.projectPath"
+              :module="deployModule"
+              :place="{ cluster: clusterOf(row), namespace: '' }"
+              :can-manage="props.canManage"
+              :show-repository="false"
+            />
+          </template>
+        </ModuleTargets>
       </div>
 
       <div
@@ -321,20 +292,6 @@ onMounted(async () => {
           scope="project"
           :scope-id="props.projectId"
           :note="`These values are for ${props.projectPath} only. Anything left alone is inherited from the group or the instance.`"
-        />
-      </div>
-
-      <div
-        v-for="module in deployModules"
-        v-show="administering === module.id"
-        :key="`admin-${module.id}`"
-        class="panel"
-      >
-        <ModuleDeployments
-          :project-id="props.projectId"
-          :project-path="props.projectPath"
-          :module="module"
-          :can-manage="props.canManage"
         />
       </div>
     </div>
@@ -440,9 +397,6 @@ th {
   background: var(--red);
 }
 
-/* The column the brake sits in. As narrow as the header's longest word and the
-   switch together, which is not the module name's width — a table of modules should
-   not have a column for a switch taking half the page. */
 /* The clusters, as a block of their own between the two tables it would otherwise
    be mistaken for a part of. It is a different kind of thing: the table above is which
    modules exist, this is where one of them may put something. */
@@ -463,17 +417,7 @@ th {
   margin: 0 0 10px;
 }
 
-.brake-col {
-  width: 1%;
-  white-space: nowrap;
-}
 
-/* Not bold, because the words beside it — the module's name and the state — are not,
-   and a header heavier than the thing it heads draws the eye to the column that matters
-   least. */
-.brake-col th {
-  font-weight: 500;
-}
 
 /* Folded away by default. */
 .places-fold {

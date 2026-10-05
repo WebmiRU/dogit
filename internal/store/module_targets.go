@@ -35,6 +35,11 @@ type ModuleTarget struct {
 	// Enabled is nil when this level did not decide. See the migration for why
 	// that is not the same as false.
 	Enabled *bool
+	// Flags are the switches this level has decided about, by the name the module gave
+	// them. A key that is not here was not decided here and is inherited, which is the
+	// same distinction Enabled makes and for the same reason: a level that changed one
+	// value has not decided the switches.
+	Flags map[string]bool
 	// Position keeps a shared channel from being overtaken by whatever was built
 	// first, and it is inherited with the row.
 	Position int
@@ -85,7 +90,7 @@ type TargetResolution struct {
 }
 
 const targetColumns = `id, integration_id, scope_type, scope_id, label, enabled,
-	position, overrides, values, created_at, updated_at`
+	position, overrides, values, flags, created_at, updated_at`
 
 func scanTarget(row interface {
 	Scan(dest ...any) error
@@ -93,10 +98,18 @@ func scanTarget(row interface {
 	var (
 		t         ModuleTarget
 		valuesRaw []byte
+		flagsRaw  []byte
 	)
 	if err := row.Scan(&t.ID, &t.IntegrationID, &t.ScopeType, &t.ScopeID, &t.Label,
-		&t.Enabled, &t.Position, &t.Overrides, &valuesRaw, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.Enabled, &t.Position, &t.Overrides, &valuesRaw, &flagsRaw,
+		&t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
+	}
+	t.Flags = map[string]bool{}
+	if len(flagsRaw) > 0 {
+		if err := json.Unmarshal(flagsRaw, &t.Flags); err != nil {
+			return nil, fmt.Errorf("decode target flags: %w", err)
+		}
 	}
 	t.Values = map[string]json.RawMessage{}
 	if len(valuesRaw) > 0 {
@@ -124,13 +137,18 @@ func (r *ModuleTargetRepo) Create(ctx context.Context, t *ModuleTarget) (*Module
 		return nil, fmt.Errorf("encode target values: %w", err)
 	}
 
+	flagsRaw, err := json.Marshal(t.Flags)
+	if err != nil {
+		return nil, fmt.Errorf("encode target flags: %w", err)
+	}
+
 	row := r.s.pool.QueryRow(ctx, `
 		INSERT INTO module_targets
-			(id, integration_id, scope_type, scope_id, label, enabled, position, overrides, values)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			(id, integration_id, scope_type, scope_id, label, enabled, position, overrides, values, flags)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING `+targetColumns,
 		t.ID, t.IntegrationID, t.ScopeType, t.ScopeID, t.Label, t.Enabled,
-		t.Position, t.Overrides, valuesRaw)
+		t.Position, t.Overrides, valuesRaw, flagsRaw)
 
 	created, err := scanTarget(row)
 	if err != nil {
@@ -149,12 +167,18 @@ func (r *ModuleTargetRepo) Update(ctx context.Context, t *ModuleTarget) (*Module
 		return nil, fmt.Errorf("encode target values: %w", err)
 	}
 
+	flagsRaw, err := json.Marshal(t.Flags)
+	if err != nil {
+		return nil, fmt.Errorf("encode target flags: %w", err)
+	}
+
 	row := r.s.pool.QueryRow(ctx, `
 		UPDATE module_targets
-		SET label = $2, enabled = $3, position = $4, overrides = $5, values = $6, updated_at = now()
+		SET label = $2, enabled = $3, position = $4, overrides = $5, values = $6,
+		    flags = $7, updated_at = now()
 		WHERE id = $1
 		RETURNING `+targetColumns,
-		t.ID, t.Label, t.Enabled, t.Position, t.Overrides, valuesRaw)
+		t.ID, t.Label, t.Enabled, t.Position, t.Overrides, valuesRaw, flagsRaw)
 
 	updated, err := scanTarget(row)
 	if err != nil {
@@ -321,10 +345,17 @@ func (r *ModuleTargetRepo) Effective(ctx context.Context, integrationID uuid.UUI
 
 		values := map[string]json.RawMessage{}
 		enabled := true
+		flags := map[string]bool{}
 		own := root
 		for _, level := range levels {
 			for key, value := range level.Values {
 				values[key] = value
+			}
+			// The switches are resolved one key at a time rather than as a whole: a
+			// level that turns one off has said nothing about the others, and a level
+			// that turns one on has not thereby turned the rest back on.
+			for key, value := range level.Flags {
+				flags[key] = value
 			}
 			// The deepest level that said anything decides where a change belongs,
 			// even if all it said was to inherit.
@@ -343,6 +374,7 @@ func (r *ModuleTargetRepo) Effective(ctx context.Context, integrationID uuid.UUI
 			Own:       *own,
 			Root:      *root,
 			Values:    values,
+			Flags:     flags,
 			Enabled:   enabled,
 			DefinedAt: own.ScopeType,
 			SetHere:   setHere,

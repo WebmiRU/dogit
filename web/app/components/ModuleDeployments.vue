@@ -27,6 +27,29 @@ const props = defineProps<{
   module: ModuleRow
   /** Whether the viewer may undo. */
   canManage: boolean
+  /**
+   * The one place this block is about, as cluster and namespace.
+   *
+   * Everything below belongs to a place and not to the project: which pods came up,
+   * what the module said, what has been deployed there and which images have ever been
+   * there are three different questions with three different answers for a project that
+   * deploys to two clusters. Drawn for the project as a whole they are all merged into
+   * one, and a rollout on one of them is shown next to a version of the other that has
+   * been running for a month — which reads as one deployment that has been going for a
+   * month.
+   *
+   * Absent means every place, which is right for a page that has been asked about the
+   * project and has not been asked about anywhere in particular.
+   */
+  place?: { cluster: string; namespace: string }
+  /**
+   * Whether to show what the repository says about where this goes.
+   *
+   * Once per page rather than once per place: the file names the places and does not
+   * change between them, so three copies of it under three rows is the same fact three
+   * times, and a reader has to work out which copy belongs to the row above it.
+   */
+  showRepository?: boolean
 }>()
 
 /** One page of the history, and what is left of it. */
@@ -181,6 +204,12 @@ const activeSeen = ref<DeployProgress[]>([])
  * across all of them.
  */
 const target = ref('')
+
+/** The cluster this block is about, if it was told one. */
+const scopedCluster = computed(() => props.place?.cluster ?? '')
+
+/** The namespace this block is about, if it was told one. */
+const scopedNamespace = computed(() => props.place?.namespace ?? '')
 
 /** An image, with what is known about it. */
 interface KnownImage {
@@ -727,6 +756,12 @@ async function loadImages() {
       page: String(imagePage.value),
       per_page: String(IMAGE_PAGE),
     })
+    // Scoped like the history above: the catalogue of an image is the catalogue of
+    // what has been in *this* place. Left unscoped it is every image the project has
+    // ever put anywhere, and a rollback chosen from it would happily name an image
+    // that has never been on this cluster.
+    if (scopedCluster.value) query.set('cluster', scopedCluster.value)
+    if (scopedNamespace.value) query.set('namespace', scopedNamespace.value)
     const answer = await api.get<{
       images?: {
         image: string
@@ -806,7 +841,7 @@ async function load() {
   error.value = ''
   try {
     const query = new URLSearchParams({
-      cluster: target.value,
+      cluster: target.value || scopedCluster.value,
       page: String(page.value),
       per_page: String(PAGE),
     })
@@ -1120,7 +1155,7 @@ watch(() => props.module.id, load)
            instance, it changes only when somebody edits a file, and it is read far less
            often than it takes up. Beside the card rather than above the whole page,
            because it is the same information the card's steps came from. -->
-      <details class="places-fold">
+      <details v-if="props.showRepository !== false" class="places-fold">
         <summary class="muted small">
           Where this deploys — read from the default branch's .dogit-ci.yml
         </summary>

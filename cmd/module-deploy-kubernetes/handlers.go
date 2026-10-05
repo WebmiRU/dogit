@@ -388,6 +388,20 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The newest row carries its log, whether or not the list was narrowed to one
+	// place.
+	//
+	// It used to be only in the unnarrowed case, because that was the only case there
+	// was for a long while. Naming a place made the card on that place's page lose
+	// its log while the same deployment showed one on the project's page — which is
+	// the wrong way round: the narrower question is the more specific one, and
+	// answering it less is not a saving.
+	if page == 1 && len(records) > 0 {
+		if lines, err := c.history.LogOf(ctx, records[0].ID); err == nil {
+			records[0].Log = lines
+		}
+	}
+
 	writeJSON(w, http.StatusOK, pageOf(records, total, page, perPage))
 }
 

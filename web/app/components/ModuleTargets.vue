@@ -52,11 +52,40 @@ const props = withDefaults(
      * goes as well.
      */
     onlyModule?: string
-    /** Which module a newly added recipient belongs to. */
+    /** Which module a newly added row belongs to. */
     defaultModule?: string
+    /**
+     * How the rows are drawn: as one table, or as blocks with room under each row.
+     *
+     * A table is right when a row is a line and the page is about the list. It is
+     * wrong the moment a row has something under it — and for a deployment module every
+     * row does: the status, the log, the operations and the images of one place. Stacked
+     * under a table with nothing to attach them to, three places give three histories
+     * and no way to tell which is which, and no way to open the second one.
+     */
+    layout?: 'table' | 'blocks'
+    /**
+     * The project this page is about, where there is one.
+     *
+     * Needed for the things that are about a project rather than about a row: asking
+     * a cluster whether it answers is a question about this project's route to it,
+     * and the core has to know which project is asking.
+     */
+    projectId?: string
   }>(),
-  { scope: 'instance', kind: 'notify:', canManage: true },
+  { scope: 'instance', kind: 'notify:', layout: 'table', canManage: true },
 )
+
+const emit = defineEmits<{
+  /**
+   * The rows as they were loaded.
+   *
+   * Said rather than fetched twice by the page: the page has to draw a block per
+   * place, and it cannot do that from a list of names it does not have. Two reads of
+   * one list would also be two moments at which the list was true.
+   */
+  (event: 'rows', rows: ModuleRow[]): void
+}>()
 
 const { add: notify } = useNotifyPool()
 
@@ -112,6 +141,24 @@ const formBusy = ref(false)
  * today, and a second one installed tomorrow would make the column true by itself
  * without anybody deciding it should be.
  */
+/**
+ * Which rows have what is under them open.
+ *
+ * A row in blocks layout is a header for the rest of a place, and a header with nothing
+ * under it is a question the page should answer by itself: the first row open, because
+ * somebody opening this page has usually come about one place, and it is the one they
+ * will read. Everything else waits until asked.
+ */
+const opened = ref<Record<string, boolean>>({})
+
+function toggleRow(row: ModuleRow) {
+  if (props.layout !== 'blocks') return
+  opened.value = { ...opened.value, [row.id]: !opened.value[row.id] }
+}
+
+const isOpen = (row: ModuleRow) =>
+  props.layout === 'blocks' ? opened.value[row.id] === true : true
+
 const severalModules = computed(() => {
   const kinds = new Set(rows.value.map((row) => row.module_id))
   return kinds.size > 1
@@ -154,6 +201,7 @@ async function load() {
     // The choice of module is this module's on its own page, so the list has one
     // entry and the form does not ask a question with a single answer.
     available.value = props.onlyModule ? modules.filter((one) => one.id === props.onlyModule) : modules
+    emit('rows', rows.value)
 
     // Settings that had stopped applying are gone by the time this list arrives, and
     // the count says so. Left out, a person who set something and cannot find it has
@@ -344,6 +392,7 @@ async function remove(row: ModuleRow) {
   try {
     await api.del(`/module-targets/${row.id}?${scopeQuery.value}`)
     rows.value = rows.value.filter((one) => one.id !== row.id)
+    emit('rows', rows.value)
     notify(`Removed ${describe(row)}`)
   } catch (caught) {
     failed(caught, `could not remove ${describe(row)}`)
@@ -359,6 +408,34 @@ async function remove(row: ModuleRow) {
  * switches off once and then cannot find, and a check that cannot be run is not a
  * check.
  */
+/**
+ * Asks whether this place can be reached, before anything is deployed to it.
+ *
+ * Only offered where it means something. Whether a chat is deliverable is answered by
+ * sending to it, which the button beside does; whether a cluster answers is not
+ * something anybody can see without trying, and finding out at deploy time is the
+ * moment least wanted to be told a cluster is unreachable.
+ *
+ * The module answers rather than the core working it out, because getting in is the
+ * module's business and the only definition of reachable that matches what a
+ * deployment will actually meet.
+ */
+async function probe(row: ModuleRow) {
+  busy.value = row.id
+  try {
+    const answer = await api.post<{ ok?: boolean; reason?: string }>(
+      `/projects/${props.projectId}/deploy-clusters/test`, { cluster: addressOf(row) })
+    notify(answer.ok
+      ? `${addressOf(row)} answered`
+      : (answer.reason ?? `${addressOf(row)} did not answer`),
+      { type: answer.ok ? 'success' : 'error' })
+  } catch (caught) {
+    failed(caught, `could not reach ${describe(row)}`)
+  } finally {
+    busy.value = ''
+  }
+}
+
 async function test(row: ModuleRow) {
   busy.value = row.id
   try {
@@ -396,8 +473,72 @@ onMounted(load)
       <NuxtLink class="btn" to="/admin/modules">Modules</NuxtLink>
     </div>
 
-    <template v-else>
-      <table v-if="rows.length" class="table">
+    <!-- One block per row, when a row has something of its own under it.
+         The row is the block's heading: it is what you click to open the rest, and it
+         is what the rest belongs to. With three places there are three headings and
+         three sets of contents under them, and opening the second one is opening the
+         second one. -->
+    <div v-if="rows.length && layout === 'blocks'" class="blocks">
+      <section v-for="row in rows" :key="row.id" class="block">
+        <div class="block-head-row" :class="{ open: isOpen(row) }">
+          <button
+            class="caret"
+            type="button"
+            :aria-expanded="isOpen(row)"
+            :title="isOpen(row) ? 'Hide this place' : 'Show this place'"
+            @click="toggleRow(row)"
+          >
+            {{ isOpen(row) ? '▾' : '▸' }}
+          </button>
+          <span class="place mono">{{ addressOf(row) }}</span>
+          <span v-if="showsLabel(row)" class="muted small">{{ row.label }}</span>
+          <span v-if="row.scope_type !== 'instance'" class="muted small">{{ where(row) }}</span>
+          <span class="spacer" />
+          <button
+            class="switch"
+            :class="{ on: row.enabled }"
+            type="button"
+            :disabled="!canManage || busy === row.id"
+            :aria-pressed="row.enabled"
+            :title="row.enabled ? 'This project may deploy here' : 'This project may not deploy here'"
+            @click="toggle(row)"
+          >
+            <span class="knob" />
+          </button>
+          <button
+            class="btn btn-small"
+            type="button"
+            :disabled="busy === row.id"
+            :title="`Ask whether ${addressOf(row)} answers`"
+            @click="probe(row)"
+          >
+            Check
+          </button>
+          <button
+            v-if="canManage && row.scope_type === props.scope"
+            class="btn btn-small"
+            type="button"
+            @click="openOverride(row)"
+          >
+            Edit
+          </button>
+          <button
+            v-else-if="canManage"
+            class="btn btn-small"
+            type="button"
+            title="Write down what is different here"
+            @click="openOverride(row)"
+          >
+            Change here
+          </button>
+        </div>
+        <div v-if="isOpen(row)" class="block-body">
+          <slot name="row" :row="row" />
+        </div>
+      </section>
+    </div>
+
+    <table v-else-if="rows.length" class="table">
         <thead>
           <tr>
             <!-- Which module a row belongs to, only where the list can hold more than
@@ -457,6 +598,18 @@ onMounted(load)
                 @click="test(row)"
               >
                 Test
+              </button>
+              <!-- A place rather than a destination: whether it can be reached is
+                   asked of it and of nothing else. -->
+              <button
+                v-else
+                class="btn btn-small"
+                type="button"
+                :disabled="busy === row.id"
+                :title="`Ask whether ${addressOf(row)} answers`"
+                @click="probe(row)"
+              >
+                Check
               </button>
               <button
                 v-if="canManage && row.scope_type === props.scope"
@@ -553,7 +706,6 @@ onMounted(load)
       </form>
 
       <button v-else class="btn" type="button" @click="openAdd">{{ words.add }}</button>
-    </template>
   </div>
 </template>
 <style scoped>
@@ -636,3 +788,54 @@ onMounted(load)
   gap: 8px;
 }
 </style>
+
+/* Blocks, for rows that have something under them. */
+.blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.block {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* The row as a heading: one line, and the whole line is a target for opening. */
+.block-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+}
+
+/* Not a button styled as one: a caret that says which way the block opens, in the
+   place the eye already is — at the left edge, where a disclosure always is. */
+.caret {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.block-head-row .place {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* What is under the row belongs to it, so it is inset inside the block rather than
+   running to the border: it is the inside of this place, not the next thing on the
+   page. */
+.block-body {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.block-body > :deep(.active-card) {
+  margin-bottom: 0;
+}
