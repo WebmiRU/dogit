@@ -447,9 +447,11 @@ th {
    be mistaken for a part of. It is a different kind of thing: the table above is which
    modules exist, this is where one of them may put something. */
 .places {
-  padding: 12px 0;
+  /* The same inset the cells have. Written as `12px 0` it looked correct in the source
+     and ran every word and both rules to the edge of the card, which is the one thing a
+     block inside a card must not do. */
+  padding: 14px 12px;
   border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
 }
 
 .places h3 {
