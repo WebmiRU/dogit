@@ -295,12 +295,20 @@ onMounted(async () => {
            remove a cluster the instance put there, and switching one off here
            switches off that one and nothing else — which is the thing that was
            impossible before, and the reason this is a list of rows. -->
-      <ModuleTargets
-        kind="deploy:"
-        scope="project"
-        :scope-id="props.projectId"
-        :can-manage="props.canManage"
-      />
+      <div class="places">
+        <h3>Where this may deploy</h3>
+        <p class="muted small">
+          The clusters this instance may deploy to, inherited by every project. A
+          cluster cannot be removed from here — only switched off for
+          {{ props.projectPath }}, which leaves it where it is for everybody else.
+        </p>
+        <ModuleTargets
+          kind="deploy:"
+          scope="project"
+          :scope-id="props.projectId"
+          :can-manage="props.canManage"
+        />
+      </div>
 
       <div
         v-for="module in deployModules"
@@ -435,6 +443,24 @@ th {
 /* The column the brake sits in. As narrow as the header's longest word and the
    switch together, which is not the module name's width — a table of modules should
    not have a column for a switch taking half the page. */
+/* The clusters, as a block of their own between the two tables it would otherwise
+   be mistaken for a part of. It is a different kind of thing: the table above is which
+   modules exist, this is where one of them may put something. */
+.places {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.places h3 {
+  margin: 0 0 2px;
+  font-size: 13px;
+}
+
+.places p {
+  margin: 0 0 10px;
+}
+
 .brake-col {
   width: 1%;
   white-space: nowrap;

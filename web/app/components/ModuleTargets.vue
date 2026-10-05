@@ -105,6 +105,18 @@ const editing = ref<ModuleRowDraft | null>(null)
 const formError = ref('')
 const formBusy = ref(false)
 
+/**
+ * Whether this list can hold rows of more than one module.
+ *
+ * Decided by the rows rather than by the kind: "deploy:" is one kind and one module
+ * today, and a second one installed tomorrow would make the column true by itself
+ * without anybody deciding it should be.
+ */
+const severalModules = computed(() => {
+  const kinds = new Set(rows.value.map((row) => row.module_id))
+  return kinds.size > 1
+})
+
 const scopeQuery = computed(() => {
   if (props.scope === 'instance') return 'scope=instance'
   const name = props.scope === 'group' ? 'groupID' : 'projectID'
@@ -388,7 +400,11 @@ onMounted(load)
       <table v-if="rows.length" class="table">
         <thead>
           <tr>
-            <th>Module</th>
+            <!-- Which module a row belongs to, only where the list can hold more than
+                 one. A page about a single deploy module already has a table naming
+                 it directly above this one, and saying it again in a second table of
+                 its own reads as a second module rather than as a repetition. -->
+            <th v-if="severalModules">Module</th>
             <th>{{ words.address }}</th>
             <!-- Where a row came from is worth saying on a project or a group, where
                  it may have been decided above. On the instance there is nothing
@@ -400,7 +416,7 @@ onMounted(load)
         </thead>
         <tbody>
           <tr v-for="row in rows" :key="row.id">
-            <td>
+            <td v-if="severalModules">
               <strong>{{ moduleName(row) }}</strong>
               <div class="muted small mono">{{ row.module_kind }}</div>
             </td>
