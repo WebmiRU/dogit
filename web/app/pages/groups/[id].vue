@@ -125,7 +125,7 @@ watch([groupId, tab], load)
           these unless it says otherwise for itself.
         </p>
 
-        <NotificationRecipients scope="group" :scope-id="groupId" :can-manage="canManage" />
+        <ModuleTargets scope="group" :scope-id="groupId" :can-manage="canManage" />
       </div>
     </template>
   </div>

@@ -288,6 +288,20 @@ onMounted(async () => {
         </tbody>
       </table>
 
+      <!-- Where this project may deploy, and which of those places it may not.
+           Its own block rather than part of the settings form, because a cluster is
+           not a setting of this project: it is a row the instance shares with
+           everybody else, with its own switch at this level. Saving it here cannot
+           remove a cluster the instance put there, and switching one off here
+           switches off that one and nothing else — which is the thing that was
+           impossible before, and the reason this is a list of rows. -->
+      <ModuleTargets
+        kind="deploy:"
+        scope="project"
+        :scope-id="props.projectId"
+        :can-manage="props.canManage"
+      />
+
       <div
         v-for="module in deployModules"
         v-show="editing === module.id"

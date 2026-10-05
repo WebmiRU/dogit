@@ -299,6 +299,54 @@ func (s *Server) handleCreateModuleTarget(w http.ResponseWriter, r *http.Request
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{"target": targetView(*created)})
 }
 
+// sameScopeID says whether two ids name the same place, both of which may be nil.
+//
+// Written out rather than compared with == because a nil interface and a nil pointer
+// are not equal however they are boxed, and "this level has no id" is the normal case
+// for the instance rather than an edge worth remembering.
+func sameScopeID(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// overrideTarget writes a level's own change of a row, and returns the row to write it
+// on: the level's own override if it already has one, and a new row if it does not.
+//
+// The values sent are what this level wants to be different about, not what it wants
+// the row to become. That is the difference between an override and a second row, and
+// getting it backwards is how a project that changed one namespace ends up pinned to
+// a copy of everything the instance had, frozen at the moment it was copied.
+func (s *Server) overrideTarget(r *http.Request, parent store.ModuleTarget,
+	scopeType string, scopeID *uuid.UUID) (*store.ModuleTarget, error) {
+
+	rows, err := s.store.ModuleTargets().At(r.Context(), parent.IntegrationID, scopeType, scopeID)
+	if err != nil {
+		return nil, err
+	}
+	for _, one := range rows {
+		if one.Overrides != nil && *one.Overrides == parent.ID {
+			return &one, nil
+		}
+	}
+
+	created, err := s.store.ModuleTargets().Create(r.Context(), &store.ModuleTarget{
+		IntegrationID: parent.IntegrationID,
+		ScopeType:     scopeType,
+		ScopeID:       scopeID,
+		Label:         parent.Label,
+		Position:      parent.Position,
+		Overrides:     &parent.ID,
+		Values:        map[string]json.RawMessage{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.log.Info("a row was overridden here", "scope", scopeType, "row", parent.Label)
+	return created, nil
+}
+
 // handleUpdateModuleTarget changes one row: its name, its switch, its values.
 func (s *Server) handleUpdateModuleTarget(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(pathParam(r, "targetID"))
@@ -312,9 +360,35 @@ func (s *Server) handleUpdateModuleTarget(w http.ResponseWriter, r *http.Request
 		s.writeError(w, r, errNotFound("no such row"))
 		return
 	}
-	// The row is changed where it is defined, not where it is seen: a project editing
-	// an inherited recipient must first say what it wants of it, not edit above it.
-	if err := s.allowSettingScope(r, existing.ScopeType, existing.ScopeID); err != nil {
+
+	// A change made at a level other than the row's own becomes an override rather
+	// than an edit above it.
+	//
+	// This is the whole point of the hierarchy and it cannot be left to the caller.
+	// The row in the list is the row everybody sees, at every level below the one that
+	// wrote it, so a project switching it off means "off here" — and writing that on
+	// the row itself would switch it off for every project that inherits it. The form
+	// asks for an override explicitly; a switch does not, because a switch has nowhere
+	// to put the word. So a switch is answered here, where the level is known, rather
+	// than refused or obeyed.
+	scopeType, scopeID, err := s.settingScope(r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := s.allowSettingScope(r, scopeType, scopeID); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	if scopeType != existing.ScopeType || !sameScopeID(existing.ScopeID, scopeID) {
+		written, err := s.overrideTarget(r, *existing, scopeType, scopeID)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		existing = written
+	} else if err := s.allowSettingScope(r, existing.ScopeType, existing.ScopeID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}

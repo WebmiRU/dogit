@@ -201,17 +201,26 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 func (c *coreClient) clusterFor(ctx context.Context, project, name, namespace string) (
 	Cluster, string, k8s.Client, error) {
 
-	settings, err := c.settings(ctx, project)
+	rows, err := c.targets(ctx, project)
 	if err != nil {
 		return Cluster{}, "", nil, err
 	}
-	clusters, err := clustersOf(settings)
+	clusters, err := clustersOf(rows)
 	if err != nil {
 		return Cluster{}, "", nil, err
 	}
 
 	cluster, found := find(clusters, name)
 	if !found {
+		// Said as what it is, which is not always the same thing.
+		//
+		// A cluster that is switched off at this level is not missing, and telling a
+		// project its cluster does not exist sends somebody to add one that is already
+		// there — as a second row, because the first one is not offered anywhere. The
+		// answer has to say which of the two happened, or the fix is a guess.
+		if off, isOff := findSwitchedOff(rows, name); isOff {
+			return Cluster{}, "", nil, errClusterOff(off, name)
+		}
 		return Cluster{}, "", nil, errClusterNotFound(name)
 	}
 
@@ -360,12 +369,12 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(namespace) == "" {
-		settings, err := c.settings(ctx, project)
+		rows, err := c.targets(ctx, project)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		if clusters, err := clustersOf(settings); err == nil {
+		if clusters, err := clustersOf(rows); err == nil {
 			if cluster, found := find(clusters, name); found {
 				namespace = cluster.DefaultNamespace
 			}
@@ -487,12 +496,12 @@ func (c *coreClient) handleTestCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := c.settings(ctx, request.Project)
+	rows, err := c.targets(ctx, request.Project)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	clusters, err := clustersOf(settings)
+	clusters, err := clustersOf(rows)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -500,6 +509,10 @@ func (c *coreClient) handleTestCluster(w http.ResponseWriter, r *http.Request) {
 
 	cluster, found := find(clusters, request.Cluster)
 	if !found {
+		if off, isOff := findSwitchedOff(rows, request.Cluster); isOff {
+			writeError(w, http.StatusForbidden, errClusterOff(off, request.Cluster).Error())
+			return
+		}
 		writeError(w, http.StatusNotFound, errClusterNotFound(request.Cluster).Error())
 		return
 	}
@@ -609,6 +622,36 @@ type clusterNotFoundError struct{ name string }
 
 func (e clusterNotFoundError) Error() string {
 	return "no cluster is called " + e.name + " in this project's settings"
+}
+
+// findSwitchedOff is a row of the right name that is switched off at this level.
+//
+// Asked separately from the rows that can be used, because "you may not" and "it is
+// not there" are different news and only one of them is fixed by adding a cluster.
+func findSwitchedOff(rows []moduleTarget, name string) (string, bool) {
+	for _, one := range rows {
+		if one.Enabled {
+			continue
+		}
+		if strings.TrimSpace(one.Value("name")) == name {
+			return one.Label, true
+		}
+	}
+	return "", false
+}
+
+func errClusterOff(label, name string) error { return clusterOffError{label: label, name: name} }
+
+type clusterOffError struct{ label, name string }
+
+func (e clusterOffError) Error() string {
+	where := e.label
+	if where == "" {
+		where = e.name
+	}
+	return "the cluster " + e.name + " is switched off for this project (" + where +
+		"), so nothing is deployed there. Switch it on in the deploy settings, or point " +
+		"the deployment somewhere else."
 }
 
 // errNoNamespace says what is missing without inventing a place to deploy to.

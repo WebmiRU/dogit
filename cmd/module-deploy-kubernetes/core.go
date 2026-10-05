@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -116,6 +117,56 @@ func (c *coreClient) settings(ctx context.Context, project string) (map[string]a
 		return nil, fmt.Errorf("read settings: %w", err)
 	}
 	return answer.Effective, nil
+}
+
+// targets returns the rows this module may act on, as they apply to a project.
+//
+// The rows rather than the settings, for the reason they are rows: they are inherited,
+// each has its own switch, and redoing that here would be a second implementation of
+// it that could disagree with the page showing the same list.
+func (c *coreClient) targets(ctx context.Context, project string) ([]moduleTarget, error) {
+	path := "/api/v1/module/targets"
+	if project != "" {
+		path += "?project=" + url.QueryEscape(project)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		return nil, fmt.Errorf("the core did not give this module its rows (HTTP %d): %s",
+			response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var answer struct {
+		Targets []struct {
+			ID      string         `json:"id"`
+			Label   string         `json:"label"`
+			Enabled bool           `json:"enabled"`
+			Values  map[string]any `json:"values"`
+		} `json:"targets"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&answer); err != nil {
+		return nil, fmt.Errorf("read rows: %w", err)
+	}
+
+	rows := make([]moduleTarget, 0, len(answer.Targets))
+	for _, one := range answer.Targets {
+		rows = append(rows, moduleTarget{
+			ID: one.ID, Label: one.Label, Enabled: one.Enabled, Values: one.Values,
+		})
+	}
+	return rows, nil
 }
 
 // heartbeat keeps this module marked online.

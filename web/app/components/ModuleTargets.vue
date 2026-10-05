@@ -1,37 +1,53 @@
 <script setup lang="ts">
 /**
- * Who gets told when something happens, at one level.
+ * The rows a module may act on, at one level.
  *
- * A row here is one recipient: a module, an address, and whether this place wants
- * messages. Not a module — a module can be pointed at two chats, and a chat can be
- * inherited by twenty repositories, so the row is where the two meet.
+ * A row here is one place: a module, an address, and whether this place may use it.
+ * Not a module — a module can be pointed at two chats, and a chat can be inherited by
+ * twenty repositories, so the row is where the two meet.
+ *
+ * This list is the same list for every kind of module, because it is the same question:
+ * a notification module writes to a chat, a deployment module writes to a cluster, and
+ * in both cases the questions asked of a row are the same three. Which is who has it,
+ * what it is called, and is it switched on here. What the rows are called is the
+ * module's own word for them, which it declares in its manifest; what this page calls
+ * them is the only thing that changes, and it is `words` below.
  *
  * The same component serves the instance, a group and a project, because it is the
  * same question at each: what does this place get, and what did it decide itself.
- * What differs is the scope query and the wording of the "from" column, and both come
- * from the scope prop.
  *
  * Two rules shape what is shown:
  *
  * - A row somebody has changed says so, and says which level changed it. A list that
  *   cannot answer "whose setting is this" is a list nobody will trust enough to
  *   switch anything off in.
- * - Nothing here decides what is worth saying. That belongs to the pipeline, which
- *   says so in its own configuration; this list only says where a message would go.
+ * - Nothing here decides what anything may do. That belongs to the configuration, which
+ *   says so in its own file; this list only says where a message would go, or where a
+ *   release may be put.
  */
 import type { SettingSpec } from '~/types/module'
-import type { Recipient, RecipientDraft, RecipientsAnswer } from '~/types/notification'
+import type { ModuleRow, ModuleRowDraft, ModuleRowsAnswer } from '~/types/notification'
 
 const props = withDefaults(
   defineProps<{
-    /** Whose recipients these are: instance, group or project. */
+    /**
+     * Which modules' rows these are, as a kind prefix.
+     *
+     * Which is not cosmetic. Every kind of module has rows in the same table, and a
+     * list that did not say which kind it wanted would show a project the chat
+     * channels it can be told on next to the clusters it can be deployed to — two
+     * lists of "places this project may act in", indistinguishable, and one of them
+     * carrying credentials nobody asked to see.
+     */
+    kind?: string
+    /** Whose rows these are: instance, group or project. */
     scope?: 'instance' | 'group' | 'project'
     scopeId?: string
     canManage?: boolean
     /**
      * One module, when the page is that module's own.
      *
-     * The module page shows its own recipients and nothing else: somebody reading
+     * The module page shows its own rows and nothing else: somebody reading
      * "Telegram writes to these two chats" is not helped by a list of where email
      * goes as well.
      */
@@ -39,20 +55,53 @@ const props = withDefaults(
     /** Which module a newly added recipient belongs to. */
     defaultModule?: string
   }>(),
-  { scope: 'instance', canManage: true },
+  { scope: 'instance', kind: 'notify:', canManage: true },
 )
 
 const { add: notify } = useNotifyPool()
 
-const recipients = ref<Recipient[]>([])
-const available = ref<RecipientsAnswer['modules']>([])
+/**
+ * What this list calls a row, in the singular and the plural.
+ *
+ * Taken from the kind rather than passed in separately, so that a page cannot say
+ * "recipient" above a list of clusters: the noun and the kind are the same decision,
+ * and giving them to a caller separately is how they come to disagree. Only two kinds
+ * exist today, and an unrecognised one is called a row rather than guessed at.
+ */
+const words = computed(() => {
+  const kind = props.kind
+  if (kind.startsWith('deploy:')) {
+    return {
+      one: 'cluster', many: 'clusters', address: 'Where it goes',
+      add: 'Add a cluster', adding: 'Add a cluster', changing: 'Change this cluster',
+      named: 'the cluster', loading: 'Loading clusters…', nothing: 'cluster',
+      empty: 'No deploy modules are installed',
+      emptyBody:
+        'Deployments are carried out by modules, and there are none here yet. Install '
+        + 'one, and the places it can put a release will appear in this list.',
+    }
+  }
+  return {
+    one: 'recipient', many: 'recipients', address: 'Writes to',
+    add: 'Add a recipient', adding: 'Add a recipient', changing: 'Change this recipient',
+    named: 'the recipient', loading: 'Loading recipients…', nothing: 'recipient',
+    empty: 'No notification modules are installed',
+    emptyBody:
+      'Notifications are delivered by modules, and there are none here yet. Install '
+      + 'one — Telegram, email, a webhook — and the places it can write to will appear '
+      + 'in this list.',
+  }
+})
+
+const rows = ref<ModuleRow[]>([])
+const available = ref<ModuleRowsAnswer['modules']>([])
 /** What stopped applying and was removed, said once and then left alone. */
 const stale = ref('')
 const loading = ref(true)
 const busy = ref('')
 
 /** The row being added or edited, or null when the form is closed. */
-const editing = ref<RecipientDraft | null>(null)
+const editing = ref<ModuleRowDraft | null>(null)
 const formError = ref('')
 const formBusy = ref(false)
 
@@ -69,7 +118,7 @@ const scopeWord = computed(() => {
   return 'the instance'
 })
 
-function where(row: Recipient): string {
+function where(row: ModuleRow): string {
   if (row.scope_type === props.scope) return row.overridden ? 'overridden here' : 'this ' + scopeWord.value.replace('the ', '')
   const from = row.inherited_from === 'group' ? 'the group' : 'the instance'
   return row.overridden ? 'overridden here, ' + from : 'from ' + from
@@ -83,11 +132,11 @@ function where(row: Recipient): string {
  * table in its place reads as a page that has forgotten what it just did.
  */
 async function load() {
-  if (recipients.value.length === 0) loading.value = true
+  if (rows.value.length === 0) loading.value = true
   try {
-    const answer = await api.get<RecipientsAnswer>(`/module-targets?${scopeQuery.value}`)
+    const answer = await api.get<ModuleRowsAnswer>(`/module-targets?kind=${encodeURIComponent(props.kind)}&${scopeQuery.value}`)
     const modules = answer.modules ?? []
-    recipients.value = props.onlyModule
+    rows.value = props.onlyModule
       ? (answer.targets ?? []).filter((row) => row.module_id === props.onlyModule)
       : (answer.targets ?? [])
     // The choice of module is this module's on its own page, so the list has one
@@ -101,7 +150,7 @@ async function load() {
   } catch (caught) {
     // Said in the corner rather than in the page: the list is either there or it is
     // not, and a strip of error above an empty table explains nothing.
-    failed(caught, 'the recipients could not be read')
+    failed(caught, `the ${words.value.many} could not be read`)
   } finally {
     loading.value = false
   }
@@ -122,7 +171,7 @@ function staleNotice(dropped: number): string {
 }
 
 /** How to call a recipient in a sentence. */
-function describe(row: Recipient): string {
+function describe(row: ModuleRow): string {
   const address = addressOf(row)
   return address === '—' ? moduleName(row) : `${moduleName(row)} ${address}`
 }
@@ -156,7 +205,7 @@ function settingsOf(moduleId: string): SettingSpec[] {
 }
 
 /** What a recipient of this module is called in a list. */
-function addressOf(row: Recipient): string {
+function addressOf(row: ModuleRow): string {
   const identify = available.value.find((one) => one.id === row.module_id)?.target?.identify ?? []
   for (const key of identify) {
     const value = row.values?.[key]
@@ -172,13 +221,13 @@ function addressOf(row: Recipient): string {
  * anything the address does not already say, and printing both makes a list twice as
  * long as it needs to be.
  */
-function showsLabel(row: Recipient): boolean {
+function showsLabel(row: ModuleRow): boolean {
   const address = addressOf(row)
   return row.label !== '' && !row.label.includes(address) && address !== '—'
 }
 
-function moduleName(row: Recipient): string {
-  return row.module_name || row.module_kind.replace('notify:', '')
+function moduleName(row: ModuleRow): string {
+  return row.module_name || row.module_kind.replace(props.kind, '')
 }
 
 function openAdd() {
@@ -195,7 +244,7 @@ function openAdd() {
 }
 
 /** Change an inherited row here: what differs is written down, the rest is inherited. */
-function openOverride(row: Recipient) {
+function openOverride(row: ModuleRow) {
   editing.value = {
     id: row.id,
     moduleId: row.module_id,
@@ -241,7 +290,7 @@ async function save() {
     // neither needs to read anything back.
     const added = !editing.value.id
     const module = available.value.find((one) => one.id === editing.value?.moduleId)
-    const named = editing.value?.label || module?.name || 'the recipient'
+    const named = editing.value?.label || module?.name || words.value.named
     closeForm()
     await load()
     if (added) notify(`Added ${named}`)
@@ -259,7 +308,7 @@ async function save() {
  * to move is a switch that lies to whoever pressed it, and the answer arrives either
  * way — as a notice when it worked is not needed, as one when it did not.
  */
-async function toggle(row: Recipient) {
+async function toggle(row: ModuleRow) {
   const wanted = !row.enabled
   row.enabled = wanted
   row.enabled_here = true
@@ -278,11 +327,11 @@ async function toggle(row: Recipient) {
   }
 }
 
-async function remove(row: Recipient) {
+async function remove(row: ModuleRow) {
   busy.value = row.id
   try {
     await api.del(`/module-targets/${row.id}?${scopeQuery.value}`)
-    recipients.value = recipients.value.filter((one) => one.id !== row.id)
+    rows.value = rows.value.filter((one) => one.id !== row.id)
     notify(`Removed ${describe(row)}`)
   } catch (caught) {
     failed(caught, `could not remove ${describe(row)}`)
@@ -298,7 +347,7 @@ async function remove(row: Recipient) {
  * switches off once and then cannot find, and a check that cannot be run is not a
  * check.
  */
-async function test(row: Recipient) {
+async function test(row: ModuleRow) {
   busy.value = row.id
   try {
     await api.post(`/module-targets/${row.id}/test?${scopeQuery.value}`, {})
@@ -326,25 +375,21 @@ onMounted(load)
       Changing this needs rights to manage {{ scopeWord.replace('the ', '') }}.
     </div>
 
-    <div v-else-if="loading" class="spinner">Loading recipients…</div>
+    <div v-else-if="loading" class="spinner">{{ words.loading }}</div>
 
 
     <div v-else-if="available.length === 0" class="card empty">
-      <h3>No notification modules are installed</h3>
-      <p class="muted">
-        Notifications are delivered by modules, and there are none here yet. Install
-        one — Telegram, email, a webhook — and the places it can write to will appear
-        in this list.
-      </p>
+      <h3>{{ words.empty }}</h3>
+      <p class="muted">{{ words.emptyBody }}</p>
       <NuxtLink class="btn" to="/admin/modules">Modules</NuxtLink>
     </div>
 
     <template v-else>
-      <table v-if="recipients.length" class="table">
+      <table v-if="rows.length" class="table">
         <thead>
           <tr>
             <th>Module</th>
-            <th>Writes to</th>
+            <th>{{ words.address }}</th>
             <!-- Where a row came from is worth saying on a project or a group, where
                  it may have been decided above. On the instance there is nothing
                  above, so the column would only ever say the same thing. -->
@@ -354,7 +399,7 @@ onMounted(load)
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in recipients" :key="row.id">
+          <tr v-for="row in rows" :key="row.id">
             <td>
               <strong>{{ moduleName(row) }}</strong>
               <div class="muted small mono">{{ row.module_kind }}</div>
@@ -384,7 +429,17 @@ onMounted(load)
                    cell: a table cell styled as a flex row stops being a table cell,
                    and the row's edges stop lining up with the row above it. -->
               <div class="actions">
-              <button class="btn btn-small" type="button" :disabled="busy === row.id" @click="test(row)">
+              <!-- Sending a message is what a notification module does. A cluster is
+                   a place to put a release and there is no message to send it, so the
+                   button that appears on every row of the other list is not offered
+                   here rather than being offered and failing. -->
+              <button
+                v-if="!props.kind.startsWith('deploy:')"
+                class="btn btn-small"
+                type="button"
+                :disabled="busy === row.id"
+                @click="test(row)"
+              >
                 Test
               </button>
               <button
@@ -425,9 +480,9 @@ onMounted(load)
         message would go.
       </div>
 
-      <form v-if="editing" class="card recipient-form" @submit.prevent="save">
+      <form v-if="editing" class="card row-form" @submit.prevent="save">
         <div class="card-body">
-          <h4>{{ editing.id ? 'Change this recipient' : 'Add a recipient' }}</h4>
+          <h4>{{ editing.id ? words.changing : words.adding }}</h4>
 
           <!-- Asked only when there is a choice to make. On the module's own page
                there is one module, and offering a list of one is noise. -->
@@ -453,7 +508,7 @@ onMounted(load)
             <input
               id="recipient-name"
               v-model="editing.label"
-              placeholder="What this recipient is for — the shared chat, deploys"
+              :placeholder="`What this ${words.one} is for — the shared chat, production`"
             >
           </div>
 
@@ -481,7 +536,7 @@ onMounted(load)
         </div>
       </form>
 
-      <button v-else class="btn" type="button" @click="openAdd">Add a recipient</button>
+      <button v-else class="btn" type="button" @click="openAdd">{{ words.add }}</button>
     </template>
   </div>
 </template>
@@ -532,7 +587,7 @@ onMounted(load)
   font-size: 12px;
 }
 
-.recipient-form {
+.row-form {
   max-width: 560px;
   margin-bottom: 16px;
 }

@@ -27,6 +27,6 @@ const props = defineProps<{
       it for this project only.
     </p>
 
-    <NotificationRecipients scope="project" :scope-id="props.projectId" :can-manage="props.canManage" />
+    <ModuleTargets scope="project" :scope-id="props.projectId" :can-manage="props.canManage" />
   </div>
 </template>

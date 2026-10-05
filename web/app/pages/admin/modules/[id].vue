@@ -230,7 +230,7 @@ const storageFraction = computed(() => {
             || 'One row per place this module writes to. Everything here is inherited by every group and project that has not changed it.' }}
         </p>
 
-        <NotificationRecipients
+        <ModuleTargets
           scope="instance"
           :only-module="module.id"
           :default-module="module.id"

@@ -527,12 +527,13 @@ function placeOf(one: { place?: string; cluster?: string; namespace?: string }):
 }
 
 const rows = computed(() => {
-  // The record from the stream while there is one, and otherwise the row the module
-  // has already written. They are the same deployment — the stream and the history
-  // row come from one Begin — but they arrive at different moments, and taking the
-  // finished one while the new one is a second old puts yesterday's image on screen
-  // under a card that says this one is going out now.
-  if (deployBusy) {
+  // `.value`, and this is not a detail: a computed is an object, and an object is
+  // always true. Written without it, the branch below was taken in every state,
+  // which left the card at rest showing the place and the workload it borrows and
+  // nothing else — no tag, no image, on a line whose whole job is to name what is
+  // deployed. The template unwraps refs on its own, which is why the same name read
+  // correctly there and wrongly here.
+  if (deployBusy.value) {
     // Nothing to name yet is nothing to show.
     //
     // While an operation is under way these cells are about that operation, and until

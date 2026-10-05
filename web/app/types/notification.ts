@@ -8,7 +8,7 @@
  * answer about a row is here — what it is, where the row came from, and which level
  * is responsible for the value.
  */
-export interface Recipient {
+export interface ModuleRow {
   id: string
   module_id: string
   module_kind: string
@@ -38,9 +38,9 @@ export interface Recipient {
  * number.
  */
 /** The answer for one place: its recipients, the modules available, and what went. */
-export interface RecipientsAnswer {
-  targets: Recipient[]
-  modules: RecipientsModule[]
+export interface ModuleRowsAnswer {
+  targets: ModuleRow[]
+  modules: ModuleRowsModule[]
   /**
    * How many settings were removed because they had stopped applying — a project moved
    * to another group, leaving them pointing at a channel that is not its own any more.
@@ -50,7 +50,7 @@ export interface RecipientsAnswer {
   stale_removed?: number
 }
 
-export interface RecipientsModule {
+export interface ModuleRowsModule {
   id: string
   kind: string
   name: string
@@ -66,7 +66,7 @@ export interface RecipientsModule {
   settings?: import('./module').SettingSpec[]
 }
 /** The row being added or changed in the recipients form. */
-export interface RecipientDraft {
+export interface ModuleRowDraft {
   /** Empty while adding. */
   id: string
   moduleId: string

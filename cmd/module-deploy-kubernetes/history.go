@@ -429,38 +429,68 @@ func scanDeployment(rows scanner) (deploy.Deployment, error) {
 	return record, nil
 }
 
-// clustersOf reads the clusters this module may deploy to, from its own settings.
+// clustersOf reads the clusters this module may deploy to, as the core resolved them.
 //
-// The list arrives as one value, which is the shape the type says it has: a set of
-// values that belong together, each of which may or may not be one the rest of the
-// system needs to understand.
-func clustersOf(settings map[string]any) ([]Cluster, error) {
-	raw, ok := settings["clusters"]
-	if !ok {
-		return nil, nil
-	}
-
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("read the cluster list: %w", err)
-	}
-
-	var clusters []Cluster
-	if err := json.Unmarshal(encoded, &clusters); err != nil {
-		return nil, fmt.Errorf("read the cluster list: %w", err)
-	}
-
-	// Only a cluster with a name is a cluster. One without is a row somebody started
-	// filling in, and using it would mean applying a deployment to a place with no
-	// address.
-	kept := clusters[:0]
-	for _, one := range clusters {
-		if strings.TrimSpace(one.Name) == "" {
+// They are rows rather than a list in a setting, so what comes back is what applies to
+// this project: the instance's clusters, with anything a group or this project changed
+// already merged in, and each one saying whether it is switched on. The module is not
+// reimplementing that inheritance, because the one thing worse than a page that shows
+// the wrong answer is a page and a deployment that disagree about the same cluster.
+//
+// A row that is switched off is left out entirely. The core sends those too, and this
+// module has no business being the place that decides a switched-off row is still a
+// place: the question was answered at the level that answered it, and answering it
+// again here is how a cluster somebody turned off keeps being deployed to.
+func clustersOf(targets []moduleTarget) ([]Cluster, error) {
+	clusters := make([]Cluster, 0, len(targets))
+	for _, one := range targets {
+		if !one.Enabled {
 			continue
 		}
-		kept = append(kept, one)
+		// Only a cluster with a name is a cluster. One without is a row somebody
+		// started filling in, and using it would mean applying a deployment to a place
+		// with no address.
+		name := strings.TrimSpace(one.Value("name"))
+		if name == "" {
+			continue
+		}
+		clusters = append(clusters, Cluster{
+			Name:             name,
+			Kubeconfig:       one.Value("kubeconfig"),
+			Context:          one.Value("context"),
+			DefaultNamespace: one.Value("default_namespace"),
+		})
 	}
-	return kept, nil
+	return clusters, nil
+}
+
+// moduleTarget is one row of the core's own rows, as the core sent it.
+type moduleTarget struct {
+	ID    string
+	Label string
+	// Enabled is the switch, resolved: the most specific level that said anything
+	// about it decides, and a level that said nothing leaves the one below it standing.
+	Enabled bool
+	Values  map[string]any
+}
+
+// Value reads one of the row's values as a string.
+//
+// Everything is read as a string because everything this module stores in a row is one:
+// a name, a context, a namespace, the contents of a document. A row that has been
+// tampered with by hand may hold a number or a list, and that should be read as
+// whatever text it is rather than refused — the field is either used as a name or not
+// used at all, and refusing here would turn a typo in a row into a module that cannot
+// deploy anywhere.
+func (t moduleTarget) Value(key string) string {
+	raw, ok := t.Values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	if text, ok := raw.(string); ok {
+		return text
+	}
+	return fmt.Sprintf("%v", raw)
 }
 
 // Cluster is one place this module may deploy to.

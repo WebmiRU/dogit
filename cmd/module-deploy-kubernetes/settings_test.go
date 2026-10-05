@@ -7,15 +7,31 @@ import (
 	"time"
 )
 
-// Reading this module's own settings, and what it says when they do not say enough.
+// Reading the rows the core resolved, and what it says when they do not say enough.
 //
-// The clusters are a list because a cluster is a set of values that belong together,
-// and one reached through the pod's own service account cannot be two values of one
-// key with one reached through a kubeconfig somebody copied. What the tests check is
-// that a list arrives as a list, that half-filled rows are ignored rather than
-// half-used, and that the module refuses where guessing would be worse.
+// A cluster is a row rather than an element of a list, because it is written at a
+// level, inherited from the levels above, and switched on or off at whichever of them
+// says so. So what these check is that a row arrives as a row, that half-filled rows
+// are ignored rather than half-used, and — the part that was not true before this
+// became rows — that a row somebody switched off is not a place this module will
+// deploy to, whatever the repository asks for.
 
-// clusterList is the shape a list setting arrives in from the core.
+// rowsOf turns the same JSON a list setting used to arrive in into rows, so a test
+// reads the way the thing is written rather than the way it used to be stored.
+func rowsOf(t *testing.T, encoded string) []moduleTarget {
+	t.Helper()
+	var values []map[string]any
+	if err := json.Unmarshal([]byte(encoded), &values); err != nil {
+		t.Fatalf("read the rows: %v", err)
+	}
+	rows := make([]moduleTarget, 0, len(values))
+	for _, one := range values {
+		rows = append(rows, moduleTarget{Enabled: true, Values: one})
+	}
+	return rows
+}
+
+// clusterList is the shape a row list arrives in from the core.
 const clusterList = `[
   {"name": "production-eu", "in_cluster": false, "kubeconfig": "YXBpVmVyc2lvbjogdjEK",
    "context": "prod", "default_namespace": "web"},
@@ -23,7 +39,7 @@ const clusterList = `[
 ]`
 
 func TestClustersArriveAsAList(t *testing.T) {
-	clusters, err := clustersOf(map[string]any{"clusters": anyValue(clusterList)})
+	clusters, err := clustersOf(rowsOf(t, clusterList))
 	if err != nil {
 		t.Fatalf("read the clusters: %v", err)
 	}
@@ -47,8 +63,8 @@ func TestClustersArriveAsAList(t *testing.T) {
 // a place with no address, and a list that has one is a list somebody is halfway
 // through writing.
 func TestARowWithoutANameIsNotACluster(t *testing.T) {
-	clusters, err := clustersOf(map[string]any{"clusters": anyValue(
-		`[{"name": "", "kubeconfig": "eA=="}, {"name": "real", "kubeconfig": "eQ=="}]`)})
+	clusters, err := clustersOf(rowsOf(t,
+		`[{"name": "", "kubeconfig": "eA=="}, {"name": "real", "kubeconfig": "eQ=="}]`))
 	if err != nil {
 		t.Fatalf("read the clusters: %v", err)
 	}
@@ -60,7 +76,7 @@ func TestARowWithoutANameIsNotACluster(t *testing.T) {
 // Nothing configured is nothing, not an error: an installation with no clusters yet is
 // a normal state, and the page says so.
 func TestNoClustersIsNotAFailure(t *testing.T) {
-	clusters, err := clustersOf(map[string]any{})
+	clusters, err := clustersOf(nil)
 	if err != nil || len(clusters) != 0 {
 		t.Errorf("read %+v (%v) from settings that have no clusters", clusters, err)
 	}
@@ -117,4 +133,50 @@ func anyValue(encoded string) any {
 		panic("a fixture that is not valid JSON: " + encoded)
 	}
 	return value
+}
+
+// A row somebody switched off is not a place to deploy to.
+//
+// This is the whole point of a row having a switch: a cluster the instance shares with
+// a hundred projects must be usable by all of them and by none of them, and the way to
+// say "not this one" has to survive a repository asking for it by name. A row that
+// stayed available because the file asked for it would make the switch a suggestion.
+func TestASwitchedOffRowIsNotAPlaceToDeployTo(t *testing.T) {
+	rows := []moduleTarget{
+		{Label: "production-eu", Enabled: true, Values: map[string]any{"name": "production-eu"}},
+		{Label: "staging", Enabled: false, Values: map[string]any{"name": "staging"}},
+	}
+
+	clusters, err := clustersOf(rows)
+	if err != nil {
+		t.Fatalf("read the clusters: %v", err)
+	}
+	if len(clusters) != 1 || clusters[0].Name != "production-eu" {
+		t.Fatalf("read %+v, want only the row that is switched on", clusters)
+	}
+
+	if _, found := find(clusters, "staging"); found {
+		t.Error("a switched-off row was found as a cluster")
+	}
+}
+
+// And the refusal has to say which of the two happened. "There is no such cluster"
+// sends somebody to add one that is already there; "it is switched off" sends them to
+// the switch, which is the thing that actually needs pressing.
+func TestASwitchedOffRowIsDistinguishedFromAMissingOne(t *testing.T) {
+	rows := []moduleTarget{
+		{Label: "staging", Enabled: false, Values: map[string]any{"name": "staging"}},
+	}
+
+	label, isOff := findSwitchedOff(rows, "staging")
+	if !isOff {
+		t.Fatal("a row that is switched off was not recognised as one")
+	}
+	if !strings.Contains(errClusterOff(label, "staging").Error(), "switched off") {
+		t.Errorf("the refusal does not say what is wrong: %v", errClusterOff(label, "staging"))
+	}
+
+	if _, isOff := findSwitchedOff(rows, "nowhere"); isOff {
+		t.Error("a cluster nobody has heard of was reported as switched off")
+	}
 }
