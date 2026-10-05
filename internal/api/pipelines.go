@@ -295,6 +295,15 @@ func (s *Server) startRunForRef(ctx context.Context, project *models.Project,
 		return nil
 	}
 
+	// The brake. It stops a push or a tag from starting anything by itself and leaves
+	// manual runs alone, because the moment somebody needs this is the moment they
+	// still have to be able to deploy something on purpose.
+	if project.AutoDeployPaused {
+		s.log.Info("an automatic run was not started: this project has them paused",
+			"project", project.Path, "ref", name)
+		return nil
+	}
+
 	config, err := s.pipelineConfig(ctx, s.repos.PathFor(project), sha)
 	if err != nil {
 		s.log.Info("no pipeline configuration for this ref", "project", project.Path,

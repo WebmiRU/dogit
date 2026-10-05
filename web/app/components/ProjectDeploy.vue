@@ -29,6 +29,17 @@ const editing = ref<string>('')
 /** The module whose deployments are shown, or none. */
 const administering = ref<string>('')
 
+/**
+ * Whether a push or a tag may start a run by itself.
+ *
+ * A brake, not a policy. Which branch reaches which place is written in the repository,
+ * because that is a claim about code and is reviewed with it. This is the other thing:
+ * what somebody reaches for when the thing that is deploying has to stop now, and a
+ * commit is not something anyone can safely push while it is happening.
+ */
+const autoPaused = ref(false)
+const savingPause = ref(false)
+
 const modules = ref<ModuleRow[]>([])
 const loading = ref(true)
 const error = ref('')
@@ -52,12 +63,28 @@ function toggleAdmin(module: ModuleRow) {
   if (administering.value) editing.value = ''
 }
 
+/** Pulls the brake, or lets it out again. */
+async function setAutoPaused(paused: boolean) {
+  savingPause.value = true
+  try {
+    await api.patch(`/projects/${props.projectId}`, { auto_deploy_paused: paused })
+    autoPaused.value = paused
+  } finally {
+    savingPause.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
     const answer = await api.get<{ modules: ModuleRow[] }>('/modules')
     modules.value = answer.modules ?? []
+
+    const project = await api.get<{ project: { auto_deploy_paused?: boolean } }>(
+      `/projects/${props.projectId}`,
+    )
+    autoPaused.value = project.project?.auto_deploy_paused ?? false
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -102,6 +129,26 @@ onMounted(async () => {
     </div>
 
     <div v-else class="card">
+      <!-- The brake, above the table it stops: it is about every place at once, so it
+           does not belong to any one row. -->
+      <div class="brake">
+        <label class="brake-label">
+          <input
+            type="checkbox"
+            :checked="autoPaused"
+            :disabled="savingPause || !props.canManage"
+            @change="setAutoPaused(($event.target as HTMLInputElement).checked)"
+          />
+          <span>
+            <strong>Stop deploying automatically</strong>
+            <span class="muted small block">
+              A push or a tag would build nothing on its own. You can still start a run
+              by hand — this only stops them from starting themselves.
+            </span>
+          </span>
+        </label>
+      </div>
+
       <table class="table">
         <thead>
           <tr>
@@ -224,5 +271,21 @@ th {
 
 .small {
   font-size: 12px;
+}
+
+.block {
+  display: block;
+}
+
+.brake {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brake-label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
 }
 </style>

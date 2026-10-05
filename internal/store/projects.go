@@ -91,13 +91,14 @@ type ProjectRepo struct{ s *Store }
 func (s *Store) Projects() *ProjectRepo { return &ProjectRepo{s: s} }
 
 const projectColumns = `id, group_id, path, name, description, visibility, default_branch,
-	allow_pipeline_trigger, allow_merge, merge_method, remove_source_branch, public_emails,
-	created_at, updated_at, archived_at`
+	allow_pipeline_trigger, auto_deploy_paused, allow_merge, merge_method,
+	remove_source_branch, public_emails, created_at, updated_at, archived_at`
 
 func scanProject(row interface{ Scan(...any) error }) (*models.Project, error) {
 	var p models.Project
 	err := row.Scan(&p.ID, &p.GroupID, &p.Path, &p.Name, &p.Description, &p.Visibility,
-		&p.DefaultBranch, &p.AllowPipelineTrigger, &p.AllowMerge, &p.MergeMethod,
+		&p.DefaultBranch, &p.AllowPipelineTrigger, &p.AutoDeployPaused, &p.AllowMerge,
+		&p.MergeMethod,
 		&p.RemoveSourceBranch, &p.PublicEmails, &p.CreatedAt, &p.UpdatedAt, &p.ArchivedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -141,11 +142,12 @@ func (r *ProjectRepo) ByPath(ctx context.Context, path string) (*models.Project,
 func (r *ProjectRepo) Update(ctx context.Context, p *models.Project) error {
 	_, err := r.s.pool.Exec(ctx, `
 		UPDATE projects SET name = $2, description = $3, visibility = $4, default_branch = $5,
-			allow_pipeline_trigger = $6, allow_merge = $7, merge_method = $8,
-			remove_source_branch = $9, public_emails = $10, updated_at = now()
+			allow_pipeline_trigger = $6, auto_deploy_paused = $7, allow_merge = $8,
+			merge_method = $9, remove_source_branch = $10, public_emails = $11,
+			updated_at = now()
 		WHERE id = $1`,
 		p.ID, p.Name, p.Description, p.Visibility, p.DefaultBranch,
-		p.AllowPipelineTrigger, p.AllowMerge, p.MergeMethod,
+		p.AllowPipelineTrigger, p.AutoDeployPaused, p.AllowMerge, p.MergeMethod,
 		p.RemoveSourceBranch, p.PublicEmails)
 	if err != nil {
 		return fmt.Errorf("update project: %w", err)
@@ -264,7 +266,8 @@ func (r *ProjectRepo) ListAll(ctx context.Context) ([]*models.Project, error) {
 func (r *ProjectRepo) ListVisible(ctx context.Context, userID uuid.UUID, visibilityLimit string) ([]*models.Project, map[uuid.UUID]int, error) {
 	const q = `
 		SELECT p.id, p.group_id, p.path, p.name, p.description, p.visibility, p.default_branch,
-		       p.allow_pipeline_trigger, p.allow_merge, p.merge_method, p.remove_source_branch,
+		       p.allow_pipeline_trigger, p.auto_deploy_paused, p.allow_merge,
+		       p.merge_method, p.remove_source_branch,
 		       p.public_emails, p.created_at, p.updated_at, p.archived_at
 		FROM projects p
 		WHERE p.archived_at IS NULL
@@ -285,7 +288,8 @@ func (r *ProjectRepo) ListVisible(ctx context.Context, userID uuid.UUID, visibil
 	for rows.Next() {
 		var p models.Project
 		if err := rows.Scan(&p.ID, &p.GroupID, &p.Path, &p.Name, &p.Description, &p.Visibility,
-			&p.DefaultBranch, &p.AllowPipelineTrigger, &p.AllowMerge, &p.MergeMethod,
+			&p.DefaultBranch, &p.AllowPipelineTrigger, &p.AutoDeployPaused, &p.AllowMerge,
+		&p.MergeMethod,
 			&p.RemoveSourceBranch, &p.PublicEmails, &p.CreatedAt, &p.UpdatedAt, &p.ArchivedAt); err != nil {
 			return nil, nil, err
 		}
