@@ -139,7 +139,33 @@ const runningSince = ref(0)
  * drawn as finished work that is still going. Each phase is here from the moment it is
  * first mentioned until the module says it is finished with it.
  */
+/**
+ * The operation under way is over, however this page found out.
+ *
+ * One place, because it used to be three copies of the same four assignments and they
+ * drifted: one of them missed the phases, one missed the record, and the page could be
+ * left half-closed — no arrow, no clock, and a card still claiming to be deploying.
+ * Anything that ends an operation calls this and nothing else.
+ */
+function finishOperation() {
+  active.value = null
+  activeSeen.value = []
+  activePhases.value = []
+  runningSince.value = 0
+  running.value = null
+}
+
 const activePhases = ref<string[]>([])
+
+/**
+ * Whether anything is under way right now, which is not the same as whether a
+ * deployment finished.
+ *
+ * The place rows on the finished card are built from the last deployment that
+ * completed, so a badge reading that deployment's outcome sits beside a card about the
+ * one running — unless it is asked what is happening now.
+ */
+const deployBusy = computed(() => verdict.value.tone === 'working')
 
 /** The steps the core said this deployment goes through, in order. */
 const plan = ref<{ key: string; label: string }[]>([])
@@ -413,13 +439,7 @@ const live = computed(() => new Set(places.value.map((one) => one.deployment.id)
  * and the steps under it cannot disagree — a green edge beside a red step leaves
  * the reader deciding which of the two to believe.
  */
-const cardState = computed<'working' | 'ok' | 'bad'>(() => {
-  if (active.value) return 'working'
-  if (activeSeen.value.some((one) => one.failed)) return 'bad'
-  const last = deployments.value[0]
-  if (last && (last.state === 'failed' || last.state === 'abandoned')) return 'bad'
-  return 'ok'
-})
+const cardState = computed(() => verdict.value.tone)
 
 /**
  * The log on show: what this operation has said so far, and when nothing is running,
@@ -469,6 +489,119 @@ const idleProgress = computed<DeployProgress | null>(() => {
   }
 })
 
+/**
+ * What is in each place, as one row.
+ *
+ * While a deployment runs, its own record — the one the module wrote down when it
+ * started, which carries the tags it went out under and the workload it touches. At
+ * rest, the newest deployment that finished well, per place.
+ *
+ * Same shape either way on purpose: the card at rest is the reference, and a card
+ * that changes its rows as well as its badge is a different card. Tags and image are
+ * not decoration on this line; they are the answer to "which version is out there",
+ * and they used to go missing for the entire duration of the rollout.
+ */
+const running = ref<DeployProgress['deployment'] | null>(null)
+
+/** The row the module has opened and not yet closed, if there is one. */
+const newestRunning = computed(() =>
+  deployments.value.find((one) => one.state === 'running') ?? null)
+
+/** The names a record carries, each of them once. */
+function oneEach(names?: string[]): string[] {
+  return [...new Set((names ?? []).filter(Boolean))]
+}
+
+/**
+ * A place, named the way the finished card names it: cluster and namespace.
+ *
+ * The record carries a name of its own as well — "dev", from the repository — but the
+ * same place was on this card as "dev" during a deployment and as
+ * "local-k3s/dogit-dev" a minute later, and a line that renames itself between two
+ * states of one thing reads as two things happening.
+ */
+function placeOf(one: { place?: string; cluster?: string; namespace?: string }): string {
+  return [one.cluster, one.namespace].filter(Boolean).join('/')
+    || (one.place ?? '').trim()
+    || '—'
+}
+
+const rows = computed(() => {
+  // The record from the stream while there is one, and otherwise the row the module
+  // has already written. They are the same deployment — the stream and the history
+  // row come from one Begin — but they arrive at different moments, and taking the
+  // finished one while the new one is a second old puts yesterday's image on screen
+  // under a card that says this one is going out now.
+  const record = running.value ?? newestRunning.value
+  if (deployBusy && record) {
+    return [{
+      place: placeOf(record),
+      tags: oneEach(record.tags),
+      image: record.image ?? '',
+      workload: record.workload ?? '',
+    }]
+  }
+
+  return places.value.map((one) => ({
+    place: one.place,
+    tags: oneEach(one.deployment.tags),
+    image: one.deployment.image,
+    workload: one.deployment.workload ?? '',
+  }))
+})
+
+/**
+ * What this card says about itself: one word, one colour, one answer to "is it still
+ * going". The badge, the edge and the timer are all read from here.
+ *
+ * Three facts used to be consulted separately — whether an event has arrived, whether
+ * the run is finished, and what the history says — and they came to disagree: a card
+ * with a green edge and a pill saying "deploying" on it, because the edge was drawn
+ * from the last deployment in the history and the pill from the last thing said, and
+ * the history had already caught up while the pill had not. There is no way to be half
+ * wrong when there is only one answer to be wrong about.
+ */
+const verdict = computed<{ tone: 'working' | 'ok' | 'bad'; word: string; cls: string }>(() => {
+  // Two words, because two different things are happening and "deploying" says
+  // neither of them right. An image being built and pushed is not a deployment: no pod
+  // is being touched, and a card saying "deploying" over a forty-second image build
+  // tells somebody the cluster is being changed while it is not. From the first
+  // deployment phase on, it is one.
+  if (active.value || runningSince.value) {
+    // Which of the three words, decided by what is actually under way rather than by
+    // the last thing said: a module closing a phase with a line of its own must not
+    // turn the word back for a moment while the next one has not started yet.
+    const deployPhase = activePhases.value.find((phase) => phase && !buildPhases.includes(phase))
+    if (deployPhase) return { tone: 'working', word: 'deploying', cls: 'badge-warning' }
+
+    const phase = active.value?.phase ?? ''
+    const word = phase === 'push' || activePhases.value.includes('push')
+      ? 'pushing'
+      : 'building'
+    return { tone: 'working', word, cls: 'badge-warning' }
+  }
+  if (activeSeen.value.some((one) => one.failed)) {
+    return { tone: 'bad', word: 'failed', cls: 'badge-red' }
+  }
+
+  const last = deployments.value[0]
+  if (!last) return { tone: 'ok', word: 'nothing yet', cls: 'badge-neutral' }
+  // A row the module has started but not finished says the card is busy, not what to
+  // call it: "running" is the module's word for its own bookkeeping and it appeared on
+  // screen for a moment before the first event reached the page — a card that changes
+  // its own name twice in two seconds, from a word meant for a database column to one
+  // meant for a person.
+  if (last.state === 'running') {
+    return { tone: 'working', word: 'deploying', cls: 'badge-warning' }
+  }
+  if (last.state === 'abandoned') return { tone: 'bad', word: 'abandoned', cls: 'badge-red' }
+  return { tone: 'ok', word: last.state || 'unknown', cls: badgeClass(last.state) }
+})
+
+const stateBadge = computed(() => verdict.value.word)
+const stateBadgeClass = computed(() => verdict.value.cls)
+
+/** The digest the run is applying, for the title attribute on the rows. */
 const activeImage = computed(() => {
   const applied = [...activeSeen.value].reverse().find((one) => one.phase === 'apply' || one.phase === 'rollout')
   if (!applied) return ''
@@ -694,6 +827,25 @@ async function load() {
     // page, which fetched page one again: a control that could never leave the first
     // page and looked like it had.
     deployments.value = merge(deployments.value, answer.deployments ?? [])
+
+    // The operation under way is over, said by the history rather than by an event.
+    //
+    // Events are how this page hears about things as they happen, and they are the
+    // right way to hear about a thing. But a card that is only ever closed by one
+    // particular event is a card that can get stuck: the event does not arrive, the
+    // reload does, and the page is left claiming to be deploying an operation that
+    // finished a minute ago — with a green edge beside it, because the edge was drawn
+    // from the history that did arrive. So the history closes the card too.
+    //
+    // Matched on the image, and only when the row is finished, because those are the
+    // two facts that mean this particular operation is over. A row still being written
+    // is the operation still running, and must not close it.
+    if (running.value?.image) {
+      const done = (answer.deployments ?? []).some(
+        (one) => one.finished_at && one.image === running.value?.image,
+      )
+      if (done) finishOperation()
+    }
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -725,6 +877,14 @@ function noteOperation(payload: Record<string, unknown>) {
     step: Number(payload.step ?? 0),
     of: Number(payload.of ?? 0),
     finished: payload.finished === true,
+    failed: payload.failed === true,
+  }
+
+  // The record, once the module has written it down. It is what the rows are built
+  // from while the run is under way, so that the tags and the image are on screen
+  // from the first line rather than after the last one.
+  if (payload.deployment && typeof payload.deployment === 'object') {
+    running.value = payload.deployment as NonNullable<DeployProgress['deployment']>
   }
 
   // The phase joins the list of those under way, or leaves it. A phase that has said
@@ -773,8 +933,7 @@ async function revertTo(deployment: Deployment) {
       deployment_id: deployment.id,
     })
     notify(`${shortImage(deployment.image)} is being put back`, { type: 'success' })
-    active.value = null
-    activeSeen.value = []
+    finishOperation()
     await load()
   } catch (caught) {
     const message = caught instanceof ApiError ? caught.message : 'the request failed'
@@ -864,10 +1023,7 @@ onMounted(async () => {
     project: () => props.projectPath,
     onChange: () => {
       // Finished: whatever was under way is not any more.
-      active.value = null
-      activeSeen.value = []
-      activePhases.value = []
-      runningSince.value = 0
+      finishOperation()
       void load()
     },
   })
@@ -893,16 +1049,15 @@ onMounted(async () => {
       // A run reports itself updated when each of its jobs finishes, not once at the
       // end — so the image job finishing says nothing about the deployment that comes
       // after it. Treating that as the end closed the card right after the push, and
-      // the phases that were the whole reason for watching never appeared. The phases
-      // below are the ones a deployment owns; a run sitting on any of them will say so
-      // again when the deployment itself ends.
-      const phase = active.value?.phase ?? ''
-      if (phase && !buildPhases.includes(phase)) return
+      // the phases that were the whole reason for watching never appeared.
+      //
+      // Decided by what is under way rather than by the last thing said: a module that
+      // closes a phase with a line carrying no phase of its own — "finished" — would
+      // otherwise look exactly like a run that never deployed anything, and the card
+      // would flicker back to the last operation and open again a moment later.
+      if (activePhases.value.some((phase) => !buildPhases.includes(phase))) return
 
-      active.value = null
-      activeSeen.value = []
-      activePhases.value = []
-      runningSince.value = 0
+      finishOperation()
     },
   })
 
@@ -993,106 +1148,75 @@ watch(() => props.module.id, load)
          is the thing a page is opened for, and it answers one question, where the two
          lists below answer another. -->
     <div v-show="tab === 'now'">
-    <section v-if="active" class="card active-card" :class="cardState">
+    <!-- One card, and it is the same card in every state.
+         The card at rest is the reference: the rows below say where, under which
+         names, which image and which workload is there. A deployment under way is the
+         same statement with different values in it, and it used to be a different set
+         of rows that said less — no tags, no image, no workload — so the interesting
+         half of a rollout was the half on screen with nothing on it. Three things
+         change between states: the badge, the log, and which record the rows are
+         built from. Nothing else. -->
+    <section class="card active-card" :class="[cardState, { idle: !deployBusy }]">
       <div class="card-body">
+        <!-- The head is the whole of it: what state, where, under which names, which
+             image, which workload, and for how long. One line, one row, in every state
+             — not a heading with a title and then the same facts again underneath. A
+             heading on this card said nothing the badge does not, and it was the thing
+             that had to be reworded whenever a state was added. -->
         <div class="block-head">
-          <h3 class="block-title">Deploying now</h3>
-          <span v-for="place in places" :key="place.place" class="place-chip mono">
-            {{ place.place }}
-          </span>
+          <span class="badge" :class="stateBadgeClass">{{ stateBadge }}</span>
+          <template v-for="row in rows" :key="row.place">
+            <span class="place-chip mono">{{ row.place }}</span>
+            <!-- The names it went out under, beside the digest it is addressed by.
+                 The digest says which image; the tags say what it was called, and a
+                 person comparing this against a release is looking for the name, not
+                 for sixty-four characters of hexadecimal. -->
+            <span v-if="row.tags.length" class="tags">
+              <span v-for="tag in row.tags" :key="tag" class="tag mono">{{ tag }}</span>
+            </span>
+            <span class="mono small">{{ shortImage(row.image) }}</span>
+            <span class="muted small">{{ row.workload || '—' }}</span>
+          </template>
           <span class="spacer" />
-          <!-- What is going into the cluster, or how long it has been going when the
-               module has not named an image yet. A dash standing in for a fact is a
-               gap rather than an answer, and the question at that moment is always
-               "how long has it been like this" — so the clock stands in until
-               there is something to name. -->
-          <span v-if="activeImage" class="muted small mono">
-            going to {{ shortImage(activeImage) }}
-          </span>
-          <span v-else-if="runningFor" class="muted small mono" title="how long this has been going">
-            going {{ runningFor }}
-          </span>
-          <span v-else class="muted small mono">going to —</span>
+          <!-- How long, and how long ago. The same two facts in every state: a clock
+               that appears only while something is moving teaches people to look
+               elsewhere the moment it stops. While it runs the seconds count; after it
+               the ends are both given, because the length of an operation is what
+               makes a slow one worth noticing. -->
+          <span
+            v-if="runningFor"
+            class="muted small mono"
+            title="how long this has been going"
+          >{{ runningFor }}</span>
+          <span v-else-if="whenRun" class="muted small" :title="whenRunExact">{{ whenRun }}</span>
         </div>
 
+        <!-- Live while a run is under way, and still here afterwards: the list is
+             something to read when nothing is happening, which is when there is time
+             to read it. The arrow stands still when there is nothing to stand for. -->
         <DeploySteps
+          v-if="active"
           :progress="active"
           :seen="activeSeen"
           :plan="plan"
           :active-phases="activePhases"
           live
         />
+        <DeploySteps
+          v-else-if="idleProgress && plan.length > 0"
+          :progress="idleProgress"
+          :plan="plan"
+          :active-phases="[]"
+        />
         <DeployLog :lines="shownLog" :plan="plan" />
 
-        <details class="log">
+        <details v-if="active" class="log">
           <summary class="muted small">Where the whole of this is written down</summary>
           <p class="muted small">
             Every line is in the deploy job's log on the pipeline page, and it stays
             there after the operation is over.
           </p>
         </details>
-      </div>
-    </section>
-
-    <!-- Nothing moving. The card is still here, and says what it is: this is what
-         the last operation did, not an absence of operations. "Nothing is deploying"
-         was true and useless — it described the moment rather than the thing on
-         screen, and the thing on screen is a record of a run. -->
-    <section v-else class="card active-card idle" :class="cardState">
-      <div class="card-body">
-        <div class="block-head">
-          <h3 class="block-title">The last operation</h3>
-          <span class="muted small">what it did</span>
-          <span class="spacer" />
-          <!-- When it ran, in words rather than as a date to be interpreted.
-               Without it "succeeded" says nothing about age: a card that last changed
-               three years ago looks exactly like one that finished a minute ago, and
-               the whole question on this page is usually "how long has the cluster
-               been like this". Both ends, because the length of the operation is what
-               makes a slow one worth noticing. -->
-          <span v-if="whenRun" class="muted small" :title="whenRunExact">{{ whenRun }}</span>
-        </div>
-
-        <div v-for="place in places" :key="place.place" class="running-place">
-          <!-- What is actually there, rather than a word that was hard-coded when
-               this card only ever appeared during a deployment. "running" on a
-               deployment that finished twenty minutes ago is a claim about the
-               cluster dressed up as a label on a row. -->
-          <span class="badge" :class="badgeClass(place.deployment.state)">
-            {{ place.badge }}
-          </span>
-          <span class="place-chip mono">{{ place.place }}</span>
-          <!-- The names it went out under, beside the digest it is addressed by.
-               The digest says which image; the tags say what it was called, and a
-               person comparing this against a release is looking for the name, not
-               for sixty-four characters of hexadecimal. -->
-          <span v-if="place.deployment.tags && place.deployment.tags.length" class="tags">
-            <span
-              v-for="tag in place.deployment.tags"
-              :key="tag"
-              class="tag mono"
-            >{{ tag }}</span>
-          </span>
-          <span class="mono small">{{ shortImage(place.deployment.image) }}</span>
-          <span class="muted small">{{ place.deployment.workload || '—' }}</span>
-        </div>
-
-        <!-- The steps are here even when nothing is moving, so the list is something
-             to read rather than something to catch. -->
-        <!-- Not live: this is the last operation's steps, and an arrow moving here
-             would be claiming work that finished long ago. -->
-        <!-- The steps of the last operation, when this page has seen which ones they
-             were. It has not, on a page opened between runs: the plan is published
-             with a run, and a page that arrives afterwards is told about the run that
-             is already over and not about the list it went through. Better the summary
-             above than a list of nothing. -->
-        <DeploySteps
-          v-if="idleProgress && plan.length > 0"
-          :progress="idleProgress"
-          :plan="plan"
-          :active-phases="[]"
-        />
-        <DeployLog :lines="shownLog" :plan="plan" />
       </div>
     </section>
     </div>
@@ -1350,6 +1474,10 @@ watch(() => props.module.id, load)
    steps: yellow while something is moving, green when the last one ended well, red
    when it did not. Read at a glance from across a page, which is what an edge is
    for. */
+/* Yellow while it runs. Not green: green on this page means an operation ended well,
+   and a rollout that is still going has not ended at all — a card wearing success for
+   the two minutes everybody is waiting claims the answer before there is one. Red is
+   the other end. */
 .active-card.working {
   border-left-color: var(--yellow);
 }

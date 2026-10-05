@@ -121,24 +121,24 @@ type Job struct {
 
 // Deployment is a deployment as it is being carried out, and as it is remembered.
 type Deployment struct {
-	ID        uuid.UUID
-	Project   string
-	Cluster   string
-	Namespace string
+	ID        uuid.UUID `json:"id"`
+	Project   string    `json:"project"`
+	Cluster   string    `json:"cluster"`
+	Namespace string    `json:"namespace"`
 	// Image is what was deployed, digest included. It is the answer to "what is in
 	// production", and the reason rollback can be exact.
-	Image string
+	Image string `json:"image"`
 	// FromOurRegistry says whether that image came from dogit's own registry. False
 	// means it came from somewhere else and a re-deploy depends on somebody else
 	// still having it, which the page says rather than hides.
-	FromOurRegistry bool
+	FromOurRegistry bool `json:"from_our_registry,omitempty"`
 	// Workload is the Deployment a rollback would act on, empty when there is none.
-	Workload   string
-	State      State
-	Phase      Phase
-	Reason     string
-	StartedAt  time.Time
-	FinishedAt *time.Time
+	Workload   string     `json:"workload,omitempty"`
+	State      State      `json:"state,omitempty"`
+	Phase      Phase      `json:"phase,omitempty"`
+	Reason     string     `json:"reason,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	// Place is the name the repository gave this destination. Carried because the
 	// cluster and namespace do not say which of three places a record is.
 	Place string `json:"place,omitempty"`
@@ -242,7 +242,17 @@ type KnownImage struct {
 func ClosingPhases(report func(Progress)) func(Progress) {
 	last := ""
 	return func(progress Progress) {
-		if progress.Phase != "" && last != "" && progress.Phase != last {
+		// A rolling update brings the new pods up and sends the old ones away at the
+		// same time, so retiring does not follow rolling — it overlaps it. Closing one
+		// because the other has begun is what left the page sitting on a single arrow
+		// through a whole rollout, with the phase everybody came to watch already
+		// declared finished and its numbers no longer on screen.
+		if progress.Phase == StepRetire {
+			report(progress)
+			return
+		}
+
+		if progress.Phase != "" && last != "" && progress.Phase != last && last != StepRetire {
 			report(Progress{Phase: last, Message: "finished", Finished: true})
 		}
 		if progress.Phase != "" {
@@ -362,7 +372,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 
 	// Every phase says what it is about to do, so a watcher is never left with a
 	// deployment that has started and nothing further to show for it.
-	request.report(Progress{Phase: StepPrepare, Message: fmt.Sprintf(
+	request.report(Progress{Phase: StepPrepare, Deployment: &record, Message: fmt.Sprintf(
 		"preparing %d manifest(s) for %s/%s", len(request.Manifests), request.Cluster, request.Namespace)})
 
 	// Pre: jobs that must pass before anything moves.

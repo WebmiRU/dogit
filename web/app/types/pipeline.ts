@@ -182,4 +182,26 @@ export interface DeployProgress {
    * gone could never be written: the count made it impossible to send.
    */
   finished?: boolean
+  /** Set once something has gone wrong, and the message says what. */
+  failed?: boolean
+  /**
+   * The record this deployment is writing, once it has started.
+   *
+   * Sent with the first line rather than only at the end, because everything worth
+   * knowing about the run — which image, under which names, touching which workload,
+   * going to which place — is known at that moment and there is no reason to make a
+   * page wait two minutes for it. A rollout whose own row is blank for its whole
+   * length says nothing at the moment somebody is looking hardest at it.
+   */
+  deployment?: {
+    project?: string
+    cluster?: string
+    namespace?: string
+    image?: string
+    workload?: string
+    place?: string
+    tags?: string[]
+    commit?: string
+    state?: string
+  }
 }

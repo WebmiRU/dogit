@@ -62,6 +62,24 @@ const headState = computed<'working' | 'bad' | 'ok'>(() => {
   return 'ok'
 })
 
+/**
+ * What the autodeploy switch actually does, for the tooltip.
+ *
+ * The column header says on or off and the cell says on or off, which is enough to read
+ * the setting and not enough to know what it changes — "autodeploy: off" could mean
+ * that pushes build nothing, or that they build but do not deploy, or that the next
+ * deploy waits for a button. Those are three different installations. The answer
+ * belongs in a tooltip rather than in the column, because a sentence in every row of
+ * the table is worse than no sentence at all.
+ */
+const autodeployHint = computed(() =>
+  autoPaused.value
+    ? 'Off. A push builds the image and nothing more: the deployment waits for '
+      + 'somebody to start it by hand.'
+    : 'On. A push to a branch or a tag this repository deploys starts the deployment '
+      + 'itself, without anybody pressing anything.',
+)
+
 const headStateText = computed(() => {
   if (!modules.value.some((one) => one.kind.startsWith('deploy:'))) return 'no deploy module'
   if (deployBusy.value) return 'a deployment is under way'
@@ -173,10 +191,9 @@ onMounted(async () => {
     </div>
 
     <div v-else class="card">
-      <!-- The head of the card, and the whole of its state.
-           Two lines: what is deployed and where it is in its life, then the one switch
-           that changes what will happen next. Everything below is detail, and detail is
-           what the tables underneath are for. -->
+      <!-- The head of the card: whether anything is happening. One lamp and one
+           sentence. Everything else about the modules is a row of the table below, and
+           the switch that decides whether the next push deploys anything is in it. -->
       <div class="head">
         <div class="head-main">
           <!-- The state of the whole thing, in one place.
@@ -188,30 +205,25 @@ onMounted(async () => {
           <span class="head-state">{{ headStateText }}</span>
         </div>
 
-        <!-- The brake, as a switch and beside the state it changes: whether runs start
-             by themselves is a standing fact about this project, not a paragraph. -->
-        <label class="brake">
-          <input
-            type="checkbox"
-            class="toggle"
-            :checked="!autoPaused"
-            :disabled="savingPause || !props.canManage"
-            @change="setAutoPaused(!($event.target as HTMLInputElement).checked)"
-          />
-          <span class="brake-label">
-            {{ autoPaused ? 'Deploys start only by hand' : 'Deploys start on a push or a tag' }}
-          </span>
-          <span class="muted small">
-            {{ autoPaused ? 'a push builds nothing by itself' : 'this project deploys itself' }}
-          </span>
-        </label>
-      </div>
+        </div>
 
       <table class="table">
         <thead>
           <tr>
             <th>Module</th>
             <th>State</th>
+            <!-- Which way the switch is, said once at the top of the column. Putting the
+                 same words in the header and in every row repeats the fact a row
+                 already gives plainly; saying it in the header only is enough to
+                 tell what the column is, and leaves one word in the cell. -->
+            <!-- One line, one word. The phrase underneath it — "on a push or a tag" —
+                 made this header three lines tall and broke the row it sits in, for a
+                 piece of explanation that is worth reading once and not on every
+                 glance. It is in the tooltip now, where nothing is pushed out of
+                 shape by it. -->
+            <th class="brake-col" :title="autodeployHint">
+              <div>Autodeploy</div>
+            </th>
             <th class="actions-col">Actions</th>
           </tr>
         </thead>
@@ -230,6 +242,23 @@ onMounted(async () => {
                 <span v-else-if="module.status === 'online'" class="badge badge-green">Online</span>
                 <span v-else class="badge badge-warning">{{ module.status }}</span>
               </td>
+              <!-- The brake, as a switch in the table rather than a paragraph above
+                   it. Whether runs start by themselves is a standing fact about this
+                   project, and it belongs beside the module it governs and the state
+                   that module is in — where the eye goes when asking "what will happen
+                   on the next push". -->
+              <td class="brake-col">
+                <label class="brake" :title="autodeployHint">
+                  <input
+                    type="checkbox"
+                    class="toggle"
+                    :checked="!autoPaused"
+                    :disabled="savingPause || !props.canManage"
+                    @change="setAutoPaused(!($event.target as HTMLInputElement).checked)"
+                  />
+                  <span class="brake-label">{{ autoPaused ? 'OFF' : 'ON' }}</span>
+                </label>
+              </td>
               <td class="actions-col">
                 <button class="btn btn-small" type="button" @click="toggleEdit(module)">
                   {{ editing === module.id ? 'Done' : 'Edit' }}
@@ -244,6 +273,7 @@ onMounted(async () => {
                  a cell spanning every column makes the browser redistribute them, and
                  the buttons slide sideways at the moment somebody is reaching for one. -->
             <tr v-if="editing === module.id" class="detail-row">
+              <td></td>
               <td></td>
               <td></td>
               <td></td>
@@ -335,15 +365,9 @@ th {
   display: block;
 }
 
-.brake {
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-/* The head: what is deployed and how it is going, and the one switch that changes what
-   happens next. Two lines, because the lamp answers "now" and the switch answers
-   "next time", and putting them side by side would ask the reader to hold two different
-   tenses in one glance. */
+/* The head: what is deployed and where it is in its life. One line, because the lamp
+   is the only thing left in it — the switch that used to be under it has moved into
+   the table, where it sits beside the module it governs. */
 .head {
   padding: 12px;
   border-bottom: 1px solid var(--border);
@@ -391,18 +415,41 @@ th {
 /* The brake as a switch, in the head rather than in a block of its own: whether runs
    start by themselves is a standing fact about this project, and it belongs beside the
    state it is a statement about. */
-.head .brake {
+.brake {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 10px;
-  margin-top: 10px;
-  padding: 0;
-  border: none;
+  gap: 8px;
+  cursor: pointer;
 }
 
+/* The column the brake sits in. Narrower than the module's, because a word and a
+   switch are all it holds, and as wide as it needs to be for both without the module's
+   name having to wrap. */
+/* The column the brake sits in. As narrow as the header's longest word and the
+   switch together, which is not the module name's width — a table of modules should
+   not have a column for a switch taking half the page. */
+.brake-col {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* Not bold, because the words beside it — the module's name and the state — are not,
+   and a header heavier than the thing it heads draws the eye to the column that matters
+   least. */
+.brake-col th {
+  font-weight: 500;
+}
+
+/* The word beside the switch, in small caps of its own: two letters wide, in a column
+   whose width is set by a heading, so it needs a little air around it to read as
+   anything. Muted, because the switch itself is the answer and the word only says
+   which way it is pointing. */
 .brake-label {
   cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
 }
 
 /* A switch, drawn rather than a box to be ticked.

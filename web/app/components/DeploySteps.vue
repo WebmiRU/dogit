@@ -90,8 +90,27 @@ function countsIn(heard?: DeployProgress): { done: number; of: number } | null {
   const said = /(\d+)\s+of\s+(\d+)/.exec(heard.message ?? '')
   if (said) return { done: Number(said[1]), of: Number(said[2]) }
 
+  // Pods on their way out, said as "7 pod(s) still running the previous image".
+  //
+  // Seven is what is left, not what is done, so it is counted against the most there
+  // ever was: the number drains, and the bar fills as the old pods go. Without the
+  // peak every frame reads "0 of 7", "0 of 4", "0 of 1" and a bar that never moves,
+  // which is worse than no bar — it says the drain has not started while it is
+  // visibly under way.
+  const draining = /(\d+)\s+pod\(s\)\s+still running/.exec(heard.message ?? '')
+  if (draining) {
+    const left = Number(draining[1])
+    const key = heard.phase
+    const peak = Math.max(peaks.value[key] ?? 0, left)
+    peaks.value = { ...peaks.value, [key]: peak }
+    return { done: peak - left, of: peak }
+  }
+
   return null
 }
+
+/** The most a draining phase has ever had left, so its bar can be counted forwards. */
+const peaks = ref<Record<string, number>>({})
 
 /**
  * Where each step has got to.

@@ -330,6 +330,12 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 					"step":     progress.Step,
 					"of":       progress.Of,
 					"finished": progress.Finished,
+					// The record, so a page watching has the image, the tags and the
+					// workload from the first line of the stream rather than from the
+					// history written at the end. Every line carries it: which record
+					// this is never changes, and a client that had to notice the one
+					// line carrying it would have a race with its own first paint.
+					"deployment": progress.Deployment,
 				})
 
 				if stepDelay > 0 {
@@ -383,6 +389,10 @@ type deployProgress struct {
 	// arrow stays on a step whose work finished, and nobody can say when it did.
 	Finished bool `json:"finished"`
 	Done     bool `json:"done"`
+	// Deployment is the record the module is writing. Carried on every line, not only
+	// on the last one: a page that gets it once at the end has to spend the whole
+	// rollout with an empty row, which is exactly when somebody is reading it.
+	Deployment map[string]any `json:"deployment,omitempty"`
 }
 
 // progressLine is one step as it goes into the job's log.
