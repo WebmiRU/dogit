@@ -60,6 +60,37 @@ export interface ModuleManifest {
   depends_on?: string[]
   uninstall?: { options?: UninstallOption[] }
   routing?: ModuleRouting
+  /**
+   * What one of this module's rows is made of, when the module has rows.
+   *
+   * A notification module's rows are the chats it writes to and a deployment module's
+   * are the clusters it reaches, and the two are the same thing to the core: something
+   * named, with values, inherited downwards, switched on and off per level. Which is
+   * why this sits on the manifest rather than being asked of the kind.
+   */
+  target?: ModuleTargetSpec
+}
+
+/** What a module says one of its rows is. */
+export interface ModuleTargetSpec {
+  /** The settings a row is made of. Absent means all of them. */
+  settings?: string[]
+  /** The settings that name a row, best first. */
+  identify?: string[]
+  /** What the page calls the list, in the module's own words. */
+  title?: string
+  description?: string
+  /** The switches a row has besides the one every row has. */
+  flags?: ModuleRowFlagSpec[]
+}
+
+/** One switch a module says its rows have. */
+export interface ModuleRowFlagSpec {
+  key: string
+  label: string
+  description?: string
+  /** Where it stands where nobody has decided. True unless the module says otherwise. */
+  default: boolean
 }
 
 /** What a module reported with its heartbeat. Absent means it reported nothing. */

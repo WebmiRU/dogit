@@ -201,26 +201,17 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 func (c *coreClient) clusterFor(ctx context.Context, project, name, namespace string) (
 	Cluster, string, k8s.Client, error) {
 
-	rows, err := c.targets(ctx, project)
+	settings, err := c.settings(ctx, project)
 	if err != nil {
 		return Cluster{}, "", nil, err
 	}
-	clusters, err := clustersOf(rows)
+	clusters, err := clustersOf(settings)
 	if err != nil {
 		return Cluster{}, "", nil, err
 	}
 
 	cluster, found := find(clusters, name)
 	if !found {
-		// Said as what it is, which is not always the same thing.
-		//
-		// A cluster that is switched off at this level is not missing, and telling a
-		// project its cluster does not exist sends somebody to add one that is already
-		// there — as a second row, because the first one is not offered anywhere. The
-		// answer has to say which of the two happened, or the fix is a guess.
-		if off, isOff := findSwitchedOff(rows, name); isOff {
-			return Cluster{}, "", nil, errClusterOff(off, name)
-		}
 		return Cluster{}, "", nil, errClusterNotFound(name)
 	}
 
@@ -369,12 +360,12 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(namespace) == "" {
-		rows, err := c.targets(ctx, project)
+		settings, err := c.settings(ctx, project)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		if clusters, err := clustersOf(rows); err == nil {
+		if clusters, err := clustersOf(settings); err == nil {
 			if cluster, found := find(clusters, name); found {
 				namespace = cluster.DefaultNamespace
 			}
@@ -389,13 +380,8 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The newest row carries its log, whether or not the list was narrowed to one
-	// place.
-	//
-	// It used to be only in the unnarrowed case, because that was the only case there
-	// was for a long while. Naming a place made the card on that place's page lose
-	// its log while the same deployment showed one on the project's page — which is
-	// the wrong way round: the narrower question is the more specific one, and
-	// answering it less is not a saving.
+	// place. It used to be only in the unnarrowed case, because that was the only case
+	// there was for a long while.
 	if page == 1 && len(records) > 0 {
 		if lines, err := c.history.LogOf(ctx, records[0].ID); err == nil {
 			records[0].Log = lines
@@ -510,12 +496,12 @@ func (c *coreClient) handleTestCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := c.targets(ctx, request.Project)
+	settings, err := c.settings(ctx, request.Project)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	clusters, err := clustersOf(rows)
+	clusters, err := clustersOf(settings)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -523,10 +509,6 @@ func (c *coreClient) handleTestCluster(w http.ResponseWriter, r *http.Request) {
 
 	cluster, found := find(clusters, request.Cluster)
 	if !found {
-		if off, isOff := findSwitchedOff(rows, request.Cluster); isOff {
-			writeError(w, http.StatusForbidden, errClusterOff(off, request.Cluster).Error())
-			return
-		}
 		writeError(w, http.StatusNotFound, errClusterNotFound(request.Cluster).Error())
 		return
 	}
@@ -636,36 +618,6 @@ type clusterNotFoundError struct{ name string }
 
 func (e clusterNotFoundError) Error() string {
 	return "no cluster is called " + e.name + " in this project's settings"
-}
-
-// findSwitchedOff is a row of the right name that is switched off at this level.
-//
-// Asked separately from the rows that can be used, because "you may not" and "it is
-// not there" are different news and only one of them is fixed by adding a cluster.
-func findSwitchedOff(rows []moduleTarget, name string) (string, bool) {
-	for _, one := range rows {
-		if one.Enabled {
-			continue
-		}
-		if strings.TrimSpace(one.Value("name")) == name {
-			return one.Label, true
-		}
-	}
-	return "", false
-}
-
-func errClusterOff(label, name string) error { return clusterOffError{label: label, name: name} }
-
-type clusterOffError struct{ label, name string }
-
-func (e clusterOffError) Error() string {
-	where := e.label
-	if where == "" {
-		where = e.name
-	}
-	return "the cluster " + e.name + " is switched off for this project (" + where +
-		"), so nothing is deployed there. Switch it on in the deploy settings, or point " +
-		"the deployment somewhere else."
 }
 
 // errNoNamespace says what is missing without inventing a place to deploy to.

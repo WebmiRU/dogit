@@ -152,14 +152,22 @@ const formBusy = ref(false)
  * will read. Everything else waits until asked.
  */
 const opened = ref<Record<string, boolean>>({})
+const firstRowID = ref('')
 
 function toggleRow(row: ModuleRow) {
   if (props.layout !== 'blocks') return
   opened.value = { ...opened.value, [row.id]: !opened.value[row.id] }
 }
 
-const isOpen = (row: ModuleRow) =>
-  props.layout === 'blocks' ? opened.value[row.id] === true : true
+const isOpen = (row: ModuleRow) => {
+  if (props.layout !== 'blocks') return true
+  const asked = opened.value[row.id]
+  if (asked !== undefined) return asked
+  // The first row is open because somebody opening this page has usually come about one
+  // place, and it is the one they will read. A row that is there and closed is a page
+  // that says it has nothing to show until you click it.
+  return row.id === firstRowID.value
+}
 
 const severalModules = computed(() => {
   const kinds = new Set(rows.value.map((row) => row.module_id))
@@ -203,6 +211,7 @@ async function load() {
     // The choice of module is this module's on its own page, so the list has one
     // entry and the form does not ask a question with a single answer.
     available.value = props.onlyModule ? modules.filter((one) => one.id === props.onlyModule) : modules
+    if (!firstRowID.value && rows.value[0]) firstRowID.value = rows.value[0].id
     emit('rows', rows.value)
 
     // Settings that had stopped applying are gone by the time this list arrives, and
@@ -233,6 +242,47 @@ function staleNotice(dropped: number): string {
 }
 
 /** How to call a recipient in a sentence. */
+/**
+ * What this level changed about the row, in the module's own words for the fields.
+ *
+ * The page's two ways of changing a place look the same and are not: the module's
+ * settings are what the module is (how long to wait, whether to tidy up), and a row is
+ * one destination. So a row says which of its own values this project decided, which is
+ * the question "why does this project behave differently from the others" — and it is
+ * the only place the answer can be, since the values on screen are the effective ones
+ * and do not say which of them came from here.
+ */
+function changedHere(row: ModuleRow): string[] {
+  const specs = settingsOf(row.module_id)
+  const said: string[] = []
+
+  for (const key of Object.keys(row.set_here ?? {})) {
+    if (!row.set_here?.[key]) continue
+    const label = specs.find((one) => one.key === key)?.label ?? key
+    said.push(`${label}: ${asText(row.own_values?.[key] ?? row.values?.[key])}`)
+  }
+
+  // The switches this level decided, said in the module's own words for them.
+  //
+  // Counted here because a level that decided only a switch has decided something, and
+  // "changed here" that lists nothing reads as "nothing was changed here" — which is
+  // exactly wrong when the row beneath it carries this level's decisions.
+  for (const flag of flagsOf(row)) {
+    if (row.flags_here?.[flag.key] === undefined) continue
+    said.push(`${flag.label}: ${row.flags_here[flag.key] ? 'on' : 'off'}`)
+  }
+  return said
+}
+
+/** A value as a short piece of text, for a row of overrides. */
+function asText(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  const text = String(value)
+  // A credential pasted into a row is not worth printing in full on a list, and the
+  // form shows it in full to whoever changes it.
+  return text.length > 40 ? `${text.slice(0, 40)}…` : text
+}
+
 function describe(row: ModuleRow): string {
   const address = addressOf(row)
   return address === '—' ? moduleName(row) : `${moduleName(row)} ${address}`
@@ -260,6 +310,12 @@ function failed(caught: unknown, what: string) {
  */
 function settingsOf(moduleId: string): SettingSpec[] {
   const module = available.value.find((one) => one.id === moduleId)
+  // The fields the module described for a row. Read from the target rather than from the
+  // module's settings, because a row's values are not the module's settings: a deploy
+  // module has no "kubeconfig" setting, it has a kubeconfig on a cluster, and reading
+  // the form out of the settings list is what left it with one text box.
+  const described = module?.target?.fields
+  if (described?.length) return described
   const all = module?.settings ?? []
   const ofTarget = module?.target?.settings
   if (!ofTarget?.length) return all
@@ -541,40 +597,53 @@ onMounted(load)
           <span class="place mono">{{ addressOf(row) }}</span>
           <span v-if="showsLabel(row)" class="muted small">{{ row.label }}</span>
           <span v-if="row.scope_type !== 'instance'" class="muted small">{{ where(row) }}</span>
-          <span class="spacer" />
-          <!-- The row's own switch: may this project act on this place at all. Every
-               kind of module has this one, and it is the coarse question. -->
-          <button
-            class="switch"
-            :class="{ on: row.enabled }"
-            type="button"
-            :disabled="!canManage || busy === row.id"
-            :aria-pressed="row.enabled"
-            :title="row.enabled
+          <!-- What this level decided about this place, so that "inherited" and "the
+               same as everybody" are not the same thing on screen. -->
+          <span v-if="changedHere(row).length" class="changed-here">
+            <span class="muted small">changed here:</span>
+            <span class="mono small">{{ changedHere(row).join(', ') }}</span>
+          </span>
+          <!-- Two switches, each with its name beside it.
+               Unlabelled switches were the wrong answer and an obvious one to be wrong
+               about: two identical pills on one row, and nothing to tell which question
+               either of them is asking. One is "may this project use this place at
+               all", which is the coarse one every kind of module has; the other is
+               whatever else the module declared, named in the module's own words. -->
+          <span class="switches">
+            <label class="switch-pair" :title="row.enabled
               ? `This project may use ${addressOf(row)}`
-              : `This project may not use ${addressOf(row)}`"
-            @click="toggle(row)"
-          >
-            <span class="knob" />
-          </button>
-          <!-- The switches a row has, each one named by the module that declared it.
-               A deployment module declares autodeploy beside the switch every row has:
-               "may this project deploy here" and "may a push do it without anybody
-               asking" are two questions about two different things, and one switch
-               cannot answer both. -->
-          <button
-            v-for="flag of flagsOf(row)"
-            :key="flag.key"
-            class="switch"
-            :class="{ on: flagOn(row, flag) }"
-            type="button"
-            :disabled="!canManage || busy === row.id"
-            :aria-pressed="flagOn(row, flag)"
-            :title="flag.description || flag.label"
-            @click="toggleFlag(row, flag)"
-          >
-            <span class="knob" />
-          </button>
+              : `This project may not use ${addressOf(row)}`">
+              <button
+                class="switch"
+                :class="{ on: row.enabled }"
+                type="button"
+                :disabled="!canManage || busy === row.id"
+                :aria-pressed="row.enabled"
+                @click="toggle(row)"
+              >
+                <span class="knob" />
+              </button>
+              <span class="switch-label">in use</span>
+            </label>
+            <label
+              v-for="flag of flagsOf(row)"
+              :key="flag.key"
+              class="switch-pair"
+              :title="flag.description || flag.label"
+            >
+              <button
+                class="switch"
+                :class="{ on: flagOn(row, flag) }"
+                type="button"
+                :disabled="!canManage || busy === row.id"
+                :aria-pressed="flagOn(row, flag)"
+                @click="toggleFlag(row, flag)"
+              >
+                <span class="knob" />
+              </button>
+              <span class="switch-label">{{ flag.label }}</span>
+            </label>
+          </span>
           <button
             class="btn btn-small"
             type="button"
@@ -906,5 +975,44 @@ onMounted(load)
 
 .block-body > :deep(.active-card) {
   margin-bottom: 0;
+}
+/* Switches with their names, because two identical pills on one row are a riddle. */
+/* One group, pushed to the right, and never broken in half: a switch separated from
+   its name by a line break is worse than an unnamed switch, because it looks attached
+   to the one above it. */
+.switches {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.switch-pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* The name of a switch, in the same words as everything else on the row. Bold and
+   letterspaced made it look like a heading and pushed the two pairs onto two lines,
+   where each label sat beside the wrong switch. */
+.switch-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* What this level changed about a row. Set apart from the values themselves rather
+   than in the same run of text as them, because they are a different kind of thing: the
+   others are what the place is, this is a statement about who said so. */
+.changed-here {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 7px;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
 }
 </style>

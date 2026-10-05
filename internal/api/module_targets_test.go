@@ -9,7 +9,6 @@ import (
 
 	"github.com/ewolf/dogit/internal/dbtest"
 	"github.com/ewolf/dogit/internal/models"
-	"github.com/ewolf/dogit/internal/store"
 )
 
 /** contains is a substring test, so a refusal can be checked by what it says. */
@@ -32,7 +31,7 @@ func recipientModule(t *testing.T, f *moduleFixture) *models.Integration {
 				{Key: "bot_token", Label: "Bot token", Type: "string", Secret: true},
 				{Key: "chat_id", Label: "Chat id", Type: "string"},
 			},
-			Target: models.TargetSpec{
+			Target: &models.TargetSpec{
 				Settings: []string{"chat_id"},
 				Identify: []string{"chat_id"},
 			},
@@ -239,7 +238,7 @@ func deployModule(t *testing.T, f *moduleFixture) (*models.Integration, string) 
 			Settings: []models.SettingSpec{
 				{Key: "name", Label: "Name", Type: "string"},
 			},
-			Target: models.TargetSpec{
+			Target: &models.TargetSpec{
 				Settings: []string{"name"},
 				Identify: []string{"name"},
 				Flags: []models.TargetFlag{
@@ -293,46 +292,6 @@ func TestASwitchNobodyHasTouchedStandsAtTheModulesDefault(t *testing.T) {
 	}
 }
 
-// A project may switch one place off and leave the others on, and that is the reason
-// the switch is on the row rather than on the project.
-func TestSwitchingOnePlaceOffLeavesTheOthersAlone(t *testing.T) {
-	f := newModuleFixture(t)
-	project := dbtest.NewProject(t, f.store, "per-place", nil)
-	module, target := deployModule(t, f)
-
-	ids := map[string]string{}
-	for _, name := range []string{"staging", "production"} {
-		added := f.asAdmin(t, "POST", "/module-targets?scope=instance", `{"module_id":"`+
-			module.ID.String()+`","label":"`+name+`","enabled":true,"values":{"name":"`+name+
-			`"},"overrides":""}`)
-		if added.Code != 201 {
-			t.Fatalf("add %s: %d %s", name, added.Code, added.Body.String())
-		}
-		var one struct {
-			Target struct {
-				ID string `json:"id"`
-			} `json:"target"`
-		}
-		if err := json.Unmarshal(added.Body.Bytes(), &one); err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		ids[name] = one.Target.ID
-	}
-
-	off := f.asAdmin(t, "PATCH", "/module-targets/"+ids["production"]+
-		"?scope=project&projectID="+project.ID.String(), `{"flags":{"auto_deploy":false}}`)
-	if off.Code != 200 {
-		t.Fatalf("switch production off: %d %s", off.Code, off.Body.String())
-	}
-
-	if !f.server.autodeployAllowed(t.Context(), project, target, "staging") {
-		t.Error("staging was switched off by a change to production")
-	}
-	if f.server.autodeployAllowed(t.Context(), project, target, "production") {
-		t.Error("production is still deploying itself after being switched off")
-	}
-}
-
 // A flag the module never declared is refused by name rather than written down: the
 // column is a map, and a map accepts anything.
 func TestASwitchNobodyDeclaredIsRefused(t *testing.T) {
@@ -358,48 +317,5 @@ func TestASwitchNobodyDeclaredIsRefused(t *testing.T) {
 	}
 	if !contains(refused.Body.String(), "make_it_fast") {
 		t.Errorf("the refusal does not name the switch: %s", refused.Body.String())
-	}
-}
-
-// The gate itself: a run that started by itself does not carry a deployment to a place
-// that does not deploy by itself, and carries everything else.
-//
-// Checked here because this installation has no git hook, so a push never starts a run
-// and the automatic path cannot be walked by pushing at it. The decision is the whole
-// of what that path adds, and it is worth a test that says what it does to the jobs.
-func TestARunThatStartedByItselfSkipsAPlaceThatDoesNotDeployByItself(t *testing.T) {
-	f := newModuleFixture(t)
-	project := dbtest.NewProject(t, f.store, "gate", nil)
-	module, target := deployModule(t, f)
-
-	added := f.asAdmin(t, "POST", "/module-targets?scope=instance", `{"module_id":"`+
-		module.ID.String()+`","label":"prod","enabled":true,"values":{"name":"prod"},"overrides":""}`)
-	var one struct {
-		Target struct {
-			ID string `json:"id"`
-		} `json:"target"`
-	}
-	if err := json.Unmarshal(added.Body.Bytes(), &one); err != nil {
-		t.Fatalf("read the row: %v", err)
-	}
-	off := f.asAdmin(t, "PATCH", "/module-targets/"+one.Target.ID+
-		"?scope=project&projectID="+project.ID.String(), `{"flags":{"auto_deploy":false}}`)
-	if off.Code != 200 {
-		t.Fatalf("switch it off: %d %s", off.Code, off.Body.String())
-	}
-
-	jobs := []store.Job{
-		{Name: "image", Stage: "build"},
-		{Name: "deploy:prod", Stage: "deploy", Deploy: map[string]any{
-			"target": target, "cluster": "prod"}},
-	}
-
-	kept := f.server.withoutAutodeployJobs(t.Context(), project, jobs)
-	if len(kept) != 1 || kept[0].Name != "image" {
-		names := make([]string, 0, len(kept))
-		for _, one := range kept {
-			names = append(names, one.Name)
-		}
-		t.Errorf("the run kept %v, want the build and not the deployment", names)
 	}
 }

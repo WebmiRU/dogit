@@ -37,7 +37,12 @@ const tabNames = computed(() => [
   'overview',
   ...(moduleKind.value === 'registry:docker' ? ['images'] : []),
   'settings',
-  ...(moduleKind.value.startsWith('notify:') ? ['notifications'] : []),
+  // Where the module may act. A notification module's rows are the chats it writes
+  // to, a deployment module's are the clusters it may reach — and the kubeconfig that
+  // says how is one of those rows'"'"'s values, not a setting of the module. Without this
+  // tab a deployment module'"'"'s own places have no page at all: they are rows, and rows
+  // are shown where they can be changed.
+  ...(module.value?.manifest?.target ? ['places'] : []),
   // The record of what it deployed, kept apart from what it is configured to do: one
   // is settings anybody inherits, the other is what happened to a running system and
   // belongs to whoever may change one.
@@ -49,6 +54,7 @@ const tabTitles: Record<string, string> = {
   overview: 'Overview',
   images: 'Images',
   notifications: 'Notifications',
+  places: 'Places',
   deployments: 'Deployments',
   settings: 'Settings',
   removal: 'Removal',
@@ -235,6 +241,29 @@ const storageFraction = computed(() => {
           :only-module="module.id"
           :default-module="module.id"
         />
+      </section>
+
+      <!-- The rows this module has, at the instance: where it may act and how it
+           reaches each place. Shown for every kind of module that declares rows, and
+           only those — a module with no rows has nothing here to say. -->
+      <section v-else-if="tab === 'places'" class="card">
+        <div class="card-body">
+          <h3>{{ module.manifest?.target?.title || 'Where this module may act' }}</h3>
+          <p class="muted">
+            {{ module.manifest?.target?.description
+              || 'One row per place this module acts on. Everything here is inherited by every group and project that has not changed it.' }}
+          </p>
+          <!-- The module's own kind, not the default. The list asks for rows of one
+               kind of module: left to itself it asks about notifications, and a page
+               about a deployment module then says no notification modules are
+               installed while standing on top of a row that exists. -->
+          <ModuleTargets
+            scope="instance"
+            :kind="module.kind"
+            :only-module="module.id"
+            :default-module="module.id"
+          />
+        </div>
       </section>
 
       <section v-else-if="tab === 'settings'">

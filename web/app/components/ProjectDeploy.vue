@@ -17,7 +17,6 @@
  *   running system rather than to whoever configures one.
  */
 import type { ModuleRow } from '~/types/module'
-import type { ModuleRow as ModulePlaceRow } from '~/types/notification'
 
 const props = defineProps<{
   projectId: string
@@ -96,36 +95,41 @@ const stopState = watchEvents({
 
 onBeforeUnmount(() => stopState())
 
+const autoPaused = ref(false)
+const savingPause = ref(false)
+
+/** Pulls the brake, or lets it out again. */
+async function setAutoPaused(paused: boolean) {
+  savingPause.value = true
+  try {
+    await api.patch(`/projects/${props.projectId}`, { auto_deploy_paused: paused })
+    autoPaused.value = paused
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
+  } finally {
+    savingPause.value = false
+  }
+}
+
+/**
+ * What the autodeploy switch does, in one sentence.
+ *
+ * One switch for the whole project, and that is the honest size of it: a cluster is a
+ * setting of the module, configured once and shared, so there is nothing per place to
+ * hang a second switch on. What this answers is whether a push starts anything here at
+ * all.
+ */
+const autodeployHint = computed(() =>
+  autoPaused.value
+    ? 'Off. A push builds the image and nothing more: the run waits for somebody to '
+      + 'start it by hand.'
+    : 'On. A push to a branch or a tag this repository deploys starts the deployment '
+      + 'itself, without anybody pressing anything.',
+)
+
 const deployModules = computed(() =>
   modules.value.filter((module) => module.kind.startsWith('deploy:')),
 )
-
-/**
- * The places this project has, as the list above decided them.
- *
- * Kept because the blocks below are drawn per place. Without it the page has a list of
- * places and one set of contents for all of them, which is a page about a project
- * rather than about anywhere the project is deployed to.
- */
-const places = ref<ModulePlaceRow[]>([])
-
-/** The module whose job all of this is. There is one in practice; the list is a list. */
-const deployModule = computed<ModuleRow | null>(() => deployModules.value[0] ?? null)
-
-/**
- * The name a repository writes to reach one place, which is how the history and the
- * catalogue are asked about it.
- *
- * Taken from the row rather than from its label: the label is for people and may have
- * been changed by anybody, while the name is the word a repository says in `cluster:`
- * and is therefore the word the records were written under.
- */
-const clusterOf = (row: ModulePlaceRow) =>
-  String(row.values?.name ?? row.label ?? '')
-
-function onPlaces(rows: ModulePlaceRow[]) {
-  places.value = rows.filter((one) => one.module_kind.startsWith('deploy:'))
-}
 
 function toggleEdit(module: ModuleRow) {
   editing.value = editing.value === module.id ? '' : module.id
@@ -137,6 +141,11 @@ async function load() {
   try {
     const answer = await api.get<{ modules: ModuleRow[] }>('/modules')
     modules.value = answer.modules ?? []
+
+    const project = await api.get<{ project: { auto_deploy_paused?: boolean } }>(
+      `/projects/${props.projectId}`,
+    )
+    autoPaused.value = project.project?.auto_deploy_paused ?? false
 
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
@@ -202,6 +211,7 @@ onMounted(async () => {
                  piece of explanation that is worth reading once and not on every
                  glance. It is in the tooltip now, where nothing is pushed out of
                  shape by it. -->
+            <th class="brake-col" :title="autodeployHint">Autodeploy</th>
             <th class="actions-col">Actions</th>
           </tr>
         </thead>
@@ -219,6 +229,24 @@ onMounted(async () => {
                 <span v-if="!module.enabled" class="badge badge-neutral">Forbidden</span>
                 <span v-else-if="module.status === 'online'" class="badge badge-green">Online</span>
                 <span v-else class="badge badge-warning">{{ module.status }}</span>
+              </td>
+              <!-- The brake, as a switch in the table rather than a paragraph above
+                   it: whether runs start by themselves is a standing fact about this
+                   project, and it belongs beside the module it governs. -->
+              <td class="brake-col">
+                <label class="brake" :title="autodeployHint">
+                  <button
+                    class="switch"
+                    :class="{ on: !autoPaused }"
+                    type="button"
+                    :disabled="savingPause || !props.canManage"
+                    :aria-pressed="!autoPaused"
+                    @click="setAutoPaused(!autoPaused)"
+                  >
+                    <span class="knob" />
+                  </button>
+                  <span class="brake-label">{{ autoPaused ? 'OFF' : 'ON' }}</span>
+                </label>
               </td>
               <td class="actions-col">
                 <button class="btn btn-small" type="button" @click="toggleEdit(module)">
@@ -239,47 +267,6 @@ onMounted(async () => {
           </template>
         </tbody>
       </table>
-
-      <!-- Where this project may deploy, and which of those places it may not.
-           Its own block rather than part of the settings form, because a cluster is
-           not a setting of this project: it is a row the instance shares with
-           everybody else, with its own switch at this level. Saving it here cannot
-           remove a cluster the instance put there, and switching one off here
-           switches off that one and nothing else — which is the thing that was
-           impossible before, and the reason this is a list of rows. -->
-      <div class="places">
-        <h3>Where this may deploy</h3>
-        <p class="muted small">
-          The clusters this instance may deploy to, inherited by every project. A
-          cluster cannot be removed from here — only switched off for
-          {{ props.projectPath }}, which leaves it where it is for everybody else.
-        </p>
-        <ModuleTargets
-          kind="deploy:"
-          scope="project"
-          layout="blocks"
-          :scope-id="props.projectId"
-          :project-id="props.projectId"
-          :can-manage="props.canManage"
-          @rows="onPlaces"
-        >
-          <!-- What is under a place's row is that place's deployment and nothing
-               else: its status, its log, what it has done and which images have ever
-               been on it. Three places give three sets of these, each under its own
-               row, which is the only way to open the second one. -->
-          <template #row="{ row }">
-            <ModuleDeployments
-              v-if="deployModule"
-              :project-id="props.projectId"
-              :project-path="props.projectPath"
-              :module="deployModule"
-              :place="{ cluster: clusterOf(row), namespace: '' }"
-              :can-manage="props.canManage"
-              :show-repository="false"
-            />
-          </template>
-        </ModuleTargets>
-      </div>
 
       <div
         v-for="module in deployModules"
@@ -400,22 +387,32 @@ th {
 /* The clusters, as a block of their own between the two tables it would otherwise
    be mistaken for a part of. It is a different kind of thing: the table above is which
    modules exist, this is where one of them may put something. */
-.places {
-  /* The same inset the cells have. Written as `12px 0` it looked correct in the source
-     and ran every word and both rules to the edge of the card, which is the one thing a
-     block inside a card must not do. */
-  padding: 14px 12px;
-  border-top: 1px solid var(--border);
+/* The brake's column and its pair, kept as narrow as the switch and two letters. */
+.brake-col {
+  width: 1%;
+  white-space: nowrap;
 }
 
-.places h3 {
-  margin: 0 0 2px;
-  font-size: 13px;
+.brake-col th {
+  font-weight: 500;
 }
 
-.places p {
-  margin: 0 0 10px;
+.brake {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
 }
+
+.brake-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+
+
 
 
 

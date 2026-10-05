@@ -441,8 +441,10 @@ func (s *Server) handleUpdateModuleTarget(w http.ResponseWriter, r *http.Request
 	// quietly take a name that a later version of the module means something else by.
 	if len(req.Flags) > 0 {
 		declared := map[string]bool{}
-		for _, one := range integration.Capabilities.Target.Flags {
-			declared[one.Key] = true
+		if target := integration.Capabilities.Target; target != nil {
+			for _, one := range target.Flags {
+				declared[one.Key] = true
+			}
 		}
 		for key := range req.Flags {
 			if !declared[key] {
@@ -629,7 +631,10 @@ func (s *Server) checkTargetValues(r *http.Request, integration *models.Integrat
 	for _, spec := range integration.Capabilities.Settings {
 		recipientKeys[spec.Key] = true
 	}
-	if declaredTarget := integration.Capabilities.Target.Settings; len(declaredTarget) > 0 {
+	// A module that says nothing about rows is taken to mean that all of its settings
+	// make one.
+	if target := integration.Capabilities.Target; target != nil && len(target.Settings) > 0 {
+		declaredTarget := target.Settings
 		recipientKeys = map[string]bool{}
 		for _, key := range declaredTarget {
 			recipientKeys[key] = true

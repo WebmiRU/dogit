@@ -69,7 +69,11 @@ type Manifest struct {
 	// its settings make one. A notification module is asked to send to two chats or
 	// to a chat and a mailbox, and one flat set of settings cannot say that; a set
 	// per destination can.
-	Target TargetSpec `json:"target,omitempty"`
+	// Target is what one of this module's rows is made of, and it is a pointer on
+	// purpose: omitempty does nothing for a struct, so a module that has no rows was
+	// answered with an empty object and every page decided it had rows to show. A
+	// module that says nothing about rows must produce no key at all.
+	Target *TargetSpec `json:"target,omitempty"`
 }
 
 // TargetSpec describes a recipient, in the module's own terms.
@@ -80,11 +84,21 @@ type Manifest struct {
 // so a list can say "-100…a chat" rather than "row 1" — and a word for what such a
 // row is.
 type TargetSpec struct {
-	// Settings are the keys a recipient is made of, and it matters that a module
-	// says so: a Telegram bot's token is the module's, not a destination's, and a
-	// repository must never be asked for it. Left empty, every declared setting is
-	// taken to make one, which is what a module with nothing but addresses wants.
+	// Settings are the keys a row is made of, and it matters that a module says so: a
+	// Telegram bot's token is the module's, not a destination's, and a repository must
+	// never be asked for it. Left empty, every declared setting is taken to make one,
+	// which is what a module with nothing but addresses wants.
 	Settings []string `json:"settings,omitempty"`
+	// Fields are what those keys look like when a person fills them in — their names,
+	// their kinds, and what each is for.
+	//
+	// Separate from the settings list on purpose, and this is the part that is easy to
+	// get wrong: a row's values are not settings of the module, so their descriptions
+	// do not belong to the module's settings either. A module whose rows are the
+	// clusters it reaches has no "kubeconfig" setting at all — it has a kubeconfig on a
+	// row — and describing that row without saying what the fields are leaves a form
+	// with one text box and no idea what the others were called.
+	Fields []SettingSpec `json:"fields,omitempty"`
 	// Identify lists the settings that name a recipient, best first: a chat id, an
 	// address. They are shown as the row's name when nobody gave it one.
 	Identify []string `json:"identify,omitempty"`

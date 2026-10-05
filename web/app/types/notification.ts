@@ -70,6 +70,8 @@ export interface ModuleRowsModule {
     identify?: string[]
     title?: string
     description?: string
+    /** What the fields of a row look like when a person fills them in. */
+    fields?: import('./module').SettingSpec[]
     /** The switches a row has besides the one every row has. */
     flags?: ModuleRowFlag[]
   }

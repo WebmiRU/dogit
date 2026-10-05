@@ -228,7 +228,8 @@ func (s *Server) notificationTargets(ctx context.Context, projectPath string) []
 // recipients, and inventing one beside them would leave somebody receiving the same
 // message twice.
 func (s *Server) adoptLegacySettings(ctx context.Context, integration *models.Integration) {
-	if len(integration.Capabilities.Target.Identify) > 0 || integration.Capabilities.Target.Title != "" {
+	if target := integration.Capabilities.Target; target != nil &&
+		(len(target.Identify) > 0 || target.Title != "") {
 		return
 	}
 
@@ -273,7 +274,11 @@ func (s *Server) targetLabel(integration *models.Integration, row store.Effectiv
 	if row.Own.Label != "" {
 		return row.Own.Label
 	}
-	for _, key := range integration.Capabilities.Target.Identify {
+	var identify []string
+	if target := integration.Capabilities.Target; target != nil {
+		identify = target.Identify
+	}
+	for _, key := range identify {
 		raw, ok := row.Values[key]
 		if !ok {
 			continue
