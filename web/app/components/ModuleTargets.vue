@@ -787,8 +787,6 @@ onMounted(load)
   display: flex;
   gap: 8px;
 }
-</style>
-
 /* Blocks, for rows that have something under them. */
 .blocks {
   display: flex;
@@ -839,3 +837,4 @@ onMounted(load)
 .block-body > :deep(.active-card) {
   margin-bottom: 0;
 }
+</style>
