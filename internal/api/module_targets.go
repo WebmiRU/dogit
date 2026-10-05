@@ -26,13 +26,13 @@ import (
 // that. Recipients are settings, and should not be the one thing that is easier to
 // change than the rest.
 
-// handleListNotificationTargets is the merged list for one place.
+// handleListModuleTargets is the merged list for one place.
 //
 // Own rows and inherited rows come back together, in the order they are used, each
 // saying which level decided it. A row nobody has touched is not marked, because
 // marking everything that happened to be inherited would make the interesting part
 // invisible.
-func (s *Server) handleListNotificationTargets(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListModuleTargets(w http.ResponseWriter, r *http.Request) {
 	scopeType, scopeID, err := s.settingScope(r)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -74,15 +74,23 @@ func (s *Server) resolvedTargets(r *http.Request, groupID, projectID *uuid.UUID)
 		return nil, err
 	}
 
+	prefix := targetKindPrefix(r)
+
 	out := []map[string]any{}
 	for _, integration := range integrations {
-		if !strings.HasPrefix(integration.Kind, notifyKindPrefix) || !integration.Enabled {
+		if !strings.HasPrefix(integration.Kind, prefix) || !integration.Enabled {
 			continue
 		}
 
-		s.adoptLegacySettings(r.Context(), integration)
+		// Only the rows that used to be settings are adopted into targets, and only
+		// for notifications: that is the one list that had a legacy form, and moving
+		// a deploy module's clusters into rows is this migration's job rather than
+		// something a read may do behind somebody's back.
+		if prefix == notifyKindPrefix {
+			s.adoptLegacySettings(r.Context(), integration)
+		}
 
-		resolved, err := s.store.NotificationTargets().Effective(r.Context(), integration.ID, groupID, projectID)
+		resolved, err := s.store.ModuleTargets().Effective(r.Context(), integration.ID, groupID, projectID)
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +161,7 @@ func (s *Server) dropStaleTargets(r *http.Request) int {
 		return 0
 	}
 
-	removed, err := s.store.NotificationTargets().PruneStale(r.Context(), *scopeID)
+	removed, err := s.store.ModuleTargets().PruneStale(r.Context(), *scopeID)
 	if err != nil {
 		s.log.Warn("could not remove notification settings that stopped applying", "error", err)
 		return 0
@@ -171,7 +179,7 @@ func (s *Server) notificationModules(r *http.Request) []map[string]any {
 
 	out := []map[string]any{}
 	for _, integration := range integrations {
-		if !strings.HasPrefix(integration.Kind, notifyKindPrefix) {
+		if !strings.HasPrefix(integration.Kind, targetKindPrefix(r)) {
 			continue
 		}
 		out = append(out, map[string]any{
@@ -184,18 +192,32 @@ func (s *Server) notificationModules(r *http.Request) []map[string]any {
 	return out
 }
 
-type notificationTargetRequest struct {
+// targetKindPrefix is which modules the rows asked for are wanted for, as a prefix.
+//
+// A prefix rather than an exact kind, because the interesting line is between two
+// families: every kind that starts `notify:` is a place to send things, and every kind
+// that starts `deploy:` is somewhere to put a release. Defaulting to notifications
+// keeps a caller that says nothing from being handed every row there is.
+func targetKindPrefix(r *http.Request) string {
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	if kind == "" {
+		return notifyKindPrefix
+	}
+	return kind
+}
+
+type moduleTargetRequest struct {
 	IntegrationID string            `json:"module_id"`
 	Label         string            `json:"label"`
 	Enabled       *bool             `json:"enabled"`
 	Values        map[string]string `json:"values"`
-	// Overrides names the inherited row this one changes. Empty means a new recipient.
+	// Overrides names the inherited row this one changes. Empty means a row of its own.
 	Overrides string `json:"overrides"`
 	Position  *int   `json:"position"`
 }
 
-// handleCreateNotificationTarget adds a recipient at a level.
-func (s *Server) handleCreateNotificationTarget(w http.ResponseWriter, r *http.Request) {
+// handleCreateModuleTarget adds a row at a level.
+func (s *Server) handleCreateModuleTarget(w http.ResponseWriter, r *http.Request) {
 	scopeType, scopeID, err := s.settingScope(r)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -206,7 +228,7 @@ func (s *Server) handleCreateNotificationTarget(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var req notificationTargetRequest
+	var req moduleTargetRequest
 	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -225,18 +247,18 @@ func (s *Server) handleCreateNotificationTarget(w http.ResponseWriter, r *http.R
 
 	overrides, err := optionalUUID(req.Overrides)
 	if err != nil {
-		s.writeError(w, r, errBadRequest("the recipient being overridden is not an id"))
+		s.writeError(w, r, errBadRequest("the row being overridden is not an id"))
 		return
 	}
 	if overrides != nil {
-		parent, err := s.store.NotificationTargets().ByID(r.Context(), *overrides)
+		parent, err := s.store.ModuleTargets().ByID(r.Context(), *overrides)
 		if err != nil {
-			s.writeError(w, r, errNotFound("the recipient being overridden no longer exists"))
+			s.writeError(w, r, errNotFound("the row being overridden no longer exists"))
 			return
 		}
 		if parent.ScopeType == scopeType && parent.ScopeID != nil && scopeID != nil &&
 			*parent.ScopeID == *scopeID {
-			s.writeError(w, r, errBadRequest("a recipient cannot override itself"))
+			s.writeError(w, r, errBadRequest("a row cannot override itself"))
 			return
 		}
 	}
@@ -248,7 +270,7 @@ func (s *Server) handleCreateNotificationTarget(w http.ResponseWriter, r *http.R
 	}
 
 	position := 0
-	if existing, err := s.store.NotificationTargets().At(r.Context(), integration.ID,
+	if existing, err := s.store.ModuleTargets().At(r.Context(), integration.ID,
 		scopeType, scopeID); err == nil {
 		position = len(existing)
 	}
@@ -256,7 +278,7 @@ func (s *Server) handleCreateNotificationTarget(w http.ResponseWriter, r *http.R
 		position = *req.Position
 	}
 
-	created, err := s.store.NotificationTargets().Create(r.Context(), &store.NotificationTarget{
+	created, err := s.store.ModuleTargets().Create(r.Context(), &store.ModuleTarget{
 		IntegrationID: integration.ID,
 		ScopeType:     scopeType,
 		ScopeID:       scopeID,
@@ -271,23 +293,23 @@ func (s *Server) handleCreateNotificationTarget(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	s.log.Info("notification recipient added",
+	s.log.Info("module target added",
 		"module", integration.Kind, "scope", scopeType, "recipient", created.Label)
 
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{"target": targetView(*created)})
 }
 
-// handleUpdateNotificationTarget changes one row: its name, its switch, its values.
-func (s *Server) handleUpdateNotificationTarget(w http.ResponseWriter, r *http.Request) {
+// handleUpdateModuleTarget changes one row: its name, its switch, its values.
+func (s *Server) handleUpdateModuleTarget(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(pathParam(r, "targetID"))
 	if err != nil {
-		s.writeError(w, r, errBadRequest("a recipient id is required"))
+		s.writeError(w, r, errBadRequest("a row id is required"))
 		return
 	}
 
-	existing, err := s.store.NotificationTargets().ByID(r.Context(), id)
+	existing, err := s.store.ModuleTargets().ByID(r.Context(), id)
 	if err != nil {
-		s.writeError(w, r, errNotFound("no such recipient"))
+		s.writeError(w, r, errNotFound("no such row"))
 		return
 	}
 	// The row is changed where it is defined, not where it is seen: a project editing
@@ -297,7 +319,7 @@ func (s *Server) handleUpdateNotificationTarget(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var req notificationTargetRequest
+	var req moduleTargetRequest
 	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -330,7 +352,7 @@ func (s *Server) handleUpdateNotificationTarget(w http.ResponseWriter, r *http.R
 		existing.Position = *req.Position
 	}
 
-	updated, err := s.store.NotificationTargets().Update(r.Context(), existing)
+	updated, err := s.store.ModuleTargets().Update(r.Context(), existing)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -338,17 +360,17 @@ func (s *Server) handleUpdateNotificationTarget(w http.ResponseWriter, r *http.R
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"target": targetView(*updated)})
 }
 
-// handleDeleteNotificationTarget removes a row at the level that defined it.
-func (s *Server) handleDeleteNotificationTarget(w http.ResponseWriter, r *http.Request) {
+// handleDeleteModuleTarget removes a row at the level that defined it.
+func (s *Server) handleDeleteModuleTarget(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(pathParam(r, "targetID"))
 	if err != nil {
-		s.writeError(w, r, errBadRequest("a recipient id is required"))
+		s.writeError(w, r, errBadRequest("a row id is required"))
 		return
 	}
 
-	existing, err := s.store.NotificationTargets().ByID(r.Context(), id)
+	existing, err := s.store.ModuleTargets().ByID(r.Context(), id)
 	if err != nil {
-		s.writeError(w, r, errNotFound("no such recipient"))
+		s.writeError(w, r, errNotFound("no such row"))
 		return
 	}
 	if err := s.allowSettingScope(r, existing.ScopeType, existing.ScopeID); err != nil {
@@ -356,23 +378,24 @@ func (s *Server) handleDeleteNotificationTarget(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if err := s.store.NotificationTargets().Delete(r.Context(), id); err != nil {
+	if err := s.store.ModuleTargets().Delete(r.Context(), id); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.log.Info("notification recipient removed", "module", existing.IntegrationID, "scope", existing.ScopeType)
+	s.log.Info("module target removed", "module", existing.IntegrationID, "scope", existing.ScopeType)
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"deleted": true})
 }
 
-// handleTestNotificationTarget sends one message to one recipient.
+// handleTestModuleTarget sends one message to one recipient, to see what a row is
+// addressed by before anything is relied on.
 //
 // The row is addressed by what the interface is holding: the settings a project sees
 // on an inherited row are not the row's own, and testing those is what somebody
 // clicking the button is asking for.
-func (s *Server) handleTestNotificationTarget(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleTestModuleTarget(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(pathParam(r, "targetID"))
 	if err != nil {
-		s.writeError(w, r, errBadRequest("a recipient id is required"))
+		s.writeError(w, r, errBadRequest("a row id is required"))
 		return
 	}
 
@@ -386,16 +409,25 @@ func (s *Server) handleTestNotificationTarget(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	row, err := s.store.NotificationTargets().ByID(r.Context(), id)
+	row, err := s.store.ModuleTargets().ByID(r.Context(), id)
 	if err != nil {
-		s.writeError(w, r, errNotFound("no such recipient"))
+		s.writeError(w, r, errNotFound("no such row"))
+		return
+	}
+
+	// Sending something is what a notification module does. A row of a deployment
+	// module names a place to put a release, and there is no message to send it: the
+	// button that appears on every row would then offer to message a cluster.
+	integration, err := s.store.Integrations().ByID(r.Context(), row.IntegrationID)
+	if err != nil || !strings.HasPrefix(integration.Kind, notifyKindPrefix) {
+		s.writeError(w, r, errBadRequest("only a notification row can be sent a test message"))
 		return
 	}
 
 	// The values are what this place would actually send to, and they may be more
 	// than the row says on its own.
 	groupID, projectID := s.scopeParents(r.Context(), scopeType, scopeID)
-	resolved, err := s.store.NotificationTargets().Effective(r.Context(), row.IntegrationID,
+	resolved, err := s.store.ModuleTargets().Effective(r.Context(), row.IntegrationID,
 		groupID, projectID)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -421,12 +453,6 @@ func (s *Server) handleTestNotificationTarget(w http.ResponseWriter, r *http.Req
 				address.Values[key] = value
 			}
 		}
-	}
-
-	integration, err := s.store.Integrations().ByID(r.Context(), row.IntegrationID)
-	if err != nil {
-		s.writeError(w, r, errNotFound("no such module"))
-		return
 	}
 
 	if _, err := s.store.Notifications().Record(r.Context(), "test", integration.Kind,

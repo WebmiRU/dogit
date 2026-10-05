@@ -65,7 +65,7 @@ func setupTargets(t *testing.T) *targetFixture {
 
 // row adds one recipient and returns it.
 func (f *targetFixture) row(t *testing.T, scopeType string, scopeID *uuid.UUID, label string,
-	enabled *bool, overrides *uuid.UUID, values map[string]any) *store.NotificationTarget {
+	enabled *bool, overrides *uuid.UUID, values map[string]any) *store.ModuleTarget {
 	t.Helper()
 
 	raw := map[string]json.RawMessage{}
@@ -77,7 +77,7 @@ func (f *targetFixture) row(t *testing.T, scopeType string, scopeID *uuid.UUID, 
 		raw[key] = encoded
 	}
 
-	target, err := f.store.NotificationTargets().Create(t.Context(), &store.NotificationTarget{
+	target, err := f.store.ModuleTargets().Create(t.Context(), &store.ModuleTarget{
 		IntegrationID: f.module,
 		ScopeType:     scopeType,
 		ScopeID:       scopeID,
@@ -101,7 +101,7 @@ func (f *targetFixture) effective(t *testing.T, groupID *uuid.UUID, projectID uu
 func (f *targetFixture) resolved(t *testing.T, groupID *uuid.UUID, projectID uuid.UUID) store.TargetResolution {
 	t.Helper()
 
-	resolved, err := f.store.NotificationTargets().Effective(t.Context(), f.module, groupID, &projectID)
+	resolved, err := f.store.ModuleTargets().Effective(t.Context(), f.module, groupID, &projectID)
 	if err != nil {
 		t.Fatalf("resolve recipients: %v", err)
 	}
@@ -283,11 +283,11 @@ func TestDeletingARecipientTakesItsOverridesWithIt(t *testing.T) {
 	base := f.row(t, store.ScopeInstance, nil, "everyone", nil, nil, map[string]any{"chat_id": "-100a"})
 	override := f.row(t, store.ScopeProject, &f.proj, "", nil, &base.ID, map[string]any{"chat_id": "-100own"})
 
-	if err := f.store.NotificationTargets().Delete(t.Context(), base.ID); err != nil {
+	if err := f.store.ModuleTargets().Delete(t.Context(), base.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
-	if _, err := f.store.NotificationTargets().ByID(t.Context(), override.ID); err == nil {
+	if _, err := f.store.ModuleTargets().ByID(t.Context(), override.ID); err == nil {
 		t.Error("the override survived the row it was changing")
 	}
 }
@@ -310,7 +310,7 @@ func TestTheSameAddressTwiceIsTwoMessages(t *testing.T) {
 // deployments overtaken by whatever was built first.
 func TestRecipientsKeepTheOrderTheyWerePutIn(t *testing.T) {
 	f := setupTargets(t)
-	targets := f.store.NotificationTargets()
+	targets := f.store.ModuleTargets()
 
 	for _, row := range []struct {
 		label    string
@@ -319,7 +319,7 @@ func TestRecipientsKeepTheOrderTheyWerePutIn(t *testing.T) {
 		{"deploys", 1},
 		{"everything else", 0},
 	} {
-		if _, err := targets.Create(context.Background(), &store.NotificationTarget{
+		if _, err := targets.Create(context.Background(), &store.ModuleTarget{
 			IntegrationID: f.module, ScopeType: store.ScopeInstance,
 			Label: row.label, Position: row.position,
 		}); err != nil {

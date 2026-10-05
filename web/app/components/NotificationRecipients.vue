@@ -85,7 +85,7 @@ function where(row: Recipient): string {
 async function load() {
   if (recipients.value.length === 0) loading.value = true
   try {
-    const answer = await api.get<RecipientsAnswer>(`/notification-targets?${scopeQuery.value}`)
+    const answer = await api.get<RecipientsAnswer>(`/module-targets?${scopeQuery.value}`)
     const modules = answer.modules ?? []
     recipients.value = props.onlyModule
       ? (answer.targets ?? []).filter((row) => row.module_id === props.onlyModule)
@@ -231,9 +231,9 @@ async function save() {
     // meant — which an administrator's session makes possible, and which would
     // change every repository on the instance.
     if (editing.value.id) {
-      await api.patch(`/notification-targets/${editing.value.id}?${scopeQuery.value}`, body)
+      await api.patch(`/module-targets/${editing.value.id}?${scopeQuery.value}`, body)
     } else {
-      await api.post(`/notification-targets?${scopeQuery.value}`, body)
+      await api.post(`/module-targets?${scopeQuery.value}`, body)
     }
     // A form is the one place a read afterwards is worth it: the row that was just
     // written has an id and a place in the order that only the core knows, and the
@@ -265,7 +265,7 @@ async function toggle(row: Recipient) {
   row.enabled_here = true
 
   try {
-    await api.patch(`/notification-targets/${row.id}?${scopeQuery.value}`, {
+    await api.patch(`/module-targets/${row.id}?${scopeQuery.value}`, {
       module_id: row.module_id,
       label: row.label,
       enabled: wanted,
@@ -281,7 +281,7 @@ async function toggle(row: Recipient) {
 async function remove(row: Recipient) {
   busy.value = row.id
   try {
-    await api.del(`/notification-targets/${row.id}?${scopeQuery.value}`)
+    await api.del(`/module-targets/${row.id}?${scopeQuery.value}`)
     recipients.value = recipients.value.filter((one) => one.id !== row.id)
     notify(`Removed ${describe(row)}`)
   } catch (caught) {
@@ -301,7 +301,7 @@ async function remove(row: Recipient) {
 async function test(row: Recipient) {
   busy.value = row.id
   try {
-    await api.post(`/notification-targets/${row.id}/test?${scopeQuery.value}`, {})
+    await api.post(`/module-targets/${row.id}/test?${scopeQuery.value}`, {})
     // A message that arrives is its own answer. One that does not needs saying, and
     // it says where the reason will be.
     notify(`Test message queued for ${describe(row)}. If nothing arrives, the module's log says why.`)

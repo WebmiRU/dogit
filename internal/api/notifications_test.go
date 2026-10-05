@@ -51,10 +51,10 @@ func setupRecipients(t *testing.T) (*moduleFixture, *models.Project, *models.Int
 
 // add is one recipient at the instance level.
 func addRecipient(t *testing.T, f *moduleFixture, moduleID uuid.UUID, label, chat string,
-	enabled *bool) *store.NotificationTarget {
+	enabled *bool) *store.ModuleTarget {
 	t.Helper()
 
-	target, err := f.store.NotificationTargets().Create(t.Context(), &store.NotificationTarget{
+	target, err := f.store.ModuleTargets().Create(t.Context(), &store.ModuleTarget{
 		IntegrationID: moduleID,
 		ScopeType:     store.ScopeInstance,
 		Label:         label,
@@ -150,7 +150,7 @@ func TestANotificationIsQueuedOnceForEveryRecipient(t *testing.T) {
 	}
 
 	// Queueing is not editing: the recipient list is the same afterwards.
-	rows, err := f.store.NotificationTargets().At(t.Context(), module.ID, store.ScopeInstance, nil)
+	rows, err := f.store.ModuleTargets().At(t.Context(), module.ID, store.ScopeInstance, nil)
 	if err != nil || len(rows) != 3 {
 		t.Errorf("queueing a notification changed the recipients: %d rows, %v", len(rows), err)
 	}

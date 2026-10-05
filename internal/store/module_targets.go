@@ -11,21 +11,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// NotificationTargetRepo stores where notifications go.
+// ModuleTargetRepo stores where notifications go.
 //
 // A row is a set of settings belonging to a module, defined at one level and
 // inherited downwards. The core stores and resolves these rows without knowing
 // what any of the values are: it does not know what a chat id is, and the day
 // somebody writes a module for a channel nobody has thought of yet, it keeps
 // working for the same reason the settings forms did.
-type NotificationTargetRepo struct{ s *Store }
+type ModuleTargetRepo struct{ s *Store }
 
-func (s *Store) NotificationTargets() *NotificationTargetRepo {
-	return &NotificationTargetRepo{s: s}
+func (s *Store) ModuleTargets() *ModuleTargetRepo {
+	return &ModuleTargetRepo{s: s}
 }
 
-// NotificationTarget is one recipient, as it was defined at one level.
-type NotificationTarget struct {
+// ModuleTarget is one recipient, as it was defined at one level.
+type ModuleTarget struct {
 	ID            uuid.UUID
 	IntegrationID uuid.UUID
 	ScopeType     string
@@ -55,14 +55,14 @@ type NotificationTarget struct {
 type EffectiveTarget struct {
 	// Own is the most specific row in the chain: the one that decides the label and
 	// the order, and the one an edit would change.
-	Own NotificationTarget
+	Own ModuleTarget
 	// Root is the row this descends from, which is where the label and the position
 	// came from unless something below changed them.
-	Root NotificationTarget
+	Root ModuleTarget
 	// Values is Own's values over Root's and the levels between: a key is only
 	// overridden when a row actually set it.
 	Values map[string]json.RawMessage
-	// Enabled is the switch, resolved. See NotificationTarget.Enabled.
+	// Enabled is the switch, resolved. See ModuleTarget.Enabled.
 	Enabled bool
 	// DefinedAt is the level of Own — where a change to this recipient belongs.
 	DefinedAt string
@@ -89,9 +89,9 @@ const targetColumns = `id, integration_id, scope_type, scope_id, label, enabled,
 
 func scanTarget(row interface {
 	Scan(dest ...any) error
-}) (*NotificationTarget, error) {
+}) (*ModuleTarget, error) {
 	var (
-		t         NotificationTarget
+		t         ModuleTarget
 		valuesRaw []byte
 	)
 	if err := row.Scan(&t.ID, &t.IntegrationID, &t.ScopeType, &t.ScopeID, &t.Label,
@@ -108,7 +108,7 @@ func scanTarget(row interface {
 }
 
 // Create adds one row.
-func (r *NotificationTargetRepo) Create(ctx context.Context, t *NotificationTarget) (*NotificationTarget, error) {
+func (r *ModuleTargetRepo) Create(ctx context.Context, t *ModuleTarget) (*ModuleTarget, error) {
 	if t.ID == uuid.Nil {
 		t.ID = uuid.New()
 	}
@@ -125,7 +125,7 @@ func (r *NotificationTargetRepo) Create(ctx context.Context, t *NotificationTarg
 	}
 
 	row := r.s.pool.QueryRow(ctx, `
-		INSERT INTO notification_targets
+		INSERT INTO module_targets
 			(id, integration_id, scope_type, scope_id, label, enabled, position, overrides, values)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING `+targetColumns,
@@ -140,7 +140,7 @@ func (r *NotificationTargetRepo) Create(ctx context.Context, t *NotificationTarg
 }
 
 // Update rewrites one row in place.
-func (r *NotificationTargetRepo) Update(ctx context.Context, t *NotificationTarget) (*NotificationTarget, error) {
+func (r *ModuleTargetRepo) Update(ctx context.Context, t *ModuleTarget) (*ModuleTarget, error) {
 	if t.Values == nil {
 		t.Values = map[string]json.RawMessage{}
 	}
@@ -150,7 +150,7 @@ func (r *NotificationTargetRepo) Update(ctx context.Context, t *NotificationTarg
 	}
 
 	row := r.s.pool.QueryRow(ctx, `
-		UPDATE notification_targets
+		UPDATE module_targets
 		SET label = $2, enabled = $3, position = $4, overrides = $5, values = $6, updated_at = now()
 		WHERE id = $1
 		RETURNING `+targetColumns,
@@ -168,9 +168,9 @@ func (r *NotificationTargetRepo) Update(ctx context.Context, t *NotificationTarg
 
 // Delete removes one row, and any rows below it that were overriding it: an
 // override with nothing to override is not a recipient, it is a leftover.
-func (r *NotificationTargetRepo) Delete(ctx context.Context, id uuid.UUID) error {
+func (r *ModuleTargetRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	tag, err := r.s.pool.Exec(ctx,
-		`DELETE FROM notification_targets WHERE id = $1 OR overrides = $1`, id)
+		`DELETE FROM module_targets WHERE id = $1 OR overrides = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete notification target: %w", err)
 	}
@@ -181,9 +181,9 @@ func (r *NotificationTargetRepo) Delete(ctx context.Context, id uuid.UUID) error
 }
 
 // ByID reads one row, wherever it is defined.
-func (r *NotificationTargetRepo) ByID(ctx context.Context, id uuid.UUID) (*NotificationTarget, error) {
+func (r *ModuleTargetRepo) ByID(ctx context.Context, id uuid.UUID) (*ModuleTarget, error) {
 	target, err := scanTarget(r.s.pool.QueryRow(ctx,
-		`SELECT `+targetColumns+` FROM notification_targets WHERE id = $1`, id))
+		`SELECT `+targetColumns+` FROM module_targets WHERE id = $1`, id))
 	if err != nil {
 		if errors.Is(err, pgxNoRows) {
 			return nil, ErrNotFound
@@ -194,11 +194,11 @@ func (r *NotificationTargetRepo) ByID(ctx context.Context, id uuid.UUID) (*Notif
 }
 
 // At returns the rows defined at exactly one level.
-func (r *NotificationTargetRepo) At(ctx context.Context, integrationID uuid.UUID,
-	scopeType string, scopeID *uuid.UUID) ([]NotificationTarget, error) {
+func (r *ModuleTargetRepo) At(ctx context.Context, integrationID uuid.UUID,
+	scopeType string, scopeID *uuid.UUID) ([]ModuleTarget, error) {
 
 	rows, err := r.s.pool.Query(ctx, `
-		SELECT `+targetColumns+` FROM notification_targets
+		SELECT `+targetColumns+` FROM module_targets
 		WHERE integration_id = $1 AND scope_type = $2 AND scope_id IS NOT DISTINCT FROM $3
 		ORDER BY position, created_at`, integrationID, scopeType, scopeID)
 	if err != nil {
@@ -206,7 +206,7 @@ func (r *NotificationTargetRepo) At(ctx context.Context, integrationID uuid.UUID
 	}
 	defer rows.Close()
 
-	out := []NotificationTarget{}
+	out := []ModuleTarget{}
 	for rows.Next() {
 		target, err := scanTarget(rows)
 		if err != nil {
@@ -225,17 +225,17 @@ func (r *NotificationTargetRepo) At(ctx context.Context, integrationID uuid.UUID
 // it, and those are reported as stale rather than treated as new recipients —
 // silently turning them into extra channels is exactly the kind of accident that
 // makes somebody stop reading the messages.
-func (r *NotificationTargetRepo) Effective(ctx context.Context, integrationID uuid.UUID,
+func (r *ModuleTargetRepo) Effective(ctx context.Context, integrationID uuid.UUID,
 	groupID, projectID *uuid.UUID) (TargetResolution, error) {
 
 	rows, err := r.s.pool.Query(ctx, `
-		SELECT `+targetColumns+` FROM notification_targets WHERE integration_id = $1`, integrationID)
+		SELECT `+targetColumns+` FROM module_targets WHERE integration_id = $1`, integrationID)
 	if err != nil {
 		return TargetResolution{}, fmt.Errorf("read notification targets: %w", err)
 	}
 	defer rows.Close()
 
-	var all []NotificationTarget
+	var all []ModuleTarget
 	for rows.Next() {
 		target, err := scanTarget(rows)
 		if err != nil {
@@ -247,13 +247,13 @@ func (r *NotificationTargetRepo) Effective(ctx context.Context, integrationID uu
 		return TargetResolution{}, err
 	}
 
-	byID := make(map[uuid.UUID]*NotificationTarget, len(all))
+	byID := make(map[uuid.UUID]*ModuleTarget, len(all))
 	for i := range all {
 		byID[all[i].ID] = &all[i]
 	}
 
 	// Which levels are in scope, least specific first.
-	var visible []*NotificationTarget
+	var visible []*ModuleTarget
 	for i := range all {
 		t := &all[i]
 		switch t.ScopeType {
@@ -282,8 +282,8 @@ func (r *NotificationTargetRepo) Effective(ctx context.Context, integrationID uu
 
 	// Rows that override something: the winner is the most specific one, and every
 	// row in between contributes the values it did not override.
-	winner := map[uuid.UUID]*NotificationTarget{}
-	chain := map[uuid.UUID][]*NotificationTarget{}
+	winner := map[uuid.UUID]*ModuleTarget{}
+	chain := map[uuid.UUID][]*ModuleTarget{}
 	stale := []uuid.UUID{}
 
 	for _, t := range visible {
@@ -314,7 +314,7 @@ func (r *NotificationTargetRepo) Effective(ctx context.Context, integrationID uu
 			continue
 		}
 
-		levels := append([]*NotificationTarget{root}, chain[root.ID]...)
+		levels := append([]*ModuleTarget{root}, chain[root.ID]...)
 		sort.SliceStable(levels, func(i, j int) bool {
 			return byScope[levels[i].ScopeType] < byScope[levels[j].ScopeType]
 		})
@@ -369,7 +369,7 @@ func (r *NotificationTargetRepo) Effective(ctx context.Context, integrationID uu
 // Called when a project changes group, because that is the moment one of its
 // settings stops meaning anything. The ids come back so the caller can say so: a
 // setting that vanishes without a word is a setting somebody will look for.
-func (r *NotificationTargetRepo) PruneStale(ctx context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
+func (r *ModuleTargetRepo) PruneStale(ctx context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
 	var groupID *uuid.UUID
 	if err := r.s.pool.QueryRow(ctx,
 		`SELECT group_id FROM projects WHERE id = $1`, projectID).Scan(&groupID); err != nil {
@@ -380,11 +380,11 @@ func (r *NotificationTargetRepo) PruneStale(ctx context.Context, projectID uuid.
 	}
 
 	rows, err := r.s.pool.Query(ctx, `
-		SELECT t.id FROM notification_targets t
+		SELECT t.id FROM module_targets t
 		WHERE t.scope_type = 'project' AND t.scope_id = $1
 		  AND t.overrides IS NOT NULL
 		  AND NOT EXISTS (
-			SELECT 1 FROM notification_targets parent
+			SELECT 1 FROM module_targets parent
 			WHERE parent.id = t.overrides
 			  AND (parent.scope_type = 'instance'
 			       OR (parent.scope_type = 'group' AND parent.scope_id IS NOT DISTINCT FROM $2)
@@ -411,7 +411,7 @@ func (r *NotificationTargetRepo) PruneStale(ctx context.Context, projectID uuid.
 	}
 
 	if _, err := r.s.pool.Exec(ctx,
-		`DELETE FROM notification_targets WHERE id = ANY($1)`, stale); err != nil {
+		`DELETE FROM module_targets WHERE id = ANY($1)`, stale); err != nil {
 		return nil, fmt.Errorf("delete stale notification targets: %w", err)
 	}
 	return stale, nil

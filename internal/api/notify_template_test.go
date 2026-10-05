@@ -183,7 +183,7 @@ func withRecipients(t *testing.T, f *moduleFixture) store.NotificationAddress {
 		t.Fatalf("switch on: %v", err)
 	}
 
-	row, err := f.store.NotificationTargets().Create(t.Context(), &store.NotificationTarget{
+	row, err := f.store.ModuleTargets().Create(t.Context(), &store.ModuleTarget{
 		IntegrationID: module.ID,
 		ScopeType:     store.ScopeInstance,
 		Label:         "everyone",
@@ -295,12 +295,12 @@ func withRecipientDefaults(t *testing.T, f *moduleFixture, text string) store.No
 	t.Helper()
 
 	address := withRecipients(t, f)
-	row, err := f.store.NotificationTargets().ByID(t.Context(), address.ID)
+	row, err := f.store.ModuleTargets().ByID(t.Context(), address.ID)
 	if err != nil {
 		t.Fatalf("read the recipient: %v", err)
 	}
 	row.Values["default_text"] = json.RawMessage(mustJSON(text))
-	if _, err := f.store.NotificationTargets().Update(t.Context(), row); err != nil {
+	if _, err := f.store.ModuleTargets().Update(t.Context(), row); err != nil {
 		t.Fatalf("set its wording: %v", err)
 	}
 	return address

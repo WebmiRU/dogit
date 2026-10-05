@@ -193,7 +193,7 @@ func (s *Server) notificationTargets(ctx context.Context, projectPath string) []
 
 		s.adoptLegacySettings(ctx, integration)
 
-		resolved, err := s.store.NotificationTargets().Effective(ctx, integration.ID, groupID, projectID)
+		resolved, err := s.store.ModuleTargets().Effective(ctx, integration.ID, groupID, projectID)
 		if err != nil {
 			s.log.Warn("read notification recipients", "module", integration.Kind, "error", err)
 			continue
@@ -232,7 +232,7 @@ func (s *Server) adoptLegacySettings(ctx context.Context, integration *models.In
 		return
 	}
 
-	targets := s.store.NotificationTargets()
+	targets := s.store.ModuleTargets()
 	existing, err := targets.At(ctx, integration.ID, store.ScopeInstance, nil)
 	if err != nil || len(existing) > 0 {
 		return
@@ -250,7 +250,7 @@ func (s *Server) adoptLegacySettings(ctx context.Context, integration *models.In
 		return
 	}
 
-	if _, err := targets.Create(ctx, &store.NotificationTarget{
+	if _, err := targets.Create(ctx, &store.ModuleTarget{
 		IntegrationID: integration.ID,
 		ScopeType:     store.ScopeInstance,
 		Label:         integration.Name,
@@ -357,7 +357,7 @@ func (s *Server) handleModuleOwnTarget(w http.ResponseWriter, r *http.Request) {
 		values[key] = json.RawMessage(strconv.Quote(value))
 	}
 
-	rows, err := s.store.NotificationTargets().At(r.Context(), integration.ID, store.ScopeInstance, nil)
+	rows, err := s.store.ModuleTargets().At(r.Context(), integration.ID, store.ScopeInstance, nil)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -377,7 +377,7 @@ func (s *Server) handleModuleOwnTarget(w http.ResponseWriter, r *http.Request) {
 			merged[key] = value
 		}
 		row.Values = merged
-		if _, err := s.store.NotificationTargets().Update(r.Context(), &row); err != nil {
+		if _, err := s.store.ModuleTargets().Update(r.Context(), &row); err != nil {
 			s.writeError(w, r, err)
 			return
 		}
@@ -385,7 +385,7 @@ func (s *Server) handleModuleOwnTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := s.store.NotificationTargets().Create(r.Context(), &store.NotificationTarget{
+	created, err := s.store.ModuleTargets().Create(r.Context(), &store.ModuleTarget{
 		IntegrationID: integration.ID,
 		ScopeType:     store.ScopeInstance,
 		Label:         req.Label,
@@ -405,7 +405,7 @@ func (s *Server) handleModuleOwnTarget(w http.ResponseWriter, r *http.Request) {
 
 // targetView is one recipient as the interface sees it: its name, whether it is
 // switched on, and its values.
-func targetView(row store.NotificationTarget) map[string]any {
+func targetView(row store.ModuleTarget) map[string]any {
 	values := map[string]any{}
 	for key, raw := range row.Values {
 		var value any

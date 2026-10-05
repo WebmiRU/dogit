@@ -43,7 +43,7 @@ type Notification struct {
 }
 
 // NotificationAddress is one recipient, in the shape the queue stores it. It is
-// separate from NotificationTarget because the queue keeps a snapshot rather than a
+// separate from ModuleTarget because the queue keeps a snapshot rather than a
 // reference: see TargetValues.
 type NotificationAddress struct {
 	ID     uuid.UUID
