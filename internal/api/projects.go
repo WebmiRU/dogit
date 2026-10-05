@@ -34,7 +34,6 @@ type projectView struct {
 	MergeMethod          string `json:"merge_method"`
 	RemoveSourceBranch   bool   `json:"remove_source_branch"`
 	AllowPipelineTrigger bool   `json:"allow_pipeline_trigger"`
-	AutoDeployPaused     bool   `json:"auto_deploy_paused"`
 
 	SSHURL  string `json:"ssh_url"`
 	HTTPURL string `json:"http_url"`
@@ -62,7 +61,6 @@ func (s *Server) projectToView(p *models.Project, level int) projectView {
 		MergeMethod:          p.MergeMethod,
 		RemoveSourceBranch:   p.RemoveSourceBranch,
 		AllowPipelineTrigger: p.AllowPipelineTrigger,
-		AutoDeployPaused:     p.AutoDeployPaused,
 
 		// The SSH URL is the canonical one: the system sshd terminates the
 		// connection, and the port appears only when it is not the standard 22.
@@ -401,9 +399,6 @@ type updateProjectRequest struct {
 	MergeMethod          *string `json:"merge_method"`
 	RemoveSourceBranch   *bool   `json:"remove_source_branch"`
 	AllowPipelineTrigger *bool   `json:"allow_pipeline_trigger"`
-	// AutoDeployPaused is the brake, not a policy: it stops pushes and tags from
-	// starting runs by themselves and leaves manual runs alone.
-	AutoDeployPaused *bool `json:"auto_deploy_paused"`
 	// MoveToGroup moves the project into a group, or out of one when it is empty.
 	// Moving changes the project's path, and therefore its address and the place
 	// its repository lives, so it is a separate request rather than another field
@@ -443,9 +438,6 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DefaultBranch != nil {
 		project.DefaultBranch = *req.DefaultBranch
-	}
-	if req.AutoDeployPaused != nil {
-		project.AutoDeployPaused = *req.AutoDeployPaused
 	}
 	if req.AllowMerge != nil {
 		project.AllowMerge = *req.AllowMerge

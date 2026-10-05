@@ -188,6 +188,20 @@ func manifest() map[string]any {
 			"title":    "Where this may deploy",
 			"description": "One row per cluster this module may deploy to. A project names one in its " +
 				"configuration and can switch any row off without touching the others.",
+			// One switch per cluster, because whether a push deploys by itself is a
+			// fact about a place and not about the project: a project with two clusters
+			// may want one of them automatic and the other only by hand, and one switch
+			// for both cannot say anything true about either.
+			"flags": []map[string]any{
+				{
+					"key":     "auto_deploy",
+					"label":   "Autodeploy",
+					"default": true,
+					"description": "Whether a push or a tag may deploy here by itself. Off means the image " +
+						"is still built and pushed, and this place waits for somebody to start the " +
+						"deployment by hand — which is how a release is rehearsed before it goes out.",
+				},
+			},
 		},
 
 		"settings": []map[string]any{

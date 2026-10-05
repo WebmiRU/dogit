@@ -69,6 +69,11 @@ type EffectiveTarget struct {
 	Values map[string]json.RawMessage
 	// Enabled is the switch, resolved. See ModuleTarget.Enabled.
 	Enabled bool
+	// Flags are the switches the module declared, resolved one key at a time: the most
+	// specific level that said anything about a key decides it, and a key no level said
+	// anything about is absent rather than false. "Not decided here" and "decided off
+	// here" are different facts, and a place has to be able to tell them apart.
+	Flags map[string]bool
 	// DefinedAt is the level of Own — where a change to this recipient belongs.
 	DefinedAt string
 	// SetHere are the keys Own actually set, which is what lets the interface mark

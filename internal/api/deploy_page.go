@@ -407,35 +407,24 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 // By the target the project named and by what is installed, because both can differ:
 // a project may name a target whose module is not here any more, and that is worth
 // saying rather than answering with some other module's history.
+// deployModuleFor is the module a request names, or the one this project deploys with.
 func (s *Server) deployModuleFor(r *http.Request, project *models.Project) (*models.Integration, error) {
 	target := strings.TrimSpace(r.URL.Query().Get("target"))
 	if target == "" {
 		target = strings.TrimSpace(r.PathValue("target"))
 	}
 
-	modules, err := s.store.Integrations().List(r.Context())
+	found, err := s.deployModule(r.Context(), target)
 	if err != nil {
 		return nil, err
 	}
-
-	var found *models.Integration
-	for _, module := range modules {
-		if !strings.HasPrefix(module.Kind, "deploy:") || !module.Enabled {
-			continue
-		}
-		if target != "" && module.Kind != fmt.Sprintf(deployTargetKind, target) {
-			continue
-		}
-		found = module
-		break
-	}
-
 	if found == nil && target != "" {
 		return nil, errNotFoundf(
 			"no deploy module for the target %q is installed on this instance", target)
 	}
 	return found, nil
 }
+
 
 // callDeployModule asks a deploy module something, as that module.
 //

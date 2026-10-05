@@ -26,7 +26,9 @@
  *   release may be put.
  */
 import type { SettingSpec } from '~/types/module'
-import type { ModuleRow, ModuleRowDraft, ModuleRowsAnswer } from '~/types/notification'
+import type {
+  ModuleRow, ModuleRowDraft, ModuleRowFlag, ModuleRowsAnswer,
+} from '~/types/notification'
 
 const props = withDefaults(
   defineProps<{
@@ -436,6 +438,52 @@ async function probe(row: ModuleRow) {
   }
 }
 
+/**
+ * The switches this module says a row has, in the order it declared them.
+ *
+ * Declared rather than known, so that a module gains a switch by naming it and the core
+ * has to learn nothing about what it means.
+ */
+function flagsOf(row: ModuleRow): ModuleRowFlag[] {
+  const module = available.value.find((one) => one.id === row.module_id)
+  return module?.target?.flags ?? []
+}
+
+/**
+ * Where a switch stands right now.
+ *
+ * The row's own decision where it made one, and the module's default where nobody did —
+ * which is why an absent decision is not the same as off. A project that has never been
+ * near this switch must not find a release waiting for a button because the switch it
+ * never touched came out false.
+ */
+function flagOn(row: ModuleRow, flag: ModuleRowFlag): boolean {
+  const own = row.flags_here?.[flag.key]
+  if (own !== undefined) return own
+  const inherited = row.flags?.[flag.key]
+  if (inherited !== undefined) return inherited
+  return flag.default
+}
+
+async function toggleFlag(row: ModuleRow, flag: ModuleRowFlag) {
+  const wanted = !flagOn(row, flag)
+  row.flags = { ...(row.flags ?? {}), [flag.key]: wanted }
+  row.flags_here = { ...(row.flags_here ?? {}), [flag.key]: true }
+
+  try {
+    await api.patch(`/module-targets/${row.id}?${scopeQuery.value}`, {
+      module_id: row.module_id,
+      flags: { [flag.key]: wanted },
+    })
+    notify(`${flag.label} for ${addressOf(row)} is now ${wanted ? 'on' : 'off'}`, {
+      type: 'success',
+    })
+  } catch (caught) {
+    row.flags = { ...(row.flags ?? {}), [flag.key]: !wanted }
+    failed(caught, `could not switch ${flag.label.toLowerCase()} for ${describe(row)}`)
+  }
+}
+
 async function test(row: ModuleRow) {
   busy.value = row.id
   try {
@@ -494,14 +542,36 @@ onMounted(load)
           <span v-if="showsLabel(row)" class="muted small">{{ row.label }}</span>
           <span v-if="row.scope_type !== 'instance'" class="muted small">{{ where(row) }}</span>
           <span class="spacer" />
+          <!-- The row's own switch: may this project act on this place at all. Every
+               kind of module has this one, and it is the coarse question. -->
           <button
             class="switch"
             :class="{ on: row.enabled }"
             type="button"
             :disabled="!canManage || busy === row.id"
             :aria-pressed="row.enabled"
-            :title="row.enabled ? 'This project may deploy here' : 'This project may not deploy here'"
+            :title="row.enabled
+              ? `This project may use ${addressOf(row)}`
+              : `This project may not use ${addressOf(row)}`"
             @click="toggle(row)"
+          >
+            <span class="knob" />
+          </button>
+          <!-- The switches a row has, each one named by the module that declared it.
+               A deployment module declares autodeploy beside the switch every row has:
+               "may this project deploy here" and "may a push do it without anybody
+               asking" are two questions about two different things, and one switch
+               cannot answer both. -->
+          <button
+            v-for="flag of flagsOf(row)"
+            :key="flag.key"
+            class="switch"
+            :class="{ on: flagOn(row, flag) }"
+            type="button"
+            :disabled="!canManage || busy === row.id"
+            :aria-pressed="flagOn(row, flag)"
+            :title="flag.description || flag.label"
+            @click="toggleFlag(row, flag)"
           >
             <span class="knob" />
           </button>

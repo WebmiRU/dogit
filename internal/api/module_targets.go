@@ -128,6 +128,15 @@ func (s *Server) targetRowView(r *http.Request, integration *models.Integration,
 		own[key] = value
 	}
 
+	flags := map[string]bool{}
+	for key, value := range row.Flags {
+		flags[key] = value
+	}
+	flagsHere := map[string]bool{}
+	for key, value := range row.Own.Flags {
+		flagsHere[key] = value
+	}
+
 	return map[string]any{
 		"id":          row.Own.ID,
 		"module_id":   integration.ID,
@@ -138,6 +147,8 @@ func (s *Server) targetRowView(r *http.Request, integration *models.Integration,
 		"own_values":  own,
 		"set_here":    row.SetHere,
 		"enabled":     row.Enabled,
+		"flags":       flags,
+		"flags_here":  flagsHere,
 		// EnabledHere says this level is the one that switched it, as against every
 		// level above it saying the same thing because nobody decided.
 		"enabled_here":   row.Own.Enabled != nil && *row.Own.Enabled == row.Enabled,
@@ -210,6 +221,10 @@ type moduleTargetRequest struct {
 	IntegrationID string            `json:"module_id"`
 	Label         string            `json:"label"`
 	Enabled       *bool             `json:"enabled"`
+	// Flags are the switches this level is deciding. Only the keys the module declared
+	// are accepted, and only the keys actually present change: a switch sends the key it
+	// means and nothing else, so a form that shows one flag must not blank the rest.
+	Flags map[string]bool `json:"flags"`
 	Values        map[string]string `json:"values"`
 	// Overrides names the inherited row this one changes. Empty means a row of its own.
 	Overrides string `json:"overrides"`
@@ -418,6 +433,29 @@ func (s *Server) handleUpdateModuleTarget(w http.ResponseWriter, r *http.Request
 	}
 	if req.Label != "" {
 		existing.Label = strings.TrimSpace(req.Label)
+	}
+	// The switches, checked against what the module said its rows have.
+	//
+	// Checked rather than stored, because the column is a map and a map accepts
+	// anything: a flag nobody declared would be written down, shown as nothing, and
+	// quietly take a name that a later version of the module means something else by.
+	if len(req.Flags) > 0 {
+		declared := map[string]bool{}
+		for _, one := range integration.Capabilities.Target.Flags {
+			declared[one.Key] = true
+		}
+		for key := range req.Flags {
+			if !declared[key] {
+				s.writeError(w, r, errBadRequestf("a row of this module has no switch called %q", key))
+				return
+			}
+		}
+		if existing.Flags == nil {
+			existing.Flags = map[string]bool{}
+		}
+		for key, value := range req.Flags {
+			existing.Flags[key] = value
+		}
 	}
 	if req.Enabled != nil {
 		existing.Enabled = req.Enabled

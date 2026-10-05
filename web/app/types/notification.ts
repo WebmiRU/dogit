@@ -23,6 +23,14 @@ export interface ModuleRow {
   enabled: boolean
   /** Whether this level is the one that switched it, rather than agreeing with above. */
   enabled_here: boolean
+  /**
+   * The switches the module declared for a row, resolved: the most specific level that
+   * said anything about a key decides it. A key that is absent was decided by nobody and
+   * stands at the module's default — which is why absent is not the same as false.
+   */
+  flags?: Record<string, boolean>
+  /** Only the switches this level itself decided. */
+  flags_here?: Record<string, boolean>
   /** The level a change belongs to. */
   scope_type: string
   /** The level the row itself was created at. */
@@ -62,10 +70,21 @@ export interface ModuleRowsModule {
     identify?: string[]
     title?: string
     description?: string
+    /** The switches a row has besides the one every row has. */
+    flags?: ModuleRowFlag[]
   }
   settings?: import('./module').SettingSpec[]
 }
 /** The row being added or changed in the recipients form. */
+/** One switch a module says its rows have. */
+export interface ModuleRowFlag {
+  key: string
+  label: string
+  description?: string
+  /** Where it stands where nobody has decided. True unless the module says otherwise. */
+  default: boolean
+}
+
 export interface ModuleRowDraft {
   /** Empty while adding. */
   id: string

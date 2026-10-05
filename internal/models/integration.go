@@ -92,6 +92,33 @@ type TargetSpec struct {
 	// own words — "Which chats", "SMTP servers".
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Flags are the switches each row has besides the one every row has, by the name
+	// the core stores them under.
+	//
+	// A row is already switchable as a whole — enabled says whether this place may be
+	// acted on at all, and that is a question every kind of module asks. What is here
+	// is for the questions only one kind asks: a deployment module wants to know
+	// whether a push may come here by itself, which is a different fact about a
+	// different place and means nothing for a chat. The module says which it wants and
+	// the core draws a switch per flag, so a module gaining one does not mean teaching
+	// the core what autodeploy is.
+	Flags []TargetFlag `json:"flags,omitempty"`
+}
+
+// TargetFlag is one switch a module's rows have.
+type TargetFlag struct {
+	// Key is what the core stores the decision under.
+	Key string `json:"key"`
+	// Label is what the switch is called on the page.
+	Label string `json:"label"`
+	// Description says what the switch means, in the module's own words, and is worth
+	// writing: a switch whose consequence is not obvious is a switch somebody reads
+	// the page in order to understand.
+	Description string `json:"description,omitempty"`
+	// Default is where it stands when nobody has said otherwise, and true unless the
+	// module says otherwise: a row that is there and was not switched off should be in
+	// use.
+	Default bool `json:"default"`
 }
 
 // RoutingSpec is a module's request to be served on an address of its own.
