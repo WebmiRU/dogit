@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/pipeline"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -26,6 +27,76 @@ import (
 // What the core decides is only who may ask. Everything it sends on is the module's
 // answer, unchanged and in the module's words — including when the module is not
 // installed, which is a sentence to show rather than an error page.
+
+// handleProjectDeployPlaces is where this project says it deploys to, as the repository
+// wrote it.
+//
+// Read-only on purpose. The policy lives in the file, because it is a claim about code
+// and is reviewed with it; what the page adds is the ability to read it without opening
+// a yml — "which branch reaches production" is a question people ask of the interface,
+// not of a file they have to go and find. A second copy of the rules here would be a
+// second answer to the same question, and this is not where that belongs.
+func (s *Server) handleProjectDeployPlaces(w http.ResponseWriter, r *http.Request) {
+	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	config, err := s.pipelineConfig(r.Context(), s.repos.PathFor(project), project.DefaultBranch)
+	if err != nil {
+		// No configuration is a state the page draws, not a failure of the request.
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"places": []any{}})
+		return
+	}
+
+	places := make([]map[string]any, 0, len(config.Deploys))
+	for _, spec := range config.Deploys {
+		places = append(places, map[string]any{
+			"name":     spec.Name,
+			"target":   spec.Target,
+			"cluster":  spec.Cluster,
+			"namespace": spec.Namespace,
+			"tag_only": spec.TagOnly,
+			"rollout":  spec.Rollout,
+			// Said in the repository's own words rather than evaluated here: a page
+			// that interpreted the rules would have to keep up with the interpreter.
+			"rules": rulesOf(spec.Rules),
+		})
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"places": places,
+		"branch": project.DefaultBranch,
+	})
+}
+
+// rulesOf is what a place listens for, in words.
+func rulesOf(rules []pipeline.Rule) []string {
+	said := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		switch {
+		case rule.If == "" && len(rule.Changes) > 0:
+			said = append(said, "changed files: "+changedPaths(rule.Changes))
+		case rule.If != "":
+			said = append(said, rule.If)
+		case rule.When == "never":
+			said = append(said, "never")
+		default:
+			said = append(said, "always")
+		}
+	}
+	return said
+}
+
+// changedPaths are the file patterns a rule is about, in one line.
+func changedPaths(changes []pipeline.RuleChange) string {
+	paths := []string{}
+	for _, change := range changes {
+		paths = append(paths, change.Paths...)
+	}
+	return strings.Join(paths, ", ")
+}
 
 // handleProjectDeployments is what a project has running, and what happened to it.
 // handleProjectImages is the catalogue of images a project has put on a place, read

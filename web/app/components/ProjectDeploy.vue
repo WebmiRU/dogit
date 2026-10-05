@@ -149,6 +149,8 @@ onMounted(async () => {
         </label>
       </div>
 
+      <DeployPlaces :project-id="props.projectId" :branch="'the default branch'" />
+
       <table class="table">
         <thead>
           <tr>
