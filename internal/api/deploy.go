@@ -86,6 +86,18 @@ type deployRequest struct {
 	// describes now, not what was deployed. This is what was true then, recorded when
 	// it was true, which is the only version of the question that has an answer.
 	Tags []string `json:"tags,omitempty"`
+
+	// Commit is the short hash the image was built from, kept apart from the tags so
+	// that a page can show a column of names and a column of commits rather than one
+	// list that is neither.
+	Commit string `json:"commit,omitempty"`
+
+	// Place is the name this repository gave the destination, when it named it.
+	//
+	// Carried because the cluster and namespace do not say which of three places this
+	// is: a file deploying web, worker and site writes three records that differ only by
+	// where they went, and a list of those tells a reader nothing about which one failed.
+	Place string `json:"place,omitempty"`
 }
 
 // registryCredential is what a cluster needs to pull this project's images.
@@ -207,7 +219,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		TimeoutSeconds: deployTimeoutSeconds(spec.Timeout),
 		Ref:            pipelineRun.Ref,
 		Sha:            pipelineRun.SHA,
-		Tags:           deployedImageNames(pipelineRun),
+		Tags:           deployedImageTags(pipelineRun),
+		Commit:         shortRunSHA(pipelineRun),
+		Place:          spec.Name,
 	}
 	// The credential the cluster pulls with.
 	//
@@ -414,33 +428,29 @@ func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.
 	return digest, nil
 }
 
-// deployedImageNames are the names the image was published under.
+// deployedImageTags are the names a person chose for this image.
 //
-// The tag if the run had one, the short commit always, and the repository's own name if
-// it chose one. Which is what a person wants to see on a row: "0681599" identifies the
-// image and tells nobody anything, while "v4.00" says what the release is.
-func deployedImageNames(run *store.Pipeline) []string {
-	names := []string{}
-	add := func(name string) {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return
-		}
-		for _, existing := range names {
-			if existing == name {
-				return
-			}
-		}
-		names = append(names, name)
+// The commit is not among them. It is kept in its own column because a list mixing
+// "v1.01" and "0681599" reads as two releases when it is one release and where it came
+// from.
+func deployedImageTags(run *store.Pipeline) []string {
+	tags := []string{}
+	tag := strings.TrimSpace(run.Variables["CI_COMMIT_TAG"])
+	if tag != "" {
+		tags = append(tags, tag)
 	}
+	return tags
+}
 
-	add(run.Variables["CI_COMMIT_TAG"])
-	if short := run.Variables["CI_COMMIT_SHORT_SHA"]; short != "" {
-		add(short)
-	} else if len(run.SHA) > 7 {
-		add(run.SHA[:7])
+// shortRunSHA is the commit, abbreviated the way a person writes it.
+func shortRunSHA(run *store.Pipeline) string {
+	if short := strings.TrimSpace(run.Variables["CI_COMMIT_SHORT_SHA"]); short != "" {
+		return short
 	}
-	return names
+	if len(run.SHA) > 7 {
+		return run.SHA[:7]
+	}
+	return run.SHA
 }
 
 // deploySpecForJob is the place this job was created to deploy to.

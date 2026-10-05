@@ -70,6 +70,11 @@ type Request struct {
 	// repository's manifests are applied as they are, which is only right for a deploy
 	// that changes nothing about what runs — so it has to be asked for deliberately.
 	Image string
+	// Place is the name the repository gave this destination.
+	Place string
+	// Commit is the short hash the image was built from, kept beside the tags rather
+	// than among them.
+	Commit string
 	// Tags are the names that image was published under. Kept with the deployment
 	// rather than looked up later, because a tag can be moved: what a lookup says now
 	// is not what was deployed then.
@@ -133,10 +138,15 @@ type Deployment struct {
 	Reason     string
 	StartedAt  time.Time
 	FinishedAt *time.Time
+	// Place is the name the repository gave this destination. Carried because the
+	// cluster and namespace do not say which of three places a record is.
+	Place string `json:"place,omitempty"`
+
 	// Tags are the names the image was published under when this deployment happened.
 	// Written down rather than asked of the registry afterwards, because a tag can be
 	// moved and a lookup later answers a different question than the one being asked.
 	Tags []string `json:"tags,omitempty"`
+	Commit string `json:"commit,omitempty"`
 	// Log is what this deployment said, in order. Kept with it because the question the
 	// log answers — where did it break — is asked long after the page that watched it
 	// was closed.
@@ -284,6 +294,8 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		Image:     image,
 		Workload:  request.Workload,
 		Tags:      request.Tags,
+		Commit:    request.Commit,
+		Place:     request.Place,
 		State:     StateRunning,
 		StartedAt: now(),
 	})

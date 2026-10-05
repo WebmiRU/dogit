@@ -56,6 +56,10 @@ interface Deployment {
   pods_retired?: number
   /** The names this image had when this operation ran, as they were then. */
   tags?: string[]
+  /** The short commit the image was built from. */
+  commit?: string
+  /** The name the repository gave this destination, when it named it. */
+  place?: string
   /** What this operation said, in order, when the server has it to give. */
   log?: LogLine[]
 }
@@ -152,20 +156,14 @@ function shortImage(image: string): string {
 }
 
 /**
- * What an image is called, for a person to read.
+ * The image's address: where it is and which one it is.
  *
- * The tag first, because that is the name somebody chose and recognises. The digest is
- * what the system uses and what the row is really about, so it stays on the line — but
- * after the name, where it answers to a question rather than replacing one.
+ * Its own column, because it is the only part of a row that identifies rather than
+ * explains. The name and the commit sit beside it, and repeating either of them inside
+ * this one is how a list stops being scannable.
  */
-function namedImage(image: string, tags?: string[]): string {
-  const names = (tags ?? []).map((one) => one.trim()).filter(Boolean)
-  if (names.length === 0) return shortImage(image)
-
-  const short = shortImage(image)
-  // Already the same thing said twice: an image whose only tag is its own digest.
-  if (names.length === 1 && short.includes(names[0])) return short
-  return `${names.join(', ')} · ${short}`
+function namedImage(image: string): string {
+  return shortImage(image)
 }
 
 function when(iso?: string): string {
@@ -800,6 +798,8 @@ watch(() => props.module.id, load)
             <thead>
               <tr>
                 <th>When</th>
+                <th>Tag</th>
+                <th>Commit</th>
                 <th>Image</th>
                 <th>Status</th>
                 <th>Pods</th>
@@ -809,6 +809,14 @@ watch(() => props.module.id, load)
             <tbody>
               <tr v-for="one in shown" :key="one.id">
                 <td class="nowrap">{{ when(one.started_at) }}</td>
+                <!-- A name a person chose, and the commit it came from, in columns of
+                     their own. Together in one cell they read as two releases when they
+                     are one release and where it was built. -->
+                <td class="mono small">
+                  <span v-if="one.tags && one.tags.length">{{ one.tags.join(', ') }}</span>
+                  <span v-else class="muted">—</span>
+                </td>
+                <td class="mono small muted">{{ one.commit || '—' }}</td>
                 <td class="mono small">
                   <button
                     v-if="one.image"
@@ -816,7 +824,7 @@ watch(() => props.module.id, load)
                     type="button"
                     @click="showImage(one.image)"
                   >
-                    {{ namedImage(one.image, one.tags) }}
+                    {{ namedImage(one.image) }}
                   </button>
                   <span v-else>—</span>
                 </td>

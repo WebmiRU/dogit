@@ -87,7 +87,9 @@ func (h *postgresHistory) migrate(ctx context.Context) error {
 			pods_ready   INT NOT NULL DEFAULT 0,
 			pods_retired INT NOT NULL DEFAULT 0,
 			log          JSONB NOT NULL DEFAULT '[]'::jsonb,
-			tags         JSONB NOT NULL DEFAULT '[]'::jsonb
+			tags         JSONB NOT NULL DEFAULT '[]'::jsonb,
+			commit       TEXT NOT NULL DEFAULT '',
+			place        TEXT NOT NULL DEFAULT ''
 		)`,
 		// Added to a table that already exists as well as described in the CREATE
 		// above. A module is upgraded by being restarted, and an installation that
@@ -98,6 +100,8 @@ func (h *postgresHistory) migrate(ctx context.Context) error {
 		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS pods_retired INT NOT NULL DEFAULT 0`,
 		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS log JSONB NOT NULL DEFAULT '[]'::jsonb`,
 		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS commit TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE deployments ADD COLUMN IF NOT EXISTS place TEXT NOT NULL DEFAULT ''`,
 		// One deployment at a time per place. The index is the lock: a second one
 		// cannot be begun while this exists, so the rule holds even if two tasks reach
 		// this module at the same moment and even if this module is running twice.
@@ -150,9 +154,10 @@ func (h *postgresHistory) Begin(ctx context.Context, d deploy.Deployment) (deplo
 
 	if _, err := h.pool.Exec(ctx, `
 		INSERT INTO deployments (id, project, cluster, namespace, image, workload, state,
-		                         started_at, tags)
-		VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $8)`,
-		d.ID, d.Project, d.Cluster, d.Namespace, d.Image, d.Workload, d.StartedAt, tags); err != nil {
+		                         started_at, tags, commit, place)
+		VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $8, $9, $10)`,
+		d.ID, d.Project, d.Cluster, d.Namespace, d.Image, d.Workload, d.StartedAt, tags,
+		d.Commit, d.Place); err != nil {
 		// The partial unique index refused this one, which is the rule rather than a
 		// failure: two rollouts in one place means two migrations against one database.
 		if running, busy := h.running(ctx, d); busy {
@@ -319,7 +324,7 @@ func (h *postgresHistory) Counts(ctx context.Context, id uuid.UUID, wanted, read
 func (h *postgresHistory) Current(ctx context.Context, project, cluster, namespace string) (*deploy.Deployment, error) {
 	rows, err := h.pool.Query(ctx, `
 		SELECT id, project, cluster, namespace, image, workload, state, phase, reason,
-		       started_at, finished_at, pods_wanted, pods_ready, pods_retired, tags
+		       started_at, finished_at, pods_wanted, pods_ready, pods_retired, tags, commit, place
 		FROM deployments
 		WHERE project = $1 AND cluster = $2 AND namespace = $3
 		ORDER BY started_at DESC LIMIT 1`, project, cluster, namespace)
@@ -356,7 +361,7 @@ func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace 
 
 	rows, err := h.pool.Query(ctx, `
 		SELECT id, project, cluster, namespace, image, workload, state, phase, reason,
-		       started_at, finished_at, pods_wanted, pods_ready, pods_retired, tags
+		       started_at, finished_at, pods_wanted, pods_ready, pods_retired, tags, commit, place
 		FROM deployments
 		WHERE project = $1
 		  AND ($2 = '' OR cluster = $2)
@@ -399,7 +404,8 @@ func scanDeployment(rows scanner) (deploy.Deployment, error) {
 	if err := rows.Scan(&record.ID, &record.Project, &record.Cluster, &record.Namespace,
 		&record.Image, &record.Workload, &record.State, &record.Phase, &record.Reason,
 		&record.StartedAt, &record.FinishedAt,
-		&record.PodsWanted, &record.PodsReady, &record.PodsRetired, &tags); err != nil {
+		&record.PodsWanted, &record.PodsReady, &record.PodsRetired, &tags,
+		&record.Commit, &record.Place); err != nil {
 		return deploy.Deployment{}, fmt.Errorf("read a deployment: %w", err)
 	}
 	if len(tags) > 0 {

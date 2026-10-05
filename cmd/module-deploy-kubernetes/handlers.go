@@ -43,6 +43,8 @@ type deployRequest struct {
 	// rather than asked of the registry when somebody asks, because a tag can be moved
 	// and the answer to "what was this called" changes with it.
 	Tags []string `json:"tags,omitempty"`
+	Place  string   `json:"place,omitempty"`
+	Commit string   `json:"commit,omitempty"`
 
 	Manifests []struct {
 		APIVersion string `json:"api_version"`
@@ -164,6 +166,8 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		Namespace:      namespace,
 		Image:          request.Image,
 		Tags:           request.Tags,
+		Place:          request.Place,
+		Commit:         request.Commit,
 		Placeholder:    request.Placeholder,
 		Manifests:      manifests,
 		Pre:            jobs(substitution, request.Pre, namespace),
@@ -566,7 +570,9 @@ func viewOf(record deploy.Deployment) map[string]any {
 		// that never ran — says nothing rather than saying zero of zero.
 		// The names the image had when this deployment ran. Carried through rather
 		// than read from the registry, which would answer for now instead of then.
-		"tags": record.Tags,
+		"tags":  record.Tags,
+		"place":  record.Place,
+		"commit": record.Commit,
 		"pods_wanted":  record.PodsWanted,
 		"pods_ready":   record.PodsReady,
 		"pods_retired": record.PodsRetired,
