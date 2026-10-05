@@ -122,6 +122,25 @@ const imagePage = ref(1)
 /** The operation under way, as the module describes it step by step. */
 const active = ref<DeployProgress | null>(null)
 
+/**
+ * When the operation under way began, as a clock reading.
+ *
+ * Taken from the first thing said about it rather than from any timestamp the events
+ * carry, because there is no other clock here to read it from: the module narrates, the
+ * core relays, and neither stamps the moment. Zero means nothing is under way.
+ */
+const runningSince = ref(0)
+
+/**
+ * The phases happening right now, which is not one.
+ *
+ * A rollout brings the new pods up and sends the old ones away at the same time, and a
+ * single arrow cannot say that: it has to be on one step or the other, so one of them is
+ * drawn as finished work that is still going. Each phase is here from the moment it is
+ * first mentioned until the module says it is finished with it.
+ */
+const activePhases = ref<string[]>([])
+
 /** The steps the core said this deployment goes through, in order. */
 const plan = ref<{ key: string; label: string }[]>([])
 const activeSeen = ref<DeployProgress[]>([])
@@ -139,11 +158,22 @@ const target = ref('')
 
 /** An image, with what is known about it. */
 interface KnownImage {
+  /**
+   * The image as it is addressed: repository and digest together.
+   *
+   * Whole, because the digest on its own names nothing anybody can pull — a registry
+   * and a repository are what turn `sha256:836f…` into something a person can copy into
+   * a `kubectl` command or compare with what a cluster is running.
+   */
+  name: string
+  /** Just the digest, kept apart because that is what identifies one across renames. */
   digest: string
   firstSeen: string
   /** How many operations ran this image, and how many of them worked. */
   times: number
   succeeded: number
+  /** The names this image was published under, as they were when it was deployed. */
+  tags?: string[]
   /** The operation that put it into the cluster, if it did. */
   live: Deployment | null
 }
@@ -170,6 +200,152 @@ function when(iso?: string): string {
   if (!iso) return '—'
   return new Date(iso).toLocaleString()
 }
+
+/**
+ * How long ago something happened, in the few words people actually use.
+ *
+ * Not a formatted date: "3 minutes ago" is read without effort and "2026-10-05
+ * 18:53:11" is worked out. Precise times are still one click away — the operations
+ * list below has them in a column — so this is the summary, not the record.
+ */
+function ago(iso?: string, now?: number): string {
+  if (!iso) return ''
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ''
+
+  const seconds = Math.max(0, Math.floor(((now ?? Date.now()) - then) / 1000))
+  // Seconds, straight away, with no "just now" for the first of them.
+  //
+  // "Just now" is a claim about a moment that stays on screen after the moment has
+  // passed: a card that says it for a minute reads as a run that is still going. A
+  // number that keeps counting is never stale and never has to be taken on trust.
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? '' : 's'} ago`
+
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`
+
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+
+  const days = Math.round(hours / 24)
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`
+
+  const months = Math.round(days / 30)
+  if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`
+
+  const years = Math.round(months / 12)
+  return `${years} year${years === 1 ? '' : 's'} ago`
+}
+
+/**
+ * How long the last operation took, as a clock.
+ *
+ * A clock rather than a phrase — "2 min" beside a duration that is already counting
+ * seconds invites reading the two as different things, and "took 2 min" beside a
+ * figure ticking to 2:34 looks like one of them is stale. Same notation on both ends:
+ * if one is a clock, the other should be too.
+ */
+function span(one: Deployment): string {
+  if (!one.started_at || !one.finished_at) return ''
+  const ms = new Date(one.finished_at).getTime() - new Date(one.started_at).getTime()
+  if (Number.isNaN(ms) || ms < 0) return ''
+
+  const total = Math.max(0, Math.round(ms / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const rest = total % 60
+
+  // Under an hour it is m:ss, and a leading zero would only make it harder to read;
+  // from an hour on it is h:mm:ss, padded so the clock does not change width as it
+  // counts.
+  if (hours === 0) return `${minutes}:${String(rest).padStart(2, '0')}`
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
+}
+
+/**
+ * When the last operation ran, as one line.
+ *
+ * Both ends and the length between them, because any one alone leaves a question
+ * open: the start without the end reads as something still going, and the end
+ * without the start says nothing about how long the cluster was in this state.
+ */
+/**
+ * A minute that passes, so "4 minutes ago" does not go on claiming to be four.
+ *
+ * Nothing is fetched: the list is already here and the time is arithmetic. The
+ * alternative is a line that is correct when it is drawn and quietly wrong afterwards,
+ * which is worse than one that is never drawn — a person reads a stale "just now" as
+ * "this just happened", and that is exactly the mistake this line exists to prevent.
+ *
+ * A minute rather than a second, because a second is a redraw nobody asked for and the
+ * coarsest reading it produces is "just now"; nothing changes for a reader in under a
+ * minute anyway.
+ */
+const tick = ref(Date.now())
+let stopTick: ReturnType<typeof setInterval> | undefined
+
+/**
+ * How long the operation under way has been going, as a clock.
+ *
+ * Hours, minutes and seconds rather than a rounded figure, because the whole question
+ * this answers is "how long has it been stuck on this step" — and a rounded number is
+ * exactly the thing that hides a step which has been sitting there for forty seconds.
+ */
+const runningFor = computed(() => {
+  const began = runningSince.value
+  if (!began) return ''
+
+  const seconds = Math.max(0, Math.floor((tick.value - began) / 1000))
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const rest = seconds % 60
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
+  }
+  return `${minutes}:${String(rest).padStart(2, '0')}`
+})
+
+const whenRun = computed(() => {
+  // Read so that the timer below is a real dependency rather than a hint.
+  void tick.value
+
+  const last = deployments.value[0]
+  if (!last?.started_at) return ''
+
+  const started = ago(last.started_at, tick.value)
+  if (!started) return ''
+
+  // No end yet means it is still going, and saying so is the honest reading of a
+  // missing time rather than leaving the reader to notice the gap.
+  if (!last.finished_at) return `started ${started}, still going`
+
+  const took = span(last)
+  return `ran ${started}, took ${took}`
+})
+
+/**
+ * The two ends of the last operation, in full.
+ *
+ * Both, on the card, because "how long ago" and "when exactly" are different questions
+ * and the card is where they are both asked. Somebody checking a deployment against a
+ * log or a release wants the clock, not "a while ago" — and the clock does not go stale
+ * while it is being looked at, which "4 minutes ago" would.
+ */
+const whenRunExact = computed(() => {
+  const last = deployments.value[0]
+  if (!last?.started_at) return ''
+
+  const from = new Date(last.started_at).toLocaleString()
+  if (!last.finished_at) return `from ${from}, still going`
+
+  const to = new Date(last.finished_at).toLocaleString()
+  const took = span(last)
+  // The end time alone rather than both full timestamps: they are seconds apart by
+  // nature, and repeating the date for each says the same thing twice.
+  const toTime = to.slice(to.indexOf(',') + 1).trim()
+  return took ? `${from} → ${toTime} · took ${took}` : `${from} → ${toTime}`
+})
 
 function badgeClass(state: string): string {
   switch (state) {
@@ -429,7 +605,9 @@ async function loadImages() {
     images.value = (answer.images ?? []).map((one) => {
       const at = one.image.indexOf('@')
       return {
+        name: one.image,
         digest: at >= 0 ? one.image.slice(at + 1) : one.image,
+        tags: Array.isArray(one.tags) ? one.tags : [],
         firstSeen: one.first_seen,
         times: one.times,
         succeeded: one.succeeded,
@@ -493,6 +671,18 @@ async function load() {
     // watched rather than only for a run somebody stayed to see.
     lastLog.value = answer.deployments?.[0]?.log ?? []
 
+    // The step list, asked for rather than waited for.
+    //
+    // It arrives as an event when a run starts, which leaves a page opened between two
+    // runs with no list at all — or, worse, with the last run's replayed at it. The
+    // list belongs to the repository, so it is read from the repository.
+    const stepList = await api.get<{ steps?: { key: string; label: string }[] }>(
+      `/projects/${props.projectId}/deploy-plan`,
+    )
+    if (Array.isArray(stepList.steps) && stepList.steps.length > 0) {
+      plan.value = stepList.steps
+    }
+
     if (answer.reason === 'no_deploy_module') {
       deployments.value = []
       reason.value = 'No deploy module is installed on this instance.'
@@ -534,6 +724,15 @@ function noteOperation(payload: Record<string, unknown>) {
     desired: Number(payload.desired ?? 0),
     step: Number(payload.step ?? 0),
     of: Number(payload.of ?? 0),
+    finished: payload.finished === true,
+  }
+
+  // The phase joins the list of those under way, or leaves it. A phase that has said
+  // its last word is not waiting for a second one that will never come, and an arrow
+  // left on it would be claiming work that is over.
+  if (said.phase) {
+    const others = activePhases.value.filter((one) => one !== said.phase)
+    activePhases.value = said.finished ? others : [...others, said.phase]
   }
 
   const last = activeSeen.value[activeSeen.value.length - 1]
@@ -541,6 +740,10 @@ function noteOperation(payload: Record<string, unknown>) {
     activeSeen.value = [...activeSeen.value, said]
   }
   active.value = said
+  // The clock starts with the first thing said, not with the page: a page opened half
+  // way through a rollout is watching the rest of it, and counting from its own load
+  // would claim the rollout has been going longer than it has.
+  if (!runningSince.value) runningSince.value = Date.now()
 }
 
 /**
@@ -589,11 +792,33 @@ let stopRewake: (() => void) | undefined
 let stopPlan: (() => void) | undefined
 let stopHistory: (() => void) | undefined
 let stopOperation: (() => void) | undefined
+let stopRun: (() => void) | undefined
+
+/**
+ * The states a run cannot come back from.
+ *
+ * Spelled out rather than "not running", because a run is `pending`, `running` or one of
+ * these, and treating anything else as unfinished would leave the card open for a state
+ * nobody has heard of.
+ */
+const endedStatuses = ['success', 'failed', 'canceled', 'cancelled', 'abandoned', 'skipped']
+
+/**
+ * The phases that belong to building rather than to deploying.
+ *
+ * A run reports these whether or not it goes on to deploy anything, so they are the
+ * ones that must not be taken as "a deployment is under way" — and they are how a run
+ * that deploys nothing is told apart from one that has not started deploying yet.
+ */
+const buildPhases = ['build', 'push', 'pre', 'post']
 
 onMounted(async () => {
-  await load()
-  void loadImages()
-
+  // Listening comes before fetching, and not for tidiness.
+  //
+  // A page that starts loading before it starts listening is deaf for as long as the
+  // load takes: a deployment that begins meanwhile is missed, and a page showing a
+  // finished operation from this morning because the live one never reached it is
+  // worse than one that briefly shows nothing. Order is the whole of the difference.
   // The operation under way, on its own channel. Many times a minute.
   stopOperation = watchEvents({
     kinds: ['deploy.operation'],
@@ -641,16 +866,66 @@ onMounted(async () => {
       // Finished: whatever was under way is not any more.
       active.value = null
       activeSeen.value = []
+      activePhases.value = []
+      runningSince.value = 0
       void load()
     },
   })
+
+  // The run ending, which is not the same thing as the deployment ending — and the
+  // difference is a run that deploys nothing.
+  //
+  // A run on a branch no place matches still builds an image, and the build and push
+  // report themselves as deployment progress. That is worth showing, because work
+  // really is happening. But the run then finishes with no deployment in it, so no
+  // deployment history is published, and the card sat saying "Deploying now" over a
+  // phase that had ended minutes ago — the one claim on this page that can be wrong
+  // with nothing left running to contradict it.
+  stopRun = watchEvents({
+    kinds: ['pipeline.updated'],
+    project: () => props.projectPath,
+    onEvent: (event) => {
+      const status = String(event.payload?.status ?? '')
+      if (!endedStatuses.includes(status)) return
+
+      // Only for a run that was never going to deploy anything.
+      //
+      // A run reports itself updated when each of its jobs finishes, not once at the
+      // end — so the image job finishing says nothing about the deployment that comes
+      // after it. Treating that as the end closed the card right after the push, and
+      // the phases that were the whole reason for watching never appeared. The phases
+      // below are the ones a deployment owns; a run sitting on any of them will say so
+      // again when the deployment itself ends.
+      const phase = active.value?.phase ?? ''
+      if (phase && !buildPhases.includes(phase)) return
+
+      active.value = null
+      activeSeen.value = []
+      activePhases.value = []
+      runningSince.value = 0
+    },
+  })
+
+  await load()
+  void loadImages()
+
+  // The clock behind "4 minutes ago" and behind the running timer. Nothing is fetched —
+  // the list is already here and both figures are arithmetic — but without it they are
+  // correct when drawn and quietly wrong afterwards, which is the failure they exist to
+  // prevent. A second, because a clock that counted in minutes would sit at "0:00" for
+  // a minute looking like something that had stopped.
+  stopTick = setInterval(() => {
+    tick.value = Date.now()
+  }, 1000)
 })
 
 onBeforeUnmount(() => {
+  if (stopTick) clearInterval(stopTick)
   stopRewake?.()
   stopPlan?.()
   stopHistory?.()
   stopOperation?.()
+  stopRun?.()
 })
 
 watch(() => props.module.id, load)
@@ -714,12 +989,27 @@ watch(() => props.module.id, load)
             {{ place.place }}
           </span>
           <span class="spacer" />
-          <span class="muted small mono">
-            going to {{ shortImage(activeImage || '') || '—' }}
+          <!-- What is going into the cluster, or how long it has been going when the
+               module has not named an image yet. A dash standing in for a fact is a
+               gap rather than an answer, and the question at that moment is always
+               "how long has it been like this" — so the clock stands in until
+               there is something to name. -->
+          <span v-if="activeImage" class="muted small mono">
+            going to {{ shortImage(activeImage) }}
           </span>
+          <span v-else-if="runningFor" class="muted small mono" title="how long this has been going">
+            going {{ runningFor }}
+          </span>
+          <span v-else class="muted small mono">going to —</span>
         </div>
 
-        <DeploySteps :progress="active" :seen="activeSeen" :plan="plan" live />
+        <DeploySteps
+          :progress="active"
+          :seen="activeSeen"
+          :plan="plan"
+          :active-phases="activePhases"
+          live
+        />
         <DeployLog :lines="shownLog" :plan="plan" />
 
         <details class="log">
@@ -742,6 +1032,13 @@ watch(() => props.module.id, load)
           <h3 class="block-title">The last operation</h3>
           <span class="muted small">what it did</span>
           <span class="spacer" />
+          <!-- When it ran, in words rather than as a date to be interpreted.
+               Without it "succeeded" says nothing about age: a card that last changed
+               three years ago looks exactly like one that finished a minute ago, and
+               the whole question on this page is usually "how long has the cluster
+               been like this". Both ends, because the length of the operation is what
+               makes a slow one worth noticing. -->
+          <span v-if="whenRun" class="muted small" :title="whenRunExact">{{ whenRun }}</span>
         </div>
 
         <div v-for="place in places" :key="place.place" class="running-place">
@@ -770,6 +1067,7 @@ watch(() => props.module.id, load)
           v-if="idleProgress && plan.length > 0"
           :progress="idleProgress"
           :plan="plan"
+          :active-phases="[]"
         />
         <DeployLog :lines="shownLog" :plan="plan" />
       </div>
@@ -799,7 +1097,11 @@ watch(() => props.module.id, load)
               <tr>
                 <th>When</th>
                 <th>Place</th>
-                <th>Tag</th>
+                <!-- "Tags", not "Tag": a commit can carry a dozen of them, and this is one of
+                     the few places the count is the interesting part — a release
+                     pushed under many names is a release that can be referred to in
+                     any of them. -->
+                <th>Tags</th>
                 <th>Commit</th>
                 <th>Image</th>
                 <th>Status</th>
@@ -818,7 +1120,16 @@ watch(() => props.module.id, load)
                      only by where they went, and "which one failed" has no answer. -->
                 <td class="small">{{ one.place || '—' }}</td>
                 <td class="mono small">
-                  <span v-if="one.tags && one.tags.length">{{ one.tags.join(', ') }}</span>
+                  <!-- Every tag, each on its own, rather than one comma-joined line: a dozen tags in
+                       a sentence run is a wall of text, and the point of the column is
+                       to be scanned. -->
+                  <span v-if="one.tags && one.tags.length" class="tags">
+                    <span
+                      v-for="tag in one.tags"
+                      :key="tag"
+                      class="tag mono"
+                    >{{ tag }}</span>
+                  </span>
                   <span v-else class="muted">—</span>
                 </td>
                 <td class="mono small muted">{{ one.commit || '—' }}</td>
@@ -881,40 +1192,73 @@ watch(() => props.module.id, load)
 
           <p v-if="images.length === 0" class="muted small">No images yet.</p>
 
-          <ul v-else class="image-list">
-            <li
-              v-for="image in shownImages"
-              :key="image.digest"
-              class="image"
-              :class="{ wanted: wanted && image.digest.endsWith(wanted) }"
-            >
-              <span class="image-name mono">{{ shortImage(image.digest) }}</span>
-              <span class="muted small">
-                {{ image.times }} operation{{ image.times === 1 ? '' : 's' }},
-                {{ image.succeeded }} successful
-              </span>
-              <span v-if="image.live && live.has(image.live.id)" class="badge badge-green">
-                running now
-              </span>
-              <button
-                v-if="props.canManage && image.live && !live.has(image.live.id)"
-                class="btn btn-small"
-                type="button"
-                :disabled="busy"
-                :title="
-                  live.has(image.live.id)
-                    ? 'This is the image running now, so there is nothing to put back'
-                    : 'Put this image back on the workload'
-                "
-                @click="revertTo(image.live)"
-              >
-                Revert to this
-              </button>
-              <span v-else-if="!image.live || !live.has(image.live.id)" class="muted small">
-                not in the cluster now
-              </span>
-            </li>
-          </ul>
+          <!-- A table, like the operations above, and for the same reason: each of
+               these rows is four facts about one thing, and stacked as a paragraph they
+               have to be read rather than scanned. In columns the same facts line up,
+               and the one question this tab exists to answer — which image is live, and
+               which can be put back — is a glance down a single column. -->
+          <div v-else class="table-scroll">
+            <table class="table images">
+              <thead>
+                <tr>
+                  <th>Image</th>
+                  <th>Tags</th>
+                  <th>Operations</th>
+                  <th>Where</th>
+                  <th class="actions-col">Put back</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="image in shownImages"
+                  :key="image.digest"
+                  :class="{ wanted: wanted && image.digest.endsWith(wanted) }"
+                >
+                  <!-- Repository and digest together, the way anything that pulls this would write
+                       it. The digest alone identifies it and names it for nobody. -->
+                  <td class="mono small image-cell">{{ shortImage(image.name) }}</td>
+                  <!-- The names this image was published under. Shown as tags in their
+                       own column rather than under the digest, because they are the
+                       names a person knows it by and the digest is not one of them. -->
+                  <td class="small tags-cell">
+                    <span v-if="image.tags && image.tags.length" class="tags">
+                      <span v-for="tag in image.tags" :key="tag" class="tag mono">{{ tag }}</span>
+                    </span>
+                    <span v-else class="muted">—</span>
+                  </td>
+                  <td class="small nowrap">
+                    {{ image.times }}
+                    <span class="muted">
+                      ({{ image.succeeded }} ok)
+                    </span>
+                  </td>
+                  <td class="small">
+                    <span v-if="image.live" class="mono">
+                      {{ image.live.cluster }}/{{ image.live.namespace }}
+                    </span>
+                    <span v-else class="muted">never deployed</span>
+                  </td>
+                  <td class="actions-col">
+                    <span v-if="image.live && live.has(image.live.id)" class="badge badge-green">
+                      running now
+                    </span>
+                    <button
+                      v-else-if="props.canManage && image.live"
+                      class="btn btn-small"
+                      type="button"
+                      :disabled="busy"
+                      title="Put this image back on the workload"
+                      @click="revertTo(image.live)"
+                    >
+                      Revert to this
+                    </button>
+                    <span v-else-if="image.live" class="muted small">nothing to put back</span>
+                    <span v-else class="muted">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
           <div v-if="imagePages > 1" class="pager">
             <button
@@ -1148,6 +1492,34 @@ th {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* A digest is long and a row of tags is short, so the two columns are given what
+ * they each need and no more: the digest wraps within its own cell rather than
+ * pushing the tags off the right edge of the page. */
+.images .image-cell {
+  word-break: break-all;
+  min-width: 220px;
+}
+
+.images .tags-cell {
+  min-width: 120px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+/* A tag is a name, not a status: no colour is spent on it, because the one thing
+ * worth drawing the eye to in this table is which image is live. */
+.tag {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  font-size: 11px;
 }
 
 .image {

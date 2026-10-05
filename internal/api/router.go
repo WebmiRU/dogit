@@ -268,6 +268,7 @@ func (s *Server) projectRoutes() chi.Router {
 	projects.Post(base+"/deployments/revert", s.handleRevertDeployment)
 	projects.Get(base+"/deploy-images", s.handleProjectDeployImages)
 	projects.Get(base+"/deploy-places", s.handleProjectDeployPlaces)
+	projects.Get(base+"/deploy-plan", s.handleProjectDeployPlan)
 
 	projects.Post(base+"/pipelines", s.handleCreatePipeline)
 	projects.Get(base+"/pipelines", s.handleListPipelines)

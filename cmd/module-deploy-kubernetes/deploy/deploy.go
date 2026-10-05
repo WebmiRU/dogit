@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -145,8 +146,8 @@ type Deployment struct {
 	// Tags are the names the image was published under when this deployment happened.
 	// Written down rather than asked of the registry afterwards, because a tag can be
 	// moved and a lookup later answers a different question than the one being asked.
-	Tags []string `json:"tags,omitempty"`
-	Commit string `json:"commit,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
+	Commit string   `json:"commit,omitempty"`
 	// Log is what this deployment said, in order. Kept with it because the question the
 	// log answers — where did it break — is asked long after the page that watched it
 	// was closed.
@@ -215,7 +216,40 @@ type KnownImage struct {
 	FirstSeen time.Time `json:"first_seen"`
 	Times     int       `json:"times"`
 	Succeeded int       `json:"succeeded"`
-	Deployed  *ImageDeployment `json:"deployed,omitempty"`
+	// Tags are the names this image was published under, gathered from every
+	// deployment of it.
+	//
+	// From the deployments rather than from the registry, and for the same reason the
+	// operations list reads them from there: a tag can be moved, so asking a registry
+	// now answers about whatever is there now, and a catalogue row that disagrees with
+	// the operations row above it is worse than a row with no tags at all.
+	Tags     []string         `json:"tags,omitempty"`
+	Deployed *ImageDeployment `json:"deployed,omitempty"`
+}
+
+// ClosingPhases wraps a progress reporter so that a phase is closed when the next one
+// begins.
+//
+// Every phase but the last needs saying goodbye to, and the module knows when that is
+// without having to remember it at every step: the moment anything is reported under a
+// new phase, the one before it is over. Without this a page has no way to tell a phase
+// that is finished from one that is merely quiet — the difference between an arrow on
+// a step whose work is done and an arrow on a step that is still going.
+//
+// The closing line repeats the phase's own name rather than inventing a sentence for
+// it, so the page can say "this is finished" in its own words and this does not have to
+// know any.
+func ClosingPhases(report func(Progress)) func(Progress) {
+	last := ""
+	return func(progress Progress) {
+		if progress.Phase != "" && last != "" && progress.Phase != last {
+			report(Progress{Phase: last, Message: "finished", Finished: true})
+		}
+		if progress.Phase != "" {
+			last = progress.Phase
+		}
+		report(progress)
+	}
 }
 
 // ImageDeployment is the last deployment of an image, and the place it went to.
@@ -381,6 +415,27 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		// and it is only knowable by asking the cluster as it goes.
 		stop, counted := d.watchRollout(ctx, request)
 		err := d.wait(ctx, request)
+
+		// The old pods are still on their way out when the new ones are all up: a
+		// rolling update finishes as soon as the replacement is serving, and the
+		// deployment it replaces is terminated afterwards. Stopping here would cut the
+		// watch off one message early, and the line saying the drain is done — the one
+		// that says this phase finished rather than what its last number happened to be
+		// — would never be said at all.
+		//
+		// Bounded, because the pods are somebody else's to remove: a finalizer left on a
+		// pod must not turn a finished deployment into a deployment that hangs.
+		drainDeadline := time.Now().Add(drainGrace)
+		for {
+			_, _, retired := counted()
+			if retired == 0 || time.Now().After(drainDeadline) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
 		stop()
 
 		// Asked once more after the watching has stopped, because watching is by
@@ -658,6 +713,14 @@ type Progress struct {
 	Desired int `json:"desired,omitempty"`
 	// Failed is set once something has gone wrong, and the message says what.
 	Failed bool `json:"failed,omitempty"`
+	// Finished closes a phase, and only that phase.
+	//
+	// A phase otherwise never says it is over: it simply stops speaking, and a client
+	// cannot tell "nothing more is coming" from "something is coming in a moment". That
+	// is why an arrow on the page used to sit on a step long after the work behind it
+	// had finished, and why the line saying "0 pods left" was missing — the honest
+	// closing line was the one the count made impossible to send.
+	Finished bool `json:"finished,omitempty"`
 	// Done ends the stream.
 	Done bool `json:"done,omitempty"`
 	// Deployment is the record, sent once at the end.
@@ -767,77 +830,117 @@ func pullSecretFor(request Request) string {
 	return request.PullSecret.Name
 }
 
-// watchRollout asks the cluster how the rollout is going, until told to stop.
+// drainGrace is how long a finished deployment waits for the pods it replaced to go.
 //
-// Returns the function that stops it. Poll rather than watch: a watch on Deployment
-// status needs a resource version and re-establishes itself, and a number that is
-// read every couple of seconds answers the only question anybody watching has — how
-// many of the pods are up.
-//
-// Only reports when the numbers actually move. A page that repaints the same "2 of 3"
-// every two seconds is harder to read than one that says nothing until it changes.
-// watchRollout follows a rollout while it happens, and returns two things: how to
-// stop following, and what the last counts it saw were.
-func (d *Deployer) watchRollout(ctx context.Context, request Request) (func(), func() (int, int, int)) {
-	var wanted, ready, retired int
+// The pods are not the module's to remove — the cluster terminates them, and something
+// of theirs may hold one for a while — so this is a courtesy rather than a requirement:
+// it lets the drain finish and be reported, and then the deployment is finished whatever
+// is left.
+const drainGrace = 30 * time.Second
 
+// watchRollout follows a rollout while it happens, and returns two things: how to stop
+// following it, and what the last counts it saw were.
+//
+// The counting is the cluster's own event stream rather than a question asked every
+// couple of seconds. That is the whole of the difference between a rollout being
+// watched and a rollout being guessed at: a timer can only ever see the states that
+// happened to coincide with it, so a rollout that went from one ready pod to ten
+// inside one interval was two numbers and nothing at all between them — and the page
+// showed exactly that jump, which looked like a broken counter and was in fact an
+// honest report of what it had been able to see.
+//
+// Whether the stream is still a complete answer is the client's business, not this
+// one's: it re-reads the truth every few seconds so that a severed watch costs a
+// moment of history rather than a rollout nobody can account for.
+func (d *Deployer) watchRollout(ctx context.Context, request Request) (func(), func() (int, int, int)) {
 	if request.Progress == nil || request.Rollout == "" {
-		return func() {}, func() (int, int, int) { return wanted, ready, retired }
+		return func() {}, func() (int, int, int) { return 0, 0, 0 }
 	}
 
-	stop := make(chan struct{})
+	// The counts are read by the stop-and-report path while the watch is still writing
+	// them, so they sit behind a lock rather than being shared as plain variables: a
+	// race here would show one deployment's final numbers under another's name.
+	var (
+		mutex   sync.Mutex
+		wanted  int
+		ready   int
+		retired int
+	)
+	remember := func(counts k8s.RolloutCounts) {
+		mutex.Lock()
+		wanted, ready, retired = counts.Desired, counts.Ready, counts.OldUp
+		mutex.Unlock()
+	}
+	last := func() (int, int, int) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return wanted, ready, retired
+	}
+
+	// The context is what ends this, not a channel of its own: the watcher is started
+	// by a deploy that has a deadline, and a second way to stop it would be a second
+	// thing to forget to use.
+	child, cancel := context.WithCancel(ctx)
 	finished := make(chan struct{})
 
 	go func() {
 		defer close(finished)
 
-		// Reported as two facts rather than one, because they are two things
-		// happening at different times: the new pods come up, and the old ones go
-		// away. A single "3 of 3 ready" is a moment — the old pods are usually still
-		// terminating at that point — and somebody watching wants to watch that drain
-		// rather than be told it is over.
-		lastReady, lastOld := -1, -1
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
+		// Each phase is spoken for by its own number, and says so only when that
+		// number moves. Publishing both on every change was how a log came to read
+		// "1 of 10", "1 of 10", "2 of 10", "2 of 10": the pods retiring changed a
+		// number the rollout line was not reporting, and the rollout line repeated
+		// itself to match.
+		lastReady, lastOld, lastReadyDesired := -1, -1, -1
+		retireClosed := false
 
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
+		_ = d.client.WatchCounts(child, request.Namespace, request.Rollout, request.Image,
+			func(counts k8s.RolloutCounts) {
+				remember(counts)
 
-			counts, err := d.client.Counts(ctx, request.Namespace, request.Rollout, request.Image)
-			if err != nil {
-				continue
-			}
-			if counts.Ready == lastReady && counts.OldUp == lastOld {
-				continue
-			}
-			lastReady, lastOld = counts.Ready, counts.OldUp
-			wanted, ready, retired = counts.Desired, counts.Ready, counts.OldUp
+				// Said at zero too, which is the beginning and not the absence of
+				// anything. Held back, a rollout's first seconds were a step on the
+				// page with nothing written on it, which reads as a step that has not
+				// begun rather than one that has.
+				if counts.Ready != lastReady || counts.Desired != lastReadyDesired {
+					lastReady, lastReadyDesired = counts.Ready, counts.Desired
+					request.Progress(Progress{
+						Phase:   StepRollout,
+						Message: fmt.Sprintf("%d of %d running the new image", counts.Ready, counts.Desired),
+						Ready:   counts.Ready,
+						Desired: counts.Desired,
+					})
+				}
 
-			if counts.Ready > 0 {
+				if counts.OldUp == lastOld {
+					return
+				}
+				lastOld = counts.OldUp
+
+				// The closing line, sent once, saying the drain is done. Without it the
+				// last thing anybody reads about this phase is a count that is still
+				// going down, which never becomes the sentence that says it finished.
+				if counts.OldUp > 0 {
+					request.Progress(Progress{
+						Phase:   StepRetire,
+						Message: fmt.Sprintf("%d pod(s) still running the previous image", counts.OldUp),
+					})
+					return
+				}
+				if retireClosed {
+					return
+				}
+				retireClosed = true
 				request.Progress(Progress{
-					Phase:   StepRollout,
-					Message: fmt.Sprintf("%d of %d running the new image", counts.Ready, counts.Desired),
-					Ready:   counts.Ready,
-					Desired: counts.Desired,
+					Phase:    StepRetire,
+					Message:  "the old pods are gone",
+					Finished: true,
 				})
-			}
-			if counts.OldUp > 0 {
-				request.Progress(Progress{
-					Phase:   StepRetire,
-					Message: fmt.Sprintf("%d pod(s) still running the previous image", counts.OldUp),
-				})
-			}
-		}
+			})
 	}()
 
 	return func() {
-		close(stop)
+		cancel()
 		<-finished
-	}, func() (int, int, int) { return wanted, ready, retired }
+	}, last
 }

@@ -22,12 +22,13 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -237,16 +238,23 @@ func manifest(cfg config) map[string]any {
 
 // job is what the core hands over.
 type job struct {
-	ID          int64          `json:"id"`
-	IID         int            `json:"iid"`
-	Name        string         `json:"name"`
-	Stage       string         `json:"stage"`
-	Image       string         `json:"image"`
-	Script      []string       `json:"script"`
-	ProjectPath string         `json:"project_path"`
-	SHA         string         `json:"-"`
-	Build       map[string]any `json:"build,omitempty"`
-	Variables   map[string]string `json:"variables,omitempty"`
+	ID          int64    `json:"id"`
+	IID         int      `json:"iid"`
+	Name        string   `json:"name"`
+	Stage       string   `json:"stage"`
+	Image       string   `json:"image"`
+	Script      []string `json:"script"`
+	ProjectPath string   `json:"project_path"`
+	// SHA is the commit this job is about, and Ref the name it was reached by.
+	//
+	// Both are carried because a clone that is told neither lands on the repository's
+	// default branch. A run created for a branch would then build the default branch's
+	// code, succeed, and push an image of the wrong commit — a pipeline that reports
+	// success about something it never built.
+	SHA       string            `json:"sha"`
+	Ref       string            `json:"ref"`
+	Build     map[string]any    `json:"build,omitempty"`
+	Variables map[string]string `json:"variables,omitempty"`
 }
 
 // claim is the core's answer to "is there anything for me".
@@ -580,6 +588,30 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 		return fmt.Errorf("git clone %s: %w: %s", projectPath, err, strings.TrimSpace(string(output)))
 	}
 
+	// Onto the commit the run is about, not onto whatever the repository points at.
+	//
+	// The clone above landed on the default branch. For a run created against a
+	// release tag or a working branch that is simply the wrong code, and nothing
+	// downstream would notice: the build succeeds, an image is pushed, and the image
+	// is of a commit nobody asked to build. Refused here rather than built from the
+	// default branch, because a build of the wrong thing is worse than one that did
+	// not happen — this one is reported as a pass.
+	want := strings.TrimSpace(answer.Job.SHA)
+	if want == "" {
+		// No commit means an older core that does not say which one. Named rather than
+		// guessed at: the checkout stays on the default branch, which is what this
+		// runner did before commits were carried, and the log says so.
+		log.Printf("module-runner: job %d carries no commit, building the default branch",
+			answer.Job.ID)
+		return nil
+	}
+
+	checkout := exec.CommandContext(ctx, "git", "checkout", "--detach", want)
+	checkout.Dir = workspace
+	checkout.Env = append(environment, "GIT_TERMINAL_PROMPT=0")
+	if out, err := checkout.CombinedOutput(); err != nil {
+		return fmt.Errorf("check out %s: %w: %s", want, err, strings.TrimSpace(string(out)))
+	}
 	return nil
 }
 
@@ -594,19 +626,12 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 // honoured, and the commit is added beside it rather than replaced by it: a release
 // that can only be found by a name somebody might reuse is harder to reason about later
 // than one that also carries the commit it was built from.
-func imageNamesFor(build map[string]any, environment map[string]string) []string {
+func imageNamesFor(build map[string]any, environment map[string]string, atCommit []string) []string {
 	short := environment["CI_COMMIT_SHORT_SHA"]
 	tag := environment["CI_COMMIT_TAG"]
 
 	wanted, _ := build["tag"].(string)
 	wanted = strings.TrimSpace(wanted)
-	// The common case: the file asked for the tag and there is none, so it asked for
-	// the commit by another name. Not an empty image and not "latest".
-	if wanted == "" || wanted == tag {
-		if tag == "" && short != "" {
-			return []string{short}
-		}
-	}
 
 	names := []string{}
 	add := func(name string) {
@@ -622,10 +647,73 @@ func imageNamesFor(build map[string]any, environment map[string]string) []string
 		names = append(names, name)
 	}
 
+	// The file's own name first, because a repository that named its image expects to
+	// find it under that name.
 	add(wanted)
+
+	// Every tag that points at this commit, which is what makes a release reachable by
+	// the name it was released under. A repository tags a commit and then expects the
+	// image to be there under that tag; an image pushed only under the short commit is
+	// findable by nobody who remembers what they called the release.
+	for _, name := range atCommit {
+		add(name)
+	}
+
+	// And the commit itself, always: a tag can be moved or deleted, so a registry that
+	// holds only tags cannot say afterwards what exactly was deployed. The short commit
+	// is the one name that always exists, and it is what a rollback is addressed by.
 	add(tag)
 	add(short)
+
+	// The common case: nothing named it and nothing was tagged, so the commit is the
+	// name. Not an empty image and not "latest", which would let two different commits
+	// answer to the same one.
+	if len(names) == 0 && short != "" {
+		return []string{short}
+	}
 	return names
+}
+
+// describeNames says what an image is being pushed as, in a form that fits on a line.
+//
+// A release pointed at by a dozen tags is pushed twelve times, and a reader of the log
+// is entitled to know that before they watch it happen rather than after: "under 13
+// names" and the first few of them is enough to understand both the count and the
+// naming, where listing all thirteen would wrap the log into something unreadable.
+func describeNames(names []string) string {
+	if len(names) == 1 {
+		return "one name (" + names[0] + ")"
+	}
+	const show = 4
+	if len(names) <= show {
+		return fmt.Sprintf("%d names (%s)", len(names), strings.Join(names, ", "))
+	}
+	return fmt.Sprintf("%d names (%s and %d more)", len(names),
+		strings.Join(names[:show], ", "), len(names)-show)
+}
+
+// tagsAtCommit lists the tags pointing at the commit in this working copy.
+//
+// Asked of git rather than of the registry, because the registry can only say what
+// happened to be pushed already and this is the question of what this commit is called.
+// Sorted, so a build's list of names does not depend on the order git happened to
+// return them in.
+func tagsAtCommit(workspace string) []string {
+	out, err := exec.Command("git", "-C", workspace, "tag", "--points-at", "HEAD").Output()
+	if err != nil {
+		// No git, no repository, or nothing tagged: all of which mean the same thing
+		// here, which is that the commit is known only by itself.
+		return nil
+	}
+
+	tags := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if name := strings.TrimSpace(line); name != "" {
+			tags = append(tags, name)
+		}
+	}
+	sort.Strings(tags)
+	return tags
 }
 
 // buildAndPush builds the image a job asked for and pushes it to the registry.
@@ -652,7 +740,7 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	// tags cannot answer "what exactly was deployed then" a year later, and a name that
 	// was built and never pushed is work for nothing. The second push costs one manifest
 	// — the layers are addressed by their content and are already there.
-	names := imageNamesFor(build, environment)
+	names := imageNamesFor(build, environment, tagsAtCommit(workspace))
 	if len(names) == 0 {
 		names = []string{"latest"}
 	}
@@ -743,7 +831,7 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	// wants anyway — the spinner is for somebody sitting in front of it.
 	pushTail := newTailWriter(20)
 	if announce != nil {
-		announce("push", "pushing to "+host)
+		announce("push", "pushing to "+host+" under "+describeNames(names))
 	}
 	for i, name := range names {
 		if err := runStreaming(ctx, progress, pushTail, cfg.dockerBinary,
@@ -760,7 +848,16 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	if announce != nil {
 		// Named by digest, which is how a deployment refers to it and is the one name
 		// here that cannot be reused or moved.
-		announce("push", "the registry has it as "+digestOf(pushTail.String()))
+		//
+		// And by the names it went out under, because a digest identifies an image to a
+		// machine and to nobody else: the person watching wants to know that the thing
+		// they released is the thing that was pushed, and "sha256:836f…" is not
+		// something they can check that against.
+		line := "the registry has it as " + digestOf(pushTail.String())
+		if len(names) > 1 {
+			line += " as " + strings.Join(names, ", ")
+		}
+		announce("push", line)
 	}
 	return full, nil
 }

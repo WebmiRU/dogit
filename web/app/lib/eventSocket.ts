@@ -47,6 +47,14 @@ const retryDelayMS = 2000
 const retryCeilingMS = 15000
 
 let socket: WebSocket | null = null
+/**
+ * Whether the connection is still being given the backlog.
+ *
+ * True from opening until the server says the catch-up has ended. Everything read while
+ * it is true is history, and history is not something a page may act on — see the sync
+ * handling in the message listener.
+ */
+let catchingUp = true
 let opening = false
 let retrying = false
 let attempts = 0
@@ -144,11 +152,15 @@ export function openEventSocket() {
     // for it before it sends anything, and a client that stays quiet makes every
     // connection wait for the server to time out.
     opened.send(JSON.stringify({ since: lastSeenID }))
+    // A reopened connection is given everything since the cursor, and all of it is
+    // history by definition: it happened while this page was not watching.
+    catchingUp = true
     const first = attempts === 0
     attempts = 0
     console.info(
       `[dogit] event socket ${first ? 'connected' : 'reconnected'} at ${new Date().toLocaleTimeString()}`,
     )
+    // A reopened socket catches up again, and everything it is about to send is history.
   })
 
   opened.addEventListener('message', (message) => {
@@ -161,9 +173,33 @@ export function openEventSocket() {
       return
     }
 
+
     // The keep-alive is not news about anything, and a page that redrew itself because
     // the socket said hello would be worse than no keep-alive at all.
     if (event.kind === 'ping') return
+
+    // The end of the backlog, said by the server because only it knows where the
+    // catch-up ended.
+    //
+    // Everything before it is history the page did not ask for and must not act on:
+    // a deploy page that mounted in the middle of a run would be handed three
+    // thousand old events and draw them as though they had just happened — the card
+    // would jump back to "build the image" for a deployment that finished an hour ago,
+    // and then jump forward again, and every step on the page would be a lie told in
+    // the present tense.
+    if (event.kind === 'sync') {
+      catchingUp = false
+      // The backlog is not news, so it is not kept either: a listener arriving after
+      // the sync must be given what happens next, not what has already been seen.
+      recent.length = 0
+      return
+    }
+
+    // Before the sync: taken for the cursor, given to nobody.
+    if (catchingUp) {
+      if (typeof event.id === 'number' && event.id > lastSeenID) lastSeenID = event.id
+      return
+    }
 
     // The highest id ever seen, so a reopened socket can be asked for what came after it
     // rather than for everything again. Kept across connections, and deliberately not
@@ -174,8 +210,11 @@ export function openEventSocket() {
     for (const listener of [...listeners]) {
       try {
         listener(event)
-      } catch {
-        // One page's mistake must not stop the others hearing about it.
+      } catch (thrown) {
+        // One page's mistake must not stop the others hearing about it. Said out loud,
+        // because a listener that throws on every event looks exactly like a socket
+        // that delivers nothing, and there is no other trace of it.
+        console.warn('[dogit] an event listener threw', thrown)
       }
     }
   })
@@ -245,6 +284,9 @@ export function onEvent(listener: Listener): () => void {
       // Same rule as for live events: one page's mistake is not the socket's problem.
     }
   }
+  // Added after the replay, so a listener is never handed an event by the loop that
+  // is about to call it and then by the loop again.
+  listeners.add(listener)
   return () => {
     listeners.delete(listener)
   }

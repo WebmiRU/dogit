@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -219,7 +221,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		TimeoutSeconds: deployTimeoutSeconds(spec.Timeout),
 		Ref:            pipelineRun.Ref,
 		Sha:            pipelineRun.SHA,
-		Tags:           deployedImageTags(pipelineRun),
+		Tags:           s.deployedImageTags(ctx, repoDir, pipelineRun),
 		Commit:         shortRunSHA(pipelineRun),
 		Place:          spec.Name,
 	}
@@ -289,6 +291,20 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		arrived int
 	)
 	reader := bufio.NewReader(response.Body)
+	// Пауза между строками от модуля, для разработки и демонстраций.
+	//
+	// Настоящий деплой на настоящем кластере занимает столько, сколько занимает, и
+	// подгонять его нечем: прогресс, который виден за две секунды, виден плохо, и
+	// страница не успевает показать ничего, кроме «всё кончилось». Здесь она
+	// включается переменной окружения и по умолчанию равна нулю, то есть в обычной
+	// работе её нет вовсе.
+	stepDelay := 0 * time.Millisecond
+	if raw := os.Getenv("DOGIT_DEPLOY_STEP_DELAY_MS"); raw != "" {
+		if ms, err := strconv.Atoi(raw); err == nil && ms > 0 {
+			stepDelay = time.Duration(ms) * time.Millisecond
+		}
+	}
+
 	for {
 		line, readErr := reader.ReadBytes('\n')
 
@@ -306,14 +322,19 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// The operation's own event. Separate from the history below because
 				// this arrives many times a minute and that arrives once.
 				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, map[string]any{
-					"job_id":  job.ID,
-					"phase":   progress.Phase,
-					"message": progress.Message,
-					"ready":   progress.Ready,
-					"desired": progress.Desired,
-					"step":    progress.Step,
-					"of":      progress.Of,
+					"job_id":   job.ID,
+					"phase":    progress.Phase,
+					"message":  progress.Message,
+					"ready":    progress.Ready,
+					"desired":  progress.Desired,
+					"step":     progress.Step,
+					"of":       progress.Of,
+					"finished": progress.Finished,
 				})
+
+				if stepDelay > 0 {
+					time.Sleep(stepDelay)
+				}
 			}
 		}
 
@@ -357,7 +378,11 @@ type deployProgress struct {
 	Ready   int    `json:"ready"`
 	Desired int    `json:"desired"`
 	Failed  bool   `json:"failed"`
-	Done    bool   `json:"done"`
+	// Finished closes one phase of the deployment. Carried through because a page
+	// showing two phases at once has to know which of them is done: without it the
+	// arrow stays on a step whose work finished, and nobody can say when it did.
+	Finished bool `json:"finished"`
+	Done     bool `json:"done"`
 }
 
 // progressLine is one step as it goes into the job's log.
@@ -417,7 +442,18 @@ func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.
 
 	log("  image:     %s (built by %q)\n", image, from)
 
-	digest, err := s.resolveImageDigest(ctx, job, image, s.buildTag(ctx, run))
+	// Under the commit's own name when the repository named no image, because the
+	// runner pushes under that name always: a short commit is the one tag it can never
+	// be without. Resolving by anything else — a tag left pointing somewhere, or the
+	// name on its own — answers what the registry holds *now*, which by then may be
+	// an image from a later run, and the deployment applies that while reporting it
+	// as this one's.
+	tag := s.buildTag(ctx, run)
+	if tag == "" {
+		tag = shortRunSHA(run)
+	}
+
+	digest, err := s.resolveImageDigest(ctx, job, image, tag)
 	if err != nil {
 		// A tag that cannot be resolved is reported and the tag is used, because the
 		// alternative is refusing to deploy something that is perfectly deployable.
@@ -428,18 +464,46 @@ func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.
 	return digest, nil
 }
 
-// deployedImageTags are the names a person chose for this image.
+// deployedImageTags are the names this image was published under.
+//
+// Asked of the repository at the commit being deployed, because that is where the names
+// live. A run started from a tag knows only one of them — the tag it was started by —
+// while a commit can carry a dozen, and a row in the operations list showing no tag
+// beside a release somebody tagged is a row that cannot be matched to that release.
+//
+// Read from git, and at the commit rather than at the branch, so these are the names
+// the image was actually pushed under: a tag pointing anywhere else describes a
+// different commit and has no business on this row.
 //
 // The commit is not among them. It is kept in its own column because a list mixing
 // "v1.01" and "0681599" reads as two releases when it is one release and where it came
 // from.
-func deployedImageTags(run *store.Pipeline) []string {
-	tags := []string{}
-	tag := strings.TrimSpace(run.Variables["CI_COMMIT_TAG"])
-	if tag != "" {
-		tags = append(tags, tag)
+func (s *Server) deployedImageTags(ctx context.Context, repoDir string, run *store.Pipeline) []string {
+	names := []string{}
+	seen := map[string]bool{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		names = append(names, name)
 	}
-	return tags
+
+	// The tag this run was triggered by, when it is one of this commit's own tags,
+	// because that is the name whoever started this run had in mind.
+	add(strings.TrimSpace(run.Variables["CI_COMMIT_TAG"]))
+
+	if repoDir != "" && run.SHA != "" {
+		if out, err := s.git.Run(ctx, repoDir, nil, "tag", "--points-at", run.SHA); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				add(line)
+			}
+		}
+		// A repository that cannot be asked is a repository with no tags to report, and
+		// that is not worth refusing a deployment over.
+	}
+	return names
 }
 
 // shortRunSHA is the commit, abbreviated the way a person writes it.
@@ -576,7 +640,7 @@ func (s *Server) publishDeployPlan(ctx context.Context, project *models.Project,
 	}
 
 	s.publishPipeline(ctx, project.ID, nil, models.EventDeployPlan, map[string]any{
-		"job_id":      deployJobID,
+		"job_id":       deployJobID,
 		"pipeline_iid": run.IID,
 		"steps": deployStepsFor(built, len(config.Deploy.Manifests),
 			len(config.Deploy.Pre), len(config.Deploy.Post)),

@@ -57,6 +57,7 @@ services:
       DOGIT_REPO_DIR: /data/repos
       DOGIT_ARTIFACT_DIR: /data/artifacts
       DOGIT_HTTP_ADDR: ":8080"
+      DOGIT_DEPLOY_STEP_DELAY_MS: ${DOGIT_DEPLOY_STEP_DELAY_MS:-}
       DOGIT_HOOK_BINARY: /usr/local/bin/dogit-hook
       DOGIT_SSH_HOST: ${DOGIT_SSH_HOST:-localhost}
       # Client-facing SSH port. It shows up in clone URLs because it is not 22

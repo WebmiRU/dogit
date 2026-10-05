@@ -1,7 +1,6 @@
 package api
 
 import (
-	"os"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -701,7 +701,7 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("job claimed", "job", job.ID, "job_name", job.Name,
 		"project", job.ProjectPath, "runner", integration.Kind)
 
-	answer := map[string]any{"job": jobView(r, job)}
+	answer := map[string]any{"job": s.runnerJobView(r, job)}
 
 	// A job that builds an image needs a credential for the registry, and the
 	// registry's naming rule is the registry's own. The core asks the registry
@@ -1435,6 +1435,28 @@ func avatarURL(email, name string) string {
 	}
 	sum := sha256.Sum256([]byte(address))
 	return "https://secure.gravatar.com/avatar/" + hex.EncodeToString(sum[:])
+}
+
+// runnerJobView is one job as a runner sees it, which is not quite the same thing.
+//
+// The difference is the commit. A runner clones a repository, and a clone without a
+// ref lands on whatever the repository's default branch happens to be pointing at —
+// which, on a project whose releases come from a tag and whose work happens on a
+// branch, is a different piece of code from the one the run was created for. The build
+// then succeeds, produces an image, and is an image of the wrong commit: a run on a
+// branch that built the default branch, reported as a pass.
+//
+// So the commit the run is about is carried on the job itself, and the runner checks
+// that commit out rather than asking where the repository points.
+func (s *Server) runnerJobView(r *http.Request, job *store.Job) map[string]any {
+	view := jobView(r, job)
+
+	run, err := s.store.Pipelines().PipelineByID(r.Context(), job.PipelineID)
+	if err == nil {
+		view["sha"] = run.SHA
+		view["ref"] = run.Ref
+	}
+	return view
 }
 
 // jobView is one job as the interface sees it.

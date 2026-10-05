@@ -71,6 +71,51 @@ func (s *Server) handleProjectDeployPlaces(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleProjectDeployPlan is the step list a deployment of this project goes through.
+//
+// Sent on its own so that a page opened between two deployments can draw the list
+// without waiting for a run to start. The list used to arrive only as an event, which
+// meant the page either showed nothing or replayed the last run's — and a list of steps
+// belongs to the repository rather than to any one of its runs.
+func (s *Server) handleProjectDeployPlan(w http.ResponseWriter, r *http.Request) {
+	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	config, err := s.pipelineConfig(r.Context(), s.repos.PathFor(project), project.DefaultBranch)
+	if err != nil || len(config.Deploys) == 0 {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"steps": []any{}})
+		return
+	}
+
+	manifests, pre, post := 0, 0, 0
+	for _, place := range config.Deploys {
+		manifests += len(place.Manifests)
+		pre += len(place.Pre)
+		post += len(place.Post)
+	}
+
+	// Whether a run builds an image is the one thing about the list this cannot know
+	// without a run, and it is read from the configuration rather than guessed.
+	builds := false
+	for _, spec := range config.Jobs {
+		if len(spec.Build) > 0 {
+			builds = true
+			break
+		}
+	}
+	built := ""
+	if builds {
+		built = "the build job"
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"steps": deployStepsFor(built, manifests, pre, post),
+	})
+}
+
 // rulesOf is what a place listens for, in words.
 func rulesOf(rules []pipeline.Rule) []string {
 	said := make([]string, 0, len(rules))

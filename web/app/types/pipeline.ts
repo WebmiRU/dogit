@@ -173,4 +173,13 @@ export interface DeployProgress {
   /** Which of the things this phase had to do, and which it is on. */
   step?: number
   of?: number
+  /**
+   * Whether this is the last the module will say about this phase.
+   *
+   * Without it a phase is over the moment it stops speaking, and nothing on the page
+   * can tell that from a phase that is merely quiet — which is how an arrow ends up
+   * parked on a step whose work finished, and why the line saying the old pods are
+   * gone could never be written: the count made it impossible to send.
+   */
+  finished?: boolean
 }

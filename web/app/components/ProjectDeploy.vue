@@ -44,6 +44,50 @@ const modules = ref<ModuleRow[]>([])
 const loading = ref(true)
 const error = ref('')
 
+/**
+ * What is happening here, in one word and one lamp.
+ *
+ * Three states, because there are three things worth knowing and a page that shows two
+ * of them at once is showing neither: something is being deployed right now, the last
+ * thing that was deployed went well or went badly, or nothing has happened yet. The
+ * module's own badge cannot answer this — it says whether the module is answering, and
+ * a module answers perfectly well while a rollout is failing.
+ */
+const deployBusy = ref(false)
+const lastFailed = ref(false)
+
+const headState = computed<'working' | 'bad' | 'ok'>(() => {
+  if (deployBusy.value) return 'working'
+  if (lastFailed.value) return 'bad'
+  return 'ok'
+})
+
+const headStateText = computed(() => {
+  if (!modules.value.some((one) => one.kind.startsWith('deploy:'))) return 'no deploy module'
+  if (deployBusy.value) return 'a deployment is under way'
+  if (lastFailed.value) return 'the last deployment did not finish'
+  return 'nothing is deploying'
+})
+
+/** Follows deployments only as far as "is one happening, and did the last one work". */
+const stopState = watchEvents({
+  kinds: ['deploy.operation', 'deploy.history'],
+  project: () => props.projectPath,
+  onEvent: (event) => {
+    if (event.kind === 'deploy.operation') {
+      deployBusy.value = true
+      if (event.payload?.failed === true) lastFailed.value = true
+      return
+    }
+    // The end of a deployment: whatever it ended as is the last word on it.
+    deployBusy.value = false
+    const status = String(event.payload?.status ?? '')
+    if (status) lastFailed.value = status !== 'success'
+  },
+})
+
+onBeforeUnmount(() => stopState())
+
 const deployModules = computed(() =>
   modules.value.filter((module) => module.kind.startsWith('deploy:')),
 )
@@ -129,27 +173,49 @@ onMounted(async () => {
     </div>
 
     <div v-else class="card">
-      <!-- The brake, above the table it stops: it is about every place at once, so it
-           does not belong to any one row. -->
-      <div class="brake">
-        <label class="brake-label">
+      <!-- The head of the card, and the whole of its state.
+           Two lines: what is deployed and where it is in its life, then the one switch
+           that changes what will happen next. Everything below is detail, and detail is
+           what the tables underneath are for. -->
+      <div class="head">
+        <div class="head-main">
+          <!-- The state of the whole thing, in one place.
+               The badge in the table below says whether the module is answering, which
+               is true while a deployment is failing as steadily as it is while one is
+               succeeding — so this says what is actually happening, and it is the only
+               indicator on the page that does. -->
+          <span class="lamp" :class="headState" />
+          <span class="head-state">{{ headStateText }}</span>
+        </div>
+
+        <!-- The brake, as a switch and beside the state it changes: whether runs start
+             by themselves is a standing fact about this project, not a paragraph. -->
+        <label class="brake">
           <input
             type="checkbox"
-            :checked="autoPaused"
+            class="toggle"
+            :checked="!autoPaused"
             :disabled="savingPause || !props.canManage"
-            @change="setAutoPaused(($event.target as HTMLInputElement).checked)"
+            @change="setAutoPaused(!($event.target as HTMLInputElement).checked)"
           />
-          <span>
-            <strong>Stop deploying automatically</strong>
-            <span class="muted small block">
-              A push or a tag would build nothing on its own. You can still start a run
-              by hand — this only stops them from starting themselves.
-            </span>
+          <span class="brake-label">
+            {{ autoPaused ? 'Deploys start only by hand' : 'Deploys start on a push or a tag' }}
+          </span>
+          <span class="muted small">
+            {{ autoPaused ? 'a push builds nothing by itself' : 'this project deploys itself' }}
           </span>
         </label>
       </div>
 
-      <DeployPlaces :project-id="props.projectId" :branch="'the default branch'" />
+      <!-- Folded away, because it is a fact about the repository rather than about this
+           instance, it changes only when somebody edits a file, and it is read far less
+           often than it takes up. -->
+      <details class="places-fold">
+        <summary class="muted small">
+          Where this deploys — read from the default branch's .dogit-ci.yml
+        </summary>
+        <DeployPlaces :project-id="props.projectId" :branch="'the default branch'" />
+      </details>
 
       <table class="table">
         <thead>
@@ -284,11 +350,127 @@ th {
   border-bottom: 1px solid var(--border);
 }
 
-.brake-label {
+/* The head: what is deployed and how it is going, and the one switch that changes what
+   happens next. Two lines, because the lamp answers "now" and the switch answers
+   "next time", and putting them side by side would ask the reader to hold two different
+   tenses in one glance. */
+.head {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.head-main {
   display: flex;
-  gap: 10px;
-  align-items: flex-start;
+  align-items: center;
+  gap: 9px;
+}
+
+.head-state {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* One lamp, three states, the same three colours the steps use beside them.
+   A dot and not a badge: it says the state of a thing rather than naming it, and the
+   sentence beside it does the naming. */
+.lamp {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.lamp-dot {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--green);
+  /* A ring, so the lamp is a lamp and not a dot: at this size a filled circle with no
+     edge disappears against a dark card, which is precisely when the state matters. */
+  box-shadow: 0 0 0 2px var(--bg-inset);
+}
+
+.lamp.working .lamp-dot {
+  background: var(--yellow);
+}
+
+.lamp.bad .lamp-dot {
+  background: var(--red);
+}
+
+/* The brake as a switch, in the head rather than in a block of its own: whether runs
+   start by themselves is a standing fact about this project, and it belongs beside the
+   state it is a statement about. */
+.head .brake {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin-top: 10px;
+  padding: 0;
+  border: none;
+}
+
+.brake-label {
   cursor: pointer;
+}
+
+/* A switch, drawn rather than a box to be ticked.
+   Whether deploys start by themselves is a standing setting — on or off, nothing to do
+   inside it — and a checkbox asks a question about a moment while a switch states a
+   fact about the project. It is still the same input underneath, so it keeps its label,
+   its keyboard behaviour and its disabled state. */
+input.toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 34px;
+  height: 19px;
+  flex: 0 0 auto;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--border);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+input.toggle::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+
+input.toggle:checked {
+  background: var(--green);
+}
+
+/* Off is the state worth stopping on: a project that has taken its own foot off is
+   not doing anything, and that should be the thing that reads as a deliberate choice. */
+input.toggle:checked::before {
+  transform: translateX(15px);
+}
+
+input.toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Folded away by default. */
+.places-fold {
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.places-fold > summary {
+  padding: 9px 0;
+  cursor: pointer;
+  user-select: none;
 }
 
 /* A checkbox is a fixed-size control, and as a flex item it will otherwise stretch to

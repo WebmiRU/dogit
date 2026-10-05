@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -118,6 +119,26 @@ type Client interface {
 	// Counts says how far a rollout has got, in the numbers a person watching asks
 	// about.
 	Counts(ctx context.Context, namespace, name, image string) (RolloutCounts, error)
+
+	// WatchCounts follows a rollout and calls back on every change, until the context
+	// is done.
+	//
+	// A watch, not a question asked every so often, because the two answer different
+	// questions. "How many pods are ready" asked on a timer can only ever see the
+	// states that happened to coincide with a question: a rollout that goes from one
+	// ready pod to ten inside one interval is reported as those two numbers and the
+	// eight in between never existed for anybody — not in the log, not on the page.
+	// The cluster's own event stream carries every change it observed, so the whole
+	// path from one to ten is there to be read.
+	//
+	// A resync runs alongside it anyway, every few seconds, and that is deliberate:
+	// a watch can be severed — the API server restarts, the connection drops, the
+	// event history is compacted away and the stream answers "410 Gone" — and
+	// everything that happened while it was down was missed by definition. The resync
+	// re-reads the truth outright, so a severed watch costs a moment of history
+	// rather than a rollout nobody can account for. It never replaces the watch; it
+	// only notices when the watch stopped being a complete answer.
+	WatchCounts(ctx context.Context, namespace, name, image string, onChange func(RolloutCounts)) error
 }
 
 // Revision is one point in a workload's history.
@@ -624,6 +645,345 @@ func (c *clusterClient) Counts(ctx context.Context, namespace, name, image strin
 		}
 	}
 	return counts, nil
+}
+
+// rolloutResync is how often the truth is re-read outright while a watch is running.
+//
+// A compromise, and it is worth saying which side of the argument it takes: the watch
+// is what makes the progress visible, and this is what makes it trustworthy when the
+// watch breaks. Five seconds is slow enough not to matter next to a cluster and short
+// enough that a severed watch is corrected while somebody is still watching.
+const rolloutResync = 5 * time.Second
+
+// rolloutRetry is the pause before a watch is taken again after ending.
+//
+// The cluster is not asked "what happened?" in a hurry: a watch that ended is a watch
+// that has to be rebuilt from a fresh list first, and rebuilding in a tight loop
+// against a cluster that is already unhappy is how one unhappy cluster becomes many.
+const rolloutRetry = time.Second
+
+// podSeen is what the follower remembers about one pod, kept only for what it counts.
+type podSeen struct {
+	// revision is the ReplicaSet this pod belongs to, which is what says whether it is
+	// one of the new ones or one being replaced.
+	revision string
+	// new is that question answered, kept rather than recomputed so the comparison is
+	// made once per pod rather than once per pod per tally.
+	new bool
+	// ready is the pod's own readiness, which is not the same as running: a pod that is
+	// up but not yet serving is running the new image and not yet one of the ones that
+	// work, and conflating the two is how a rollout reports itself finished early.
+	ready bool
+}
+
+// currentRevision finds the ReplicaSet a rollout is aiming at: the newest one this
+// Deployment owns.
+//
+// By when it was created, which is what the cluster's own revision numbers say anyway
+// and what they say correctly even when they are absent — and they are absent more
+// often than the API suggests, because the annotation is written by the controller and
+// a cluster that has been interrupted mid-rollout leaves a ReplicaSet without one.
+// Reading it anyway would silently find nothing and report a rollout with no new pods
+// in it, which is worse than looking.
+func currentRevision(ctx context.Context, typed kubernetes.Interface, namespace, name string) (string, error) {
+	deployment, err := typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	sets, err := typed.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	newest := ""
+	var newestAt time.Time
+	for index := range sets.Items {
+		set := sets.Items[index]
+		if !ownedBy(set.OwnerReferences, deployment.UID) {
+			continue
+		}
+		// The newest wins, and where two were made in the same second — which a rollout
+		// of one manifest does produce — the name settles it, so the answer does not
+		// depend on the order the API returned them in.
+		if newest == "" || set.CreationTimestamp.After(newestAt) ||
+			(set.CreationTimestamp.Time.Equal(newestAt) && set.Name > newest) {
+			newest, newestAt = set.Name, set.CreationTimestamp.Time
+		}
+	}
+	return newest, nil
+}
+
+// ownedBy says whether one of these owners is this object.
+func ownedBy(refs []metav1.OwnerReference, uid types.UID) bool {
+	for _, ref := range refs {
+		if ref.UID == uid {
+			return true
+		}
+	}
+	return false
+}
+
+// podRevision is the ReplicaSet a pod belongs to, or empty when it belongs to none
+// this follower can account for — a bare pod, or one left over from a workload that is
+// gone.
+func podRevision(pod *corev1.Pod) string {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "ReplicaSet" {
+			return ref.Name
+		}
+	}
+	return ""
+}
+
+// WatchCounts follows a rollout, calling back on every change.
+//
+// See the interface for why this is a watch and what the resync is for.
+func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image string,
+	onChange func(RolloutCounts)) error {
+
+	// The pods of this workload and nobody else's. Without the selector every pod in
+	// the namespace is counted, so a second deployment in the same namespace reports
+	// this one's progress — a number that is confidently wrong rather than obviously
+	// missing.
+	selector := ""
+	desired := 1
+	deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read deployment %s: %w", name, err)
+	}
+	if deployment.Spec.Replicas != nil {
+		desired = int(*deployment.Spec.Replicas)
+	}
+	if deployment.Spec.Selector != nil {
+		if parsed, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector); err == nil {
+			selector = parsed.String()
+		}
+	}
+
+	pods := map[string]podSeen{}
+	var last RolloutCounts
+	said := false
+
+	// Which revision is being rolled out to, and the answer is re-read whenever the
+	// truth is: a rollout's first seconds are the new pods arriving while the old are
+	// still up, and until the cluster has named the new revision none of them can be
+	// told apart from the ones they are replacing.
+	revision, err := currentRevision(ctx, c.typed, namespace, name)
+	if err != nil {
+		return fmt.Errorf("read the revision being rolled out: %w", err)
+	}
+	if revision == "" {
+		// No revision means the workload has never been rolled, or the cluster is
+		// between shapes. Counting nothing is honest here; guessing which pods are
+		// new is not.
+		return fmt.Errorf("the deployment %s/%s has no replica set yet", namespace, name)
+	}
+
+	// Re-reads the truth and publishes it, which is both the resync and the answer to
+	// a watch that has just ended. One function for both, because they are the same
+	// question and two copies of an answer are two answers.
+	sync := func(fromWatch bool) error {
+		fresh, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		})
+		if err != nil {
+			return err
+		}
+		if updated, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			if updated.Spec.Replicas != nil {
+				desired = int(*updated.Spec.Replicas)
+			}
+		}
+
+		// The revision moves under a rollout — that is what a rollout is — so it is
+		// re-read here rather than decided once. Every pod already remembered is
+		// re-judged against it, because a pod that was new a second ago can be the
+		// one being replaced now.
+		if latest, err := currentRevision(ctx, c.typed, namespace, name); err == nil && latest != "" {
+			revision = latest
+		}
+		pods = map[string]podSeen{}
+		for index := range fresh.Items {
+			remember(pods, &fresh.Items[index], revision)
+		}
+		counts := tally(pods, desired)
+
+		// A frame is only worth sending if it says something new. Silence every five
+		// seconds would fill the log with the same numbers and teach whoever reads it
+		// to skip the lines that changed.
+		if said && counts == last {
+			return nil
+		}
+		last, said = counts, true
+		onChange(counts)
+		return nil
+	}
+
+	if err := sync(false); err != nil {
+		return err
+	}
+
+	resync := time.NewTicker(rolloutResync)
+	defer resync.Stop()
+
+	// The stream is rebuilt from a fresh list after every ending, which is what keeps
+	// it honest: the list says where things stand now, the watch from that point says
+	// what happens next, and nothing in between is invented.
+	for ctx.Err() == nil {
+		// The list above and this watch must agree, or the first event after the gap
+		// is applied to a cache from before the gap. So the resource version of the
+		// list is where the watch begins.
+		current, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			time.Sleep(rolloutRetry)
+			continue
+		}
+		if latest, err := currentRevision(ctx, c.typed, namespace, name); err == nil && latest != "" {
+			revision = latest
+		}
+		pods = map[string]podSeen{}
+		for index := range current.Items {
+			remember(pods, &current.Items[index], revision)
+		}
+		counts := tally(pods, desired)
+		if !said || counts != last {
+			last, said = counts, true
+			onChange(counts)
+		}
+
+		stream, err := c.typed.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
+			LabelSelector:   selector,
+			ResourceVersion: current.ResourceVersion,
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			time.Sleep(rolloutRetry)
+			continue
+		}
+
+		// The inner loop: read until the stream ends, resync on the timer, and start
+		// again outside. Kept flat rather than as a goroutine per source, so there is
+		// exactly one writer to the cache and no locking to be wrong about.
+		for ended := false; !ended; {
+			select {
+			case <-ctx.Done():
+				stream.Stop()
+				return nil
+
+			case <-resync.C:
+				// The watch is the fast path; this is the check that the fast path is
+				// still true.
+				if err := sync(true); err != nil && ctx.Err() != nil {
+					stream.Stop()
+					return nil
+				}
+
+			case event, open := <-stream.ResultChan():
+				if !open {
+					ended = true
+					break
+				}
+
+				pod, ok := event.Object.(*corev1.Pod)
+				if !ok {
+					continue
+				}
+				switch event.Type {
+				case watch.Deleted:
+					delete(pods, string(pod.UID))
+				default:
+					remember(pods, pod, revision)
+				}
+
+				// Every change is published, not only the ones that move a number.
+				// Two changes that happen to leave the counts equal are still two
+				// things that happened, and the person watching wants the path, not
+				// the compressions of it.
+				counts := tally(pods, desired)
+				if counts != last {
+					last = counts
+					onChange(counts)
+				}
+			}
+		}
+		stream.Stop()
+		if ctx.Err() != nil {
+			return nil
+		}
+		time.Sleep(rolloutRetry)
+	}
+	return nil
+}
+
+// remember adds or replaces one pod in the cache, keyed by identity rather than by
+// name, because a pod's name is not its identity — a new pod may reuse a name a
+// deleted one had, and treating those as the same pod loses an entire rollout.
+func remember(pods map[string]podSeen, pod *corev1.Pod, revision string) {
+	if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
+		// A pod that has finished or failed is neither serving nor on its way out;
+		// keeping it would put a number on the page that no longer describes anything.
+		delete(pods, string(pod.UID))
+		return
+	}
+
+	// Whether it is serving yet, asked of the containers' own statuses and matched by
+	// name — the only field the spec and the status agree on. A pod that is up but not
+	// yet ready is not one of the ones that would take traffic, and counting it is how a
+	// rollout reports itself finished while it is still starting.
+	serving := false
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Ready {
+			serving = true
+			break
+		}
+	}
+
+	own := podRevision(pod)
+	pods[string(pod.UID)] = podSeen{
+		revision: own,
+		new:      revision != "" && own == revision,
+		ready:    serving,
+	}
+}
+
+// tally turns the cache of pods into the three numbers a page shows.
+//
+// Ready counts pods of the current revision that are serving, so "3 of 10" means three
+// that would take traffic rather than three that exist. OldUp counts pods still up from
+// any earlier revision — the ones this rollout is replacing — and deliberately not
+// every pod that is not yet ready: a new pod still starting is not an old pod, and
+// counting it as one makes the number climb while nothing is draining.
+func tally(pods map[string]podSeen, desired int) RolloutCounts {
+	counts := RolloutCounts{Desired: desired}
+	for _, pod := range pods {
+		if pod.revision == "" {
+			continue
+		}
+		if !pod.new {
+			counts.OldUp++
+			continue
+		}
+		if pod.ready {
+			counts.Ready++
+		}
+	}
+
+	// Never more ready than were asked for. A pod left over from a wider previous state
+	// — a scale-down not yet acted on, a pod that has outlived its revision — is
+	// counted as new because nothing says it is not, and eleven of them are not eleven
+	// of ten. The page would read "11 of 10", which is a number nobody can act on.
+	if counts.Ready > desired {
+		counts.Ready = desired
+	}
+	return counts
 }
 
 // awaitImage waits until a workload is running the image it was asked for.

@@ -160,6 +160,7 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 		entries, err := s.store.Events().VisibleSince(r.Context(), user.ID, projectID, lastSent,
 			eventStreamCatchUpLimit)
 		if err != nil {
+			s.log.Warn("the event socket could not read", "error", err, "user", user.Username)
 			return 0, false
 		}
 		for _, entry := range entries {
@@ -373,6 +374,17 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			break
 		}
 	}
+
+	// Where the catch-up ended, said out loud.
+	//
+	// Without this the client cannot tell history from news, and the difference is the
+	// whole of what it does with them: a page that mounts mid-catch-up must not be
+	// handed three thousand old events as though they had just happened. It arrived here
+	// because the server is the one that knows where the catch-up ended — it is the
+	// only party to the transaction.
+	syncCtx, syncCancel := context.WithTimeout(r.Context(), 5*time.Second)
+	_ = conn.Write(syncCtx, websocket.MessageText, []byte(`{"id":0,"kind":"sync","created_at":""}`))
+	syncCancel()
 
 	// Ping on a timer, as the stream does. The protocol answers with a pong of its own
 	// accord, so this is checked rather than merely sent.

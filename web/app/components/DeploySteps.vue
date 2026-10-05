@@ -45,6 +45,16 @@ const props = defineProps<{
    * is two rows that stay blue for ever on a deployment that has neither of them.
    */
   plan?: PlannedStep[]
+  /**
+   * Every phase happening at once, not just the latest one.
+   *
+   * A rolling update brings the new pods up and sends the old ones away in the same
+   * breath, and a single arrow cannot say so: it sits on one step or the other, and
+   * whichever it is not on is drawn as work already finished. Two arrows is the
+   * honest picture, and it is not a special case — it is what "which steps are
+   * happening now" means when a module is allowed to do two things at a time.
+   */
+  activePhases?: string[]
 }>()
 
 type StepState = 'done' | 'now' | 'failed' | 'waiting'
@@ -127,8 +137,24 @@ const lastHeard = computed(() => {
 const steps = computed<Step[]>(() => {
   const wasSaid = lastHeard.value
 
-  const nowOn = props.progress?.phase ?? ''
-  const nowAt = order.value.findIndex((one) => one.key === nowOn)
+  // The step the arrow is on.
+  //
+  // A module does not always name a phase in every line: it says "every pod is running
+  // the new image" or "finished" without one. Read literally, an unnamed line answers
+  // "no step" — and the arrow then jumps off the list altogether while the operation is
+  // plainly still going, leaving a step nobody reached sitting grey as though it were
+  // about to begin. So an unnamed line means "still where I last was", which is what a
+  // line without a phase has always meant to the person reading it.
+  const said = props.progress?.phase ?? ''
+  const lastNamed = said || ([...wasSaid.keys()].pop() ?? '')
+
+  // Everything happening at once, which is more than one thing during a rollout: the
+  // new pods come up while the old ones go away, and drawing one arrow for that says
+  // one of them is not happening. With no list given — this page describing a finished
+  // operation — the latest thing said is the one that counts.
+  const now = props.activePhases?.length ? [...props.activePhases] : (lastNamed ? [lastNamed] : [])
+
+  const nowAt = order.value.findIndex((one) => one.key === lastNamed)
 
   // How far it got, which is not the same question as where it is now.
   //
@@ -142,10 +168,14 @@ const steps = computed<Step[]>(() => {
     if (at > reachedAt) reachedAt = at
   }
 
-  // Whether the operation is over: the last thing said about a finished deployment
-  // has no phase in it, and without that a step nobody reached would sit at
-  // "waiting" for ever — which says it is about to start.
-  const over = props.progress?.message !== undefined && nowOn === ''
+  // Whether the operation is over, and this asks the page rather than the message.
+  //
+  // It used to be decided by the phase being empty, which is wrong: a module says a
+  // great many things without naming a phase while it is still working, and every one
+  // of them ended the list early — steps painted green that were never touched, and an
+  // arrow that had already left. A page that is showing a live operation knows it is
+  // live; only a page describing a finished one may call it finished.
+  const over = !props.live && (props.activePhases?.length ?? 0) === 0 && said === ''
 
   // Whether anything went wrong, which decides what an unreached step means.
   //
@@ -161,7 +191,7 @@ const steps = computed<Step[]>(() => {
     let state: StepState = 'waiting'
 
     if (heard?.failed) state = 'failed'
-    else if (step.key === nowOn) state = 'now'
+    else if (now.includes(step.key)) state = 'now'
     else if (reachedAt > -1 && position < reachedAt) state = 'done'
     else if (over && position > reachedAt) state = anythingFailed ? 'skipped' : 'done'
 

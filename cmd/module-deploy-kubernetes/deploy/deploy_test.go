@@ -124,6 +124,20 @@ func (f *fakeClient) Counts(_ context.Context, _, _, _ string) (k8s.RolloutCount
 	return k8s.RolloutCounts{Ready: 1, Desired: 1}, nil
 }
 
+// WatchCounts stands in for the cluster's event stream: it says the same numbers once
+// and then stays quiet, which is what a test wants — a rollout that never moves is one
+// whose first frame can be asserted on.
+//
+// A fake that emitted a stream of changing numbers would be testing its own fiction.
+func (f *fakeClient) WatchCounts(ctx context.Context, _, _, _ string, onChange func(k8s.RolloutCounts)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	onChange(k8s.RolloutCounts{Ready: 1, Desired: 1})
+	<-ctx.Done()
+	return nil
+}
+
 // appliedRefs is what reached the cluster, in order.
 func (f *fakeClient) appliedRefs() []string {
 	out := make([]string, 0, len(f.applied))

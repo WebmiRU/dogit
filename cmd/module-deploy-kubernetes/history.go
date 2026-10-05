@@ -202,7 +202,6 @@ func (h *postgresHistory) Finish(ctx context.Context, id uuid.UUID, state deploy
 	return err
 }
 
-
 // Images reads the catalogue, a page of it.
 func (h *postgresHistory) Images(ctx context.Context, project, cluster, namespace string,
 	limit, offset int) ([]deploy.KnownImage, int, error) {
@@ -221,11 +220,21 @@ func (h *postgresHistory) Images(ctx context.Context, project, cluster, namespac
 	// twenty rows should cost twenty rows, not twenty round trips.
 	rows, err := h.pool.Query(ctx, `
 		SELECT grouped.image, grouped.first_seen, grouped.times, grouped.succeeded,
+		       grouped.tags,
 		       last.id, last.cluster, last.namespace, last.workload, last.state,
 		       last.started_at
 		FROM (
 			SELECT image, min(started_at) AS first_seen, count(*) AS times,
-			       count(*) FILTER (WHERE state = 'succeeded') AS succeeded
+			       count(*) FILTER (WHERE state = 'succeeded') AS succeeded,
+			       -- Every name this image was ever deployed under, deduplicated in
+			       -- the query: a dozen deployments of one image carry a dozen copies
+			       -- of the same tag, and the list is shown to a person.
+			       COALESCE((
+			         SELECT jsonb_agg(DISTINCT tag)
+			         FROM deployments d, LATERAL jsonb_array_elements_text(
+			           COALESCE(d.tags, '[]'::jsonb)) AS tag
+			         WHERE d.image = deployments.image AND d.project = $1
+			       ), '[]'::jsonb) AS tags
 			FROM deployments
 			WHERE project = $1 AND image <> ''
 			  AND ($2 = '' OR cluster = $2) AND ($3 = '' OR namespace = $3)
@@ -252,9 +261,13 @@ func (h *postgresHistory) Images(ctx context.Context, project, cluster, namespac
 		var lastID, lastCluster, lastNamespace, lastWorkload *string
 		var lastState *deploy.State
 		var lastAt *time.Time
-		if err := rows.Scan(&one.Image, &one.FirstSeen, &one.Times, &one.Succeeded,
+		var tags []byte
+		if err := rows.Scan(&one.Image, &one.FirstSeen, &one.Times, &one.Succeeded, &tags,
 			&lastID, &lastCluster, &lastNamespace, &lastWorkload, &lastState, &lastAt); err != nil {
 			return nil, 0, err
+		}
+		if len(tags) > 0 {
+			_ = json.Unmarshal(tags, &one.Tags)
 		}
 		if lastID != nil {
 			one.Deployed = &deploy.ImageDeployment{
