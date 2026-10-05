@@ -115,6 +115,17 @@ func (s *Server) handleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{"pipeline": s.pipelineView(r, run, nil)})
 }
 
+// startedBy is what a log line says about who began a run.
+//
+// A nil user is not a user with an empty name: it is the ordinary case for a run started
+// by a push or a tag, and reading a field out of it took the process down.
+func startedBy(user *models.User) string {
+	if user == nil {
+		return "the push"
+	}
+	return user.Username
+}
+
 // startRun files a pipeline and says so, for every reason a pipeline is started.
 //
 // One place, because the three reasons — a person, a tag, a push — must not drift apart
@@ -125,10 +136,7 @@ func (s *Server) startRun(ctx context.Context, project *models.Project, config *
 	ref pipeline.Ref, source models.PipelineSource, jobs []store.Job, user *models.User,
 ) (*store.Pipeline, error) {
 
-	actor := "the push"
-	if user != nil {
-		actor = user.Username
-	}
+	actor := startedBy(user)
 
 	commit := store.Commit{}
 	if head := s.commitInfo(ctx, s.repos.PathFor(project), ref.SHA); head != nil {

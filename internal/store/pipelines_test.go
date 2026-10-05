@@ -216,3 +216,47 @@ func TestJobsCarryWhatARunnerNeeds(t *testing.T) {
 		t.Errorf("the job does not know its project: %v", jobs[1].ProjectID)
 	}
 }
+
+// A push starts a run by nobody's hand, and the same push twice starts it once.
+//
+// Both halves matter and both were wrong in production before they were written down.
+// The author is nil because nobody pressed a button, and an empty identity belongs to
+// no user and is refused by the database. The "once" is because the durable event log
+// is read from the beginning every time the process starts, so without it every restart
+// rebuilt every commit the repository had ever had pushed at it.
+func TestARunWithNoAuthorIsKeptOncePerCause(t *testing.T) {
+	st := dbtest.Open(t)
+	ctx := context.Background()
+	project := dbtest.NewProject(t, st, "pushdemo", nil)
+
+	const sha = "44af11bc0000000000000000000000000000dead"
+
+	// No author, exactly as a push arrives.
+	run, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", sha, "push", nil,
+		nil, store.Commit{},
+		[]store.Job{{Name: "build", Stage: "build", Image: "alpine", Script: []string{"true"}}})
+	if err != nil {
+		t.Fatalf("a run nobody started should still be filed: %v", err)
+	}
+	if run.CreatedBy != nil {
+		t.Fatalf("the run claims an author: %v", *run.CreatedBy)
+	}
+
+	seen, err := st.Pipelines().AutomaticRunExists(ctx, project.ID, sha, "push")
+	if err != nil {
+		t.Fatalf("ask whether it ran: %v", err)
+	}
+	if !seen {
+		t.Fatal("the run that just happened was not seen")
+	}
+
+	// The same commit for a different reason is a different thing: a person pressing
+	// the button again means it, and the answer must not swallow that.
+	seen, err = st.Pipelines().AutomaticRunExists(ctx, project.ID, sha, "web")
+	if err != nil {
+		t.Fatalf("ask about another cause: %v", err)
+	}
+	if seen {
+		t.Fatal("a run started by hand was refused because a push had already run it")
+	}
+}
