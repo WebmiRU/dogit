@@ -798,6 +798,7 @@ watch(() => props.module.id, load)
             <thead>
               <tr>
                 <th>When</th>
+                <th>Place</th>
                 <th>Tag</th>
                 <th>Commit</th>
                 <th>Image</th>
@@ -812,6 +813,10 @@ watch(() => props.module.id, load)
                 <!-- A name a person chose, and the commit it came from, in columns of
                      their own. Together in one cell they read as two releases when they
                      are one release and where it was built. -->
+                <!-- The name the repository gave this destination. Without it a
+                     repository deploying three places shows three rows that differ
+                     only by where they went, and "which one failed" has no answer. -->
+                <td class="small">{{ one.place || '—' }}</td>
                 <td class="mono small">
                   <span v-if="one.tags && one.tags.length">{{ one.tags.join(', ') }}</span>
                   <span v-else class="muted">—</span>
