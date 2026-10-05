@@ -532,13 +532,28 @@ const rows = computed(() => {
   // row come from one Begin — but they arrive at different moments, and taking the
   // finished one while the new one is a second old puts yesterday's image on screen
   // under a card that says this one is going out now.
-  const record = running.value ?? newestRunning.value
-  if (deployBusy && record) {
+  if (deployBusy) {
+    // Nothing to name yet is nothing to show.
+    //
+    // While an operation is under way these cells are about that operation, and until
+    // it has said what it is pushing there is no honest answer for the name and the
+    // image. Falling back to the last finished deployment put yesterday's tag next to
+    // today's rollout, and the tag then changed on its own several seconds in — a name
+    // swapping itself on a line that is supposed to be about one deployment, with no
+    // event to explain it. A gap that fills in when the answer arrives beats a wrong
+    // answer that corrects itself.
+    //
+    // The place and the workload are kept from the last deployment: they are where
+    // this repository sends things, which does not change between runs, and blanking
+    // them out for the first ten seconds of every deployment would say less about a
+    // page that is working than leaving them there does.
+    const record = running.value ?? newestRunning.value
+    const last = places.value[0]
     return [{
-      place: placeOf(record),
-      tags: oneEach(record.tags),
-      image: record.image ?? '',
-      workload: record.workload ?? '',
+      place: record ? placeOf(record) : (last?.place ?? ''),
+      tags: oneEach(record?.tags),
+      image: record?.image ?? '',
+      workload: record?.workload ?? last?.deployment.workload ?? '',
     }]
   }
 
@@ -1174,7 +1189,11 @@ watch(() => props.module.id, load)
             <span v-if="row.tags.length" class="tags">
               <span v-for="tag in row.tags" :key="tag" class="tag mono">{{ tag }}</span>
             </span>
-            <span class="mono small">{{ shortImage(row.image) }}</span>
+            <!-- Not the image we do not have. While a run is under way there is a
+                 moment before the module has named its image, and there is no name
+                 to put there yet — the digest appears the moment it is known. -->
+            <span v-if="row.image" class="mono small">{{ shortImage(row.image) }}</span>
+            <span v-else-if="deployBusy" class="muted small">choosing the image…</span>
             <span class="muted small">{{ row.workload || '—' }}</span>
           </template>
           <span class="spacer" />

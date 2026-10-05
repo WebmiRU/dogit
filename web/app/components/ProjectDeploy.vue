@@ -248,16 +248,22 @@ onMounted(async () => {
                    that module is in — where the eye goes when asking "what will happen
                    on the next push". -->
               <td class="brake-col">
-                <label class="brake" :title="autodeployHint">
-                  <input
-                    type="checkbox"
-                    class="toggle"
-                    :checked="!autoPaused"
+                <!-- The same switch the notification table uses, and deliberately: two
+                   controls that mean the same thing ought to be the same control, and
+                   the eye should not have to learn a second one for the second setting.
+                   A switch and not a choice between On and Off, because there is no third
+                   answer here to make it a choice. -->
+                  <button
+                    class="switch"
+                    :class="{ on: !autoPaused }"
+                    type="button"
                     :disabled="savingPause || !props.canManage"
-                    @change="setAutoPaused(!($event.target as HTMLInputElement).checked)"
-                  />
-                  <span class="brake-label">{{ autoPaused ? 'OFF' : 'ON' }}</span>
-                </label>
+                    :aria-pressed="!autoPaused"
+                    :title="autodeployHint"
+                    @click="setAutoPaused(!autoPaused)"
+                  >
+                    <span class="knob" />
+                  </button>
               </td>
               <td class="actions-col">
                 <button class="btn btn-small" type="button" @click="toggleEdit(module)">
@@ -412,19 +418,6 @@ th {
   background: var(--red);
 }
 
-/* The brake as a switch, in the head rather than in a block of its own: whether runs
-   start by themselves is a standing fact about this project, and it belongs beside the
-   state it is a statement about. */
-.brake {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-/* The column the brake sits in. Narrower than the module's, because a word and a
-   switch are all it holds, and as wide as it needs to be for both without the module's
-   name having to wrap. */
 /* The column the brake sits in. As narrow as the header's longest word and the
    switch together, which is not the module name's width — a table of modules should
    not have a column for a switch taking half the page. */
@@ -440,64 +433,6 @@ th {
   font-weight: 500;
 }
 
-/* The word beside the switch, in small caps of its own: two letters wide, in a column
-   whose width is set by a heading, so it needs a little air around it to read as
-   anything. Muted, because the switch itself is the answer and the word only says
-   which way it is pointing. */
-.brake-label {
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-
-/* A switch, drawn rather than a box to be ticked.
-   Whether deploys start by themselves is a standing setting — on or off, nothing to do
-   inside it — and a checkbox asks a question about a moment while a switch states a
-   fact about the project. It is still the same input underneath, so it keeps its label,
-   its keyboard behaviour and its disabled state. */
-input.toggle {
-  appearance: none;
-  -webkit-appearance: none;
-  position: relative;
-  width: 34px;
-  height: 19px;
-  flex: 0 0 auto;
-  margin: 0;
-  border-radius: 10px;
-  background: var(--border);
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-input.toggle::before {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform 0.15s ease;
-}
-
-input.toggle:checked {
-  background: var(--green);
-}
-
-/* Off is the state worth stopping on: a project that has taken its own foot off is
-   not doing anything, and that should be the thing that reads as a deliberate choice. */
-input.toggle:checked::before {
-  transform: translateX(15px);
-}
-
-input.toggle:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* Folded away by default. */
 .places-fold {
   padding: 0 12px;
@@ -508,17 +443,5 @@ input.toggle:disabled {
   padding: 9px 0;
   cursor: pointer;
   user-select: none;
-}
-
-/* A checkbox is a fixed-size control, and as a flex item it will otherwise stretch to
-   fill the row: what came out was a 564-pixel-wide box with the words pushed to the far
-   side, which reads as a broken page and is a poor thing to aim at.
-   flex-shrink keeps it from being squeezed in the other direction; flex-basis in its
-   own column is what stops the growth. */
-.brake-label input[type='checkbox'] {
-  flex: 0 0 auto;
-  width: auto;
-  padding: 0;
-  margin: 2px 0 0;
 }
 </style>

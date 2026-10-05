@@ -73,7 +73,17 @@ function fill(answer: { effective?: Record<string, unknown> }) {
       : asString(stored ?? spec.default ?? '')
   }
   values.value = next
-  saved.value = { ...next }
+  // A copy that goes all the way down, not one level.
+  //
+  // `{ ...next }` copies the keys and hands over the values themselves, which is
+  // harmless for a string and fatal for a list: the array in `saved` is the same array
+  // the form edits, so typing into a row changed the original as well, the comparison
+  // found two identical things and the form decided nothing had happened. Every list
+  // setting was therefore unsaveable — clearing a cluster's kubeconfig or its namespace
+  // left the Save button grey, because from the form's point of view nothing had
+  // changed. Structural cloning is what makes "what it was" and "what it is now" two
+  // separate things, which is the only way telling them apart means anything.
+  saved.value = structuredClone(next)
 }
 
 function isList(spec: SettingSpec): boolean {
