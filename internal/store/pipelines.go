@@ -394,6 +394,28 @@ func (q PipelineQuery) normalise() PipelineQuery {
 // Newest first, because the run somebody came to look at is nearly always the last
 // one, and a list ordered the other way makes them scroll to the bottom of a page of
 // history to find out whether anything happened.
+// AutomaticRunExists says whether this commit already started a run for this reason.
+//
+// Asked before a push starts anything, because the durable event log is read from the
+// beginning every time the process starts: without this, every restart replays every
+// push ever made and builds all of them again. Three runs of one commit is not a bug
+// anybody can live with, and "has this commit been run for this reason" is a question
+// with a cheap answer.
+func (r *PipelineRepo) AutomaticRunExists(ctx context.Context, projectID uuid.UUID,
+	sha, source string) (bool, error) {
+
+	var exists bool
+	err := r.s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pipelines
+			WHERE project_id = $1 AND sha = $2 AND source = $3
+		)`, projectID, sha, source).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("ask whether a run already happened: %w", err)
+	}
+	return exists, nil
+}
+
 func (r *PipelineRepo) ListPipelinesPage(ctx context.Context, projectID uuid.UUID,
 	q PipelineQuery) ([]Pipeline, int, error) {
 

@@ -125,6 +125,11 @@ func (s *Server) startRun(ctx context.Context, project *models.Project, config *
 	ref pipeline.Ref, source models.PipelineSource, jobs []store.Job, user *models.User,
 ) (*store.Pipeline, error) {
 
+	actor := "the push"
+	if user != nil {
+		actor = user.Username
+	}
+
 	commit := store.Commit{}
 	if head := s.commitInfo(ctx, s.repos.PathFor(project), ref.SHA); head != nil {
 		commit = store.Commit{
@@ -134,15 +139,24 @@ func (s *Server) startRun(ctx context.Context, project *models.Project, config *
 		}
 	}
 
+	// Nobody started this run by hand, and saying so is what a nil author means. An
+	// empty identity would be one that belongs to no user, and the database refuses it
+	// because it should.
+	var author *uuid.UUID
+	if user != nil {
+		id := user.ID
+		author = &id
+	}
+
 	created, err := s.store.Pipelines().CreatePipeline(ctx, project.ID, ref.Name, ref.SHA,
-		string(source), variablesFor(config, ref), &user.ID, commit, jobs)
+		string(source), variablesFor(config, ref), author, commit, jobs)
 	if err != nil {
 		return nil, err
 	}
 	run := created
 
 	s.log.Info("pipeline created", "project", project.Path, "pipeline", run.IID,
-		"ref", ref.Name, "source", string(source), "by", user.Username)
+		"ref", ref.Name, "source", string(source), "by", actor)
 
 	s.publishPipeline(ctx, project.ID, nil, models.EventPipelineCreated, map[string]any{
 		"pipeline_iid": run.IID,
@@ -180,12 +194,17 @@ func (s *Server) startRun(ctx context.Context, project *models.Project, config *
 	return run, nil
 }
 
-// WatchPushes starts runs for tags that arrive by git rather than through a form.
+// WatchPushes starts the runs a push asks for.
 //
 // The same run either way, on purpose. A tag pushed from somebody's laptop and a tag
 // typed into this interface are the same decision about the same commit, and the one
 // that silently did nothing would be discovered in production rather than before it —
 // which is the worst way to find out that a feature you were told works does not.
+//
+// A branch does not start a run unconditionally either: it starts one when the file at
+// that commit says something runs for it. The rules in the repository are the only thing
+// consulted, so a project that wants nothing automatic gets nothing automatic without
+// anybody having to configure that anywhere.
 //
 // Runs in the background, off the durable log rather than off the hook: the hook is a
 // short-lived process for somebody's push and must not be held up by a build queue.
@@ -204,13 +223,13 @@ func (s *Server) WatchPushes(ctx context.Context) {
 			if event.Kind != models.EventPush {
 				continue
 			}
-			s.startRunsForPushedTags(ctx, event)
+			s.startRunsForPush(ctx, event)
 		}
 	}
 }
 
-// startRunsForPushedTags is one push, read for the tags in it.
-func (s *Server) startRunsForPushedTags(ctx context.Context, event models.Event) {
+// startRunsForPush is one push, read for the refs in it that start something.
+func (s *Server) startRunsForPush(ctx context.Context, event models.Event) {
 	var raw hooks.Payload
 	if err := json.Unmarshal(event.Payload, &raw); err != nil {
 		s.log.Debug("push event carried something unreadable", "error", err)
@@ -218,27 +237,36 @@ func (s *Server) startRunsForPushedTags(ctx context.Context, event models.Event)
 	}
 
 	for _, update := range raw.RefUpdates {
-		// Deleting a tag deploys nothing. Whatever it released stays released: taking
-		// something out of production because a name was removed from a repository is
-		// not what anybody means by removing a tag.
-		if strings.HasPrefix(update.Ref, "refs/tags/") && !isZeroSHA(update.NewSHA) {
-			name := strings.TrimPrefix(update.Ref, "refs/tags/")
-			s.startRunForPushedTag(ctx, raw.ProjectPath, name, update.NewSHA)
+		if isZeroSHA(update.NewSHA) {
+			// Deleting a ref starts nothing. A deleted tag deploys nothing: whatever it
+			// released stays released, because taking something out of production
+			// because a name was removed from a repository is not what removing a tag
+			// means.
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(update.Ref, "refs/tags/"):
+			s.startRunForPushedRef(ctx, raw.ProjectPath,
+				strings.TrimPrefix(update.Ref, "refs/tags/"), update.NewSHA, true)
+		case strings.HasPrefix(update.Ref, "refs/heads/"):
+			s.startRunForPushedRef(ctx, raw.ProjectPath,
+				strings.TrimPrefix(update.Ref, "refs/heads/"), update.NewSHA, false)
 		}
 	}
 }
 
-func (s *Server) startRunForPushedTag(ctx context.Context, projectPath, name, sha string) {
+func (s *Server) startRunForPushedRef(ctx context.Context, projectPath, name, sha string, isTag bool) {
 	project, err := s.store.Projects().ByPath(ctx, projectPath)
 	if err != nil {
-		s.log.Warn("a tag arrived for a project that is gone", "project", projectPath,
-			"tag", name, "error", err)
+		s.log.Warn("a ref arrived for a project that is gone", "project", projectPath,
+			"ref", name, "error", err)
 		return
 	}
 	// Whoever pushed is not carried over: this runs with no request behind it, and
 	// inventing an author for somebody else's push would put their name on a run they
 	// did not start. An unattributed release is better than a wrong one.
-	_ = s.startRunForRef(ctx, project, name, sha, true)
+	_ = s.startRunForRef(ctx, project, name, sha, isTag)
 }
 
 // isZeroSHA is git's way of saying a ref is gone.
@@ -278,11 +306,24 @@ func (s *Server) startRunForRef(ctx context.Context, project *models.Project,
 		source = models.PipelineSourcePush
 	}
 
-	user := userFrom(ctx)
-	if user == nil {
-		user = &models.User{}
+	// One run per commit per cause.
+	//
+	// Not only about repeated pushes: the durable event log is read from the beginning
+	// each time the process starts, so without this every restart builds every commit
+	// the repository has ever had pushed at it.
+	exists, err := s.store.Pipelines().AutomaticRunExists(ctx, project.ID, sha, string(source))
+	if err != nil {
+		s.log.Warn("could not tell whether this commit was already run", "project", project.Path,
+			"ref", name, "error", err)
+	} else if exists {
+		s.log.Debug("this commit was already run", "project", project.Path, "ref", name)
+		return nil
 	}
-	run, err := s.startRun(ctx, project, config, ref, source, jobs, user)
+
+	// No author rather than an empty one. A run started by a push has nobody behind it
+	// in this process, and an empty user is not nobody: it is a user with an identity
+	// that belongs to nobody, which the database rightly refuses.
+	run, err := s.startRun(ctx, project, config, ref, source, jobs, userFrom(ctx))
 	if err != nil {
 		s.log.Warn("a run could not be started for this ref", "project", project.Path,
 			"ref", name, "error", err)
