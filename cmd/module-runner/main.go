@@ -612,6 +612,19 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 	if out, err := checkout.CombinedOutput(); err != nil {
 		return fmt.Errorf("check out %s: %w: %s", want, err, strings.TrimSpace(string(out)))
 	}
+
+	// Said out loud, because a runner that quietly builds the wrong commit is the
+	// worst kind of wrong: the build succeeds, an image is pushed, and everything
+	// downstream reports a run that never happened.
+	verify := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	verify.Dir = workspace
+	verify.Env = append(environment, "GIT_TERMINAL_PROMPT=0")
+	got, err := verify.Output()
+	if err != nil {
+		return fmt.Errorf("ask which commit was checked out: %w", err)
+	}
+	log.Printf("module-runner: job %d checked out %s (asked for %s)",
+		answer.Job.ID, strings.TrimSpace(string(got)), want)
 	return nil
 }
 

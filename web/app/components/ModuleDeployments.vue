@@ -944,6 +944,18 @@ watch(() => props.module.id, load)
     <!-- The tabs above the content, not below it: a row of names that sits under what
          it names is a legend for something the reader has already scrolled past. -->
     <template v-if="!reason && !loading">
+      <!-- What the repository says about where this goes.
+           Folded away, because it is a fact about the repository rather than about this
+           instance, it changes only when somebody edits a file, and it is read far less
+           often than it takes up. Beside the card rather than above the whole page,
+           because it is the same information the card's steps came from. -->
+      <details class="places-fold">
+        <summary class="muted small">
+          Where this deploys — read from the default branch's .dogit-ci.yml
+        </summary>
+        <DeployPlaces :project-id="props.projectId" branch="the default branch" />
+      </details>
+
       <nav class="tabs">
         <button
           class="tab"
@@ -1050,6 +1062,17 @@ watch(() => props.module.id, load)
             {{ place.badge }}
           </span>
           <span class="place-chip mono">{{ place.place }}</span>
+          <!-- The names it went out under, beside the digest it is addressed by.
+               The digest says which image; the tags say what it was called, and a
+               person comparing this against a release is looking for the name, not
+               for sixty-four characters of hexadecimal. -->
+          <span v-if="place.deployment.tags && place.deployment.tags.length" class="tags">
+            <span
+              v-for="tag in place.deployment.tags"
+              :key="tag"
+              class="tag mono"
+            >{{ tag }}</span>
+          </span>
           <span class="mono small">{{ shortImage(place.deployment.image) }}</span>
           <span class="muted small">{{ place.deployment.workload || '—' }}</span>
         </div>
@@ -1400,6 +1423,18 @@ watch(() => props.module.id, load)
 .columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* Folded away by default: a fact about the repository, read rarely, and it sits in the
+   middle of the page where everything that moves belongs to something else. */
+.places-fold {
+  margin-bottom: 10px;
+}
+
+.places-fold > summary {
+  padding: 4px 0;
+  cursor: pointer;
+  user-select: none;
 }
 
 .tabs {

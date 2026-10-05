@@ -207,16 +207,6 @@ onMounted(async () => {
         </label>
       </div>
 
-      <!-- Folded away, because it is a fact about the repository rather than about this
-           instance, it changes only when somebody edits a file, and it is read far less
-           often than it takes up. -->
-      <details class="places-fold">
-        <summary class="muted small">
-          Where this deploys — read from the default branch's .dogit-ci.yml
-        </summary>
-        <DeployPlaces :project-id="props.projectId" :branch="'the default branch'" />
-      </details>
-
       <table class="table">
         <thead>
           <tr>
