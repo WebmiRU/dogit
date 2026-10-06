@@ -105,11 +105,14 @@ func TestASettingsPageIsToldOnlyWhatItsOwnScopeDecided(t *testing.T) {
 	if stage["name"] != "stage" {
 		t.Errorf("the second place is %v, want it named too", stage)
 	}
-	for key, value := range stage {
-		if key == "name" {
-			continue
+	// A place this project overrode nothing of comes as a name and its identity: the
+	// name is how the page says "this place exists", and the identity is the core's own
+	// bookkeeping, which is how the row is recognised after its name is changed here.
+	for key := range stage {
+		if key != "name" && key != "dogit_row_id" {
+			t.Errorf("the page was handed %s=%v for a place this project overrode nothing of",
+				key, stage[key])
 		}
-		t.Errorf("the page was handed %s=%v for a place this project overrode nothing of", key, value)
 	}
 
 	// And nothing anywhere in the answer is the instance's: not in "own", not in the

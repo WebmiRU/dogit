@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -524,19 +525,22 @@ func (s *Server) handleSetModuleSettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	// A value that is nothing means this scope has stopped saying it, rather than
-	// saying it is nothing. See withoutEmpties.
+	// saying it is nothing — and a value that says exactly what the level above says is
+	// not an override either. See withoutEmpties and withoutRedundant.
 	value, err := withoutEmpties(integration, key, req.Value)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	value = s.withoutRedundant(r, integration, key, value, scopeType, scopeID)
 
 	// A list with nothing in it says nothing at this level, and a level that says
 	// nothing is a level with no row: stored, it would be an empty answer to a question
 	// that has an inherited one waiting above it.
 	if isEmptyList(value) {
+		// Nothing to delete is nothing decided here, which is what an empty list means.
 		if err := s.store.Integrations().DeleteSettingAt(r.Context(), integration.ID,
-			scopeType, scopeID, key); err != nil {
+			scopeType, scopeID, key); err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.writeError(w, r, err)
 			return
 		}
@@ -673,10 +677,12 @@ func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Requ
 			s.writeError(w, r, err)
 			return
 		}
+		value = s.withoutRedundant(r, integration, key, value, scopeType, scopeID)
 
 		if isEmptyList(value) {
+			// Nothing to delete is nothing decided here, which is what an empty list means.
 			if err := s.store.Integrations().DeleteSettingAt(r.Context(), integration.ID,
-				scopeType, scopeID, key); err != nil {
+				scopeType, scopeID, key); err != nil && !errors.Is(err, store.ErrNotFound) {
 				s.writeError(w, r, err)
 				return
 			}
@@ -879,6 +885,16 @@ func checkSettingType(spec models.SettingSpec, value json.RawMessage) error {
 const (
 	switchField     = "enabled"
 	autoDeployField = "auto_deploy"
+	// rowIDField is how a row is recognised as the same row when its name changes.
+	//
+	// The name says which cluster a row is, and a lower level may decide to call it
+	// something else — that is an override of one field, not a second row of the same
+	// cluster. Without an identity of its own a row could only be matched to the one it
+	// overrides by its name, so a renamed row could only become a new row.
+	//
+	// The core's own field, written and never shown: a page does not decide which row
+	// is which, and a row's identity is not something anybody reads.
+	rowIDField = "dogit_row_id"
 )
 
 // checkListSetting refuses a list that is not a list of the fields the module
@@ -920,6 +936,7 @@ func checkListSetting(spec models.SettingSpec, value json.RawMessage) error {
 		byKey[switchField] = models.SettingSpec{Key: switchField, Label: "In use", Type: "bool"}
 		byKey[autoDeployField] = models.SettingSpec{
 			Key: autoDeployField, Label: "Autodeploy", Type: "bool"}
+		byKey[rowIDField] = models.SettingSpec{Key: rowIDField, Label: "Row", Type: "string"}
 	}
 
 	for index, row := range rows {
@@ -1103,12 +1120,26 @@ func ownEntries(effective, inherited json.RawMessage, identify []string) json.Ra
 		return strings.Join(parts, " ")
 	}
 
+	// The row a lower scope is talking about is the one it carries the identity of; a row
+	// with no identity is matched by its name, which is all there is to match on.
+	sameRow := func(one, other map[string]json.RawMessage) bool {
+		if id, ok := one[rowIDField]; ok {
+			if theirs, had := other[rowIDField]; had && string(id) == string(theirs) {
+				return true
+			}
+		}
+		// Different identities still fall back to the name, because one side may have
+		// been written before rows had identities and the other since: the same row, found
+		// by the only thing both of them are called.
+		name := nameOf(one)
+		return name != "" && nameOf(other) == name
+	}
+
 	rows := make([]map[string]json.RawMessage, 0, len(applied))
 	for _, row := range applied {
-		name := nameOf(row)
 		var was map[string]json.RawMessage
 		for _, one := range above {
-			if name != "" && nameOf(one) == name {
+			if sameRow(row, one) {
 				was = one
 				break
 			}
@@ -1118,6 +1149,11 @@ func ownEntries(effective, inherited json.RawMessage, identify []string) json.Ra
 			continue
 		}
 		kept := map[string]json.RawMessage{}
+		// The identity always: it is what the level above is matched by, and a row that
+		// lost it could never be found again.
+		if id, ok := row[rowIDField]; ok {
+			kept[rowIDField] = id
+		}
 		for _, field := range identify {
 			if value, ok := row[field]; ok {
 				kept[field] = value
@@ -1170,6 +1206,20 @@ func withoutEmpties(integration *models.Integration, key string, value json.RawM
 	if err := json.Unmarshal(value, &rows); err != nil {
 		return value, nil
 	}
+
+	// A row of a list whose entries have names gets an identity of its own, so that
+	// changing the name later is a change of one field rather than a second row.
+	named := len(spec.Items.Identify) > 0
+	identified := false
+	if named {
+		for _, row := range rows {
+			if _, has := row[rowIDField]; !has {
+				row[rowIDField] = json.RawMessage(strconv.Quote(uuid.NewString()))
+				identified = true
+			}
+		}
+	}
+
 	emptied := false
 	kept := make([]map[string]json.RawMessage, 0, len(rows))
 	for _, row := range rows {
@@ -1186,7 +1236,7 @@ func withoutEmpties(integration *models.Integration, key string, value json.RawM
 			kept = append(kept, trimmed)
 		}
 	}
-	if !emptied {
+	if !emptied && !identified {
 		return value, nil
 	}
 	encoded, err := json.Marshal(kept)
@@ -1203,6 +1253,138 @@ func isEmptyList(value json.RawMessage) bool {
 		return false
 	}
 	return string(trimmed) == "[]" || string(trimmed) == "[ ]" || string(trimmed) == "[]\n"
+}
+
+// withoutRedundant takes the overrides out of a list that say what the level above
+// already says.
+//
+// An override is a difference. A field written with the value the level above holds is
+// not a decision, it is a copy — and a copy stops following the level above without
+// anybody deciding that, quietly, the next time somebody changes it there. A switch that
+// was flicked and flicked back ends here as no switch at all.
+//
+// The instance has nothing above it, so nothing is ever redundant there.
+func (s *Server) withoutRedundant(r *http.Request, integration *models.Integration,
+	key string, value json.RawMessage, scopeType string, scopeID *uuid.UUID) json.RawMessage {
+
+	if scopeType == store.ScopeInstance {
+		return value
+	}
+
+	var spec *models.SettingSpec
+	for i := range integration.Capabilities.Settings {
+		if integration.Capabilities.Settings[i].Key == key {
+			spec = &integration.Capabilities.Settings[i]
+			break
+		}
+	}
+	if spec == nil || spec.Type != "list" || spec.Items == nil || len(spec.Items.Identify) == 0 {
+		return value
+	}
+
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(value, &rows); err != nil {
+		return value
+	}
+
+	var groupID, projectID *uuid.UUID
+	switch scopeType {
+	case store.ScopeGroup:
+		groupID = scopeID
+	case store.ScopeProject:
+		projectID = scopeID
+	}
+	above, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID,
+		groupID, projectID, integration.Capabilities.Settings)
+	if err != nil {
+		return value
+	}
+
+	var inherited []map[string]json.RawMessage
+	if err := json.Unmarshal(above[key], &inherited); err != nil {
+		return value
+	}
+
+	nameOf := func(row map[string]json.RawMessage) string {
+		parts := make([]string, 0, len(spec.Items.Identify))
+		for _, field := range spec.Items.Identify {
+			parts = append(parts, strings.Trim(string(row[field]), `"`))
+		}
+		return strings.Join(parts, " ")
+	}
+
+	trimmed := false
+	kept := make([]map[string]json.RawMessage, 0, len(rows))
+	for _, row := range rows {
+		var was map[string]json.RawMessage
+		for _, one := range inherited {
+			if nameOf(one) == nameOf(row) {
+				was = one
+				break
+			}
+		}
+		if was == nil {
+			kept = append(kept, row)
+			continue
+		}
+		out := map[string]json.RawMessage{}
+		for field, raw := range row {
+			// The field that says which row this is is never redundant: it is how the row
+			// is matched to the one it overrides, and a row that lost it is a row nobody
+			// can find again.
+			for _, identity := range spec.Items.Identify {
+				if field == identity {
+					out[field] = raw
+				}
+			}
+			if _, already := out[field]; already {
+				continue
+			}
+			// A row the level above does not carry says something anyway: a switch the
+			// module never declared a default for is on, because that is what nobody
+			// saying means, and every other field is empty.
+			previous, had := was[field]
+			if !had {
+				if defaultValue(field) != nil && sameJSON(raw, *defaultValue(field)) {
+					trimmed = true
+					continue
+				}
+				out[field] = raw
+				continue
+			}
+			if sameJSON(raw, previous) {
+				trimmed = true
+				continue
+			}
+			out[field] = raw
+		}
+		if len(out) > 0 {
+			kept = append(kept, out)
+		}
+	}
+	if !trimmed {
+		return value
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return value
+	}
+	return encoded
+}
+
+// defaultValue is what a row field means when nobody above has said anything about it.
+//
+// Only the core's own row fields have one, because only they are written by the core: a
+// switch nobody mentions is on, which is what makes "I did not say no" mean "yes" all
+// the way up the chain.
+func defaultValue(field string) *json.RawMessage {
+	switch field {
+	case switchField, autoDeployField:
+		on := json.RawMessage("true")
+		return &on
+	default:
+		return nil
+	}
 }
 
 func sameJSON(one, other json.RawMessage) bool {

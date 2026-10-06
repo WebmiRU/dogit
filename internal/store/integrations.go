@@ -2,9 +2,12 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +15,71 @@ import (
 
 	"github.com/ewolf/dogit/internal/models"
 )
+
+// RowIDField is the core's own field in a list whose entries have names: a row's
+// identity, so that renaming a row overrides one field of it rather than making a
+// second row of the same thing.
+const RowIDField = "dogit_row_id"
+
+// RowIDFor is the identity a row that has none is given.
+//
+// Derived from what names the row rather than from its position, so the same row is the
+// same row on every read and in every place, including rows written before identities
+// existed. A row that already carries one keeps it: the point of an identity is to
+// survive the name changing, and recomputing it from the name would undo that.
+func RowIDFor(integrationID uuid.UUID, name string) string {
+	sum := sha256.Sum256([]byte("dogit-row:" + integrationID.String() + ":" + name))
+	return hex.EncodeToString(sum[:8])
+}
+
+// stampRowIDs gives every row of a list whose entries have names an identity, if it does
+// not have one already.
+func stampRowIDs(specs []models.SettingSpec, integrationID uuid.UUID, key string, value json.RawMessage) json.RawMessage {
+	var spec *models.SettingSpec
+	for i := range specs {
+		if specs[i].Key == key {
+			spec = &specs[i]
+			break
+		}
+	}
+	if spec == nil || spec.Type != "list" || spec.Items == nil || len(spec.Items.Identify) == 0 {
+		return value
+	}
+
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(value, &rows); err != nil {
+		return value
+	}
+	changed := false
+	for _, row := range rows {
+		if _, has := row[RowIDField]; has {
+			continue
+		}
+		name := ""
+		for _, field := range spec.Items.Identify {
+			raw, ok := row[field]
+			if !ok {
+				name = ""
+				break
+			}
+			text := strings.Trim(string(raw), `"`)
+			if name != "" {
+				name += " "
+			}
+			name += text
+		}
+		row[RowIDField] = json.RawMessage(strconv.Quote(RowIDFor(integrationID, name)))
+		changed = true
+	}
+	if !changed {
+		return value
+	}
+	encoded, err := json.Marshal(rows)
+	if err != nil {
+		return value
+	}
+	return encoded
+}
 
 // heartbeatWindow is how long a module may stay silent before it is considered
 // offline. It is generous because a module restart in Kubernetes is not instant.
@@ -343,6 +411,7 @@ func (r *IntegrationRepo) SettingsFor(ctx context.Context, integrationID uuid.UU
 				rows.Close()
 				return nil, err
 			}
+			value = stampRowIDs(specs, integrationID, key, value)
 			if inherited, ok := out[key]; ok {
 				if merged, ok := mergeEntries(specs, key, inherited, value); ok {
 					out[key] = merged
@@ -391,6 +460,14 @@ func mergeEntries(specs []models.SettingSpec, key string, inherited, override js
 		return nil, false
 	}
 
+	// A row is matched by the identity the core gave it, and by name only when it has
+	// none: a name is a field a lower level may change, and a row that could only be
+	// recognised by the name it used to have could never be renamed without becoming a
+	// second row.
+	idOf := func(entry map[string]any) string {
+		text, _ := entry[RowIDField].(string)
+		return text
+	}
 	nameOf := func(entry map[string]any) string {
 		parts := make([]string, 0, len(spec.Items.Identify))
 		for _, field := range spec.Items.Identify {
@@ -415,10 +492,11 @@ func mergeEntries(specs []models.SettingSpec, key string, inherited, override js
 	}
 	for _, entry := range over {
 		name := nameOf(entry)
+		id := idOf(entry)
 		replaced := false
-		if name != "" {
+		if name != "" || id != "" {
 			for _, existing := range merged {
-				if nameOf(existing) == name {
+				if (id != "" && idOf(existing) == id) || (name != "" && nameOf(existing) == name) {
 					for field, value := range entry {
 						existing[field] = value
 					}

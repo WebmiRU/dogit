@@ -131,6 +131,18 @@ function fill(answer: { own?: Record<string, unknown> }) {
   saved.value = clone(next)
 }
 
+/**
+ * The fields a module declared, minus the ones this page must not show.
+ *
+ * A row's identity is one of those: it is the core's own field, written for the core and
+ * not for a reader, and a page that showed it would be showing an internal detail where
+ * a cluster's name belongs.
+ */
+function visibleFieldsOf(spec: SettingSpec): SettingSpec[] {
+  const hidden = new Set([...(props.hideFields ?? []), 'dogit_row_id'])
+  return (spec.items?.fields ?? []).filter((field) => !hidden.has(field.key))
+}
+
 function isList(spec: SettingSpec): boolean {
   return spec.type === 'list'
 }
@@ -165,10 +177,12 @@ function rowIsOurs(spec: SettingSpec, row: SettingEntry, index?: number): boolea
   if (!(spec.items?.identify?.length)) return true
   if (!rowName(spec, row)) return false
   if (decidedFields(spec, row).length > 0) return true
-  // Renaming a row is how a project gives a place a name of its own, so a row whose
-  // name no longer matches the one it was loaded with is this scope's own row — even
-  // though it has decided nothing else yet.
-  return index === undefined ? false : renamed(spec, row, index)
+  if (index === undefined) return false
+  // A row that was not here when the page was loaded is this scope's own: it is the one
+  // somebody added. And a row whose name no longer matches the one it was loaded with is
+  // this scope's own too, because a name is a field this scope may change — which is an
+  // override of one field, not a second row.
+  return !entriesOf(saved.value[spec.key])[index] || renamed(spec, row, index)
 }
 
 /** Whether a row's name is no longer the name it arrived with. */
@@ -187,13 +201,11 @@ function renamed(spec: SettingSpec, row: SettingEntry, index: number): boolean {
  * that moment it is its own row.
  */
 function fieldLocked(spec: SettingSpec, row: SettingEntry, index: number, key: string): boolean {
-  if (!mayEdit.value) return true
-  // The name of a row this scope has decided nothing about is locked, and nothing else
-  // is: an inherited field is empty and says so, and writing in it is how this scope
-  // takes it over. A locked inherited field would be a value this project could never
-  // change, which is the one thing an override has to allow.
-  if ((spec.items?.identify ?? []).includes(key)) return !rowIsOurs(spec, row, index)
-  return false
+  // Nothing is locked here except the whole form for somebody who may not change it. A
+  // name, like any other field, is this project's to decide: writing a name of its own
+  // makes a row of its own, and the place it was copied from is then one this project no
+  // longer uses — which is what the row's In use switch is for.
+  return !mayEdit.value
 }
 
 /**
@@ -235,8 +247,8 @@ function decidedFields(spec: SettingSpec, row: SettingEntry): string[] {
 function listSettable(spec: SettingSpec, raw: unknown): unknown {
   if (!isList(spec)) return settingValue(spec, raw)
   const rows: SettingEntry[] = []
-  for (const row of entriesOf(raw)) {
-    if (!rowIsOurs(spec, row)) continue
+  for (const [at, row] of entriesOf(raw).entries()) {
+    if (!rowIsOurs(spec, row, at)) continue
     const kept: SettingEntry = {}
     for (const [key, value] of Object.entries(row)) {
       if (value === '' || value === undefined || value === null) continue
@@ -280,6 +292,10 @@ function coerceRow(spec: SettingSpec, row: SettingEntry): SettingEntry {
     if (!(key in row)) continue
     out[key] = row[key] === true
   }
+  // A row's identity is carried through untouched: it is how the core knows this row is
+  // the same row after its name has changed, and dropping it here would turn a renamed
+  // row into a new row.
+  if (typeof row.dogit_row_id === 'string') out.dogit_row_id = row.dogit_row_id
   return out
 }
 
@@ -387,10 +403,16 @@ function fieldValue(field: SettingSpec, value: unknown): unknown {
  */
 async function saveRow(spec: SettingSpec, index: number) {
   if (isList(spec)) {
-    const row = entriesOf(values.value[spec.key])[index]
-    if (!row) return
+    // The whole list, every row this scope has an answer about, and not just the row
+    // under the hand.
+    //
+    // One scope stores one list, so saving a list replaces it. Sending only the row that
+    // was edited would drop every other row this scope has decided — which is how "save
+    // one cluster" quietly deleted the cluster beside it. Each row still saves itself:
+    // what is sent for a row is only what this scope decided about that row.
+    if (!entriesOf(values.value[spec.key])[index]) return
 
-    const value = listSettable(spec, [row])
+    const value = listSettable(spec, values.value[spec.key])
     await saveOne(spec.key, value === undefined ? [] : value)
     await settleRow(spec, index)
     emit('saved')
@@ -649,7 +671,14 @@ const inheritedNote = [
 function rowsOf(spec: SettingSpec): SettingEntry[] {
   const rows = entriesOf(values.value[spec.key])
   if (!props.onlyRow || !rowName(spec, {})) return rows
-  return rows.filter((row) => rowName(spec, row) === props.onlyRow)
+  // The row this page is about is remembered by where it was, not by what it is called.
+  //
+  // A name is what the page was asked about, so it is also the one thing that changes:
+  // write a new one and the row no longer answers to the old, and a form that looked the
+  // row up by name would show nothing at all — the row would disappear the moment it
+  // was saved, which reads as a save that did nothing.
+  const at = rows.findIndex((row) => rowName(spec, row) === props.onlyRow)
+  return at >= 0 ? [rows[at]] : rows.slice(0, 1)
 }
 
 /** What a row is called in the list: its first field, or "entry". */
@@ -760,7 +789,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
 
 
             <div
-              v-for="field in (spec.items?.fields ?? []).filter((one) => !(props.hideFields ?? []).includes(one.key))"
+              v-for="field in visibleFieldsOf(spec)"
               :key="field.key"
               class="setting-field"
             >
