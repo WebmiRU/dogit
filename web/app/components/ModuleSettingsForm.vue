@@ -584,51 +584,37 @@ const inheritedNote = [
  * hidden here but absent — a card about a place has nothing to do with the other places.
  */
 /**
- * The fields of a row this page shows.
+ * Whether this field's value is the one the level above wrote down.
  *
- * A place's own tab shows what this project decided about that place and nothing else.
- * A field still saying what the level above says is not this project's setting, and a
- * page of somebody else's configuration under this project's name is a page somebody
- * edits by accident — and then copies.
+ * On the field itself, from the row and the key, so that every control asks the same
+ * question the same way.
  */
-function fieldsOf(spec: SettingSpec, row: SettingEntry): SettingSpec[] {
-  const declared = spec.items?.fields ?? []
-  if (!props.onlyRow) return declared
+function inheritedNow(spec: SettingSpec, row: SettingEntry, key: string): boolean {
   const above = entriesOf(inherited.value[spec.key]).find(
     (one) => rowName(spec, one) === rowName(spec, row),
   )
-  // A row of this project's own has nothing above it to be a copy of, so it shows
-  // everything: it was written here, all of it, and there is nothing to hide.
-  if (!above) return declared
-  return declared.filter((field) => {
-    // The page shows what applies, so an inherited field arrives here carrying the value
-    // the level above wrote. "Set here" therefore cannot mean "has a value": it means
-    // differs from what is above, which is the only way to tell this project's answer
-    // from a copy of somebody else's.
-    if (sameValue(above[field.key], row[field.key])) return false
-    return true
-  })
+  if (!above) return false
+  return sameValue(above[key], row[key])
 }
 
 /**
- * The fields of a row that are not shown, so that one can be brought back.
+ * What a field shows.
  *
- * A page that shows only what this scope decided is empty until something is decided —
- * and an empty row with no way to start is a form that cannot be used. The fields that
- * are not shown are therefore offered, one small button each, rather than laid out as
- * empty boxes that look like values somebody forgot.
+ * Nothing, where the value is inherited: the field is empty and says so in its
+ * placeholder, because a value copied into the box would be read as this project's own
+ * and saved as one — and would then stop following the level above without anybody
+ * deciding that. Typing into it is what decides it here.
  */
-function hiddenFieldsOf(spec: SettingSpec, row: SettingEntry): SettingSpec[] {
-  const shown = new Set(fieldsOf(spec, row).map((one) => one.key))
-  return (spec.items?.fields ?? []).filter(
-    (field) => !shown.has(field.key) && !(props.hideFields ?? []).includes(field.key),
-  )
+function shownValue(spec: SettingSpec, row: SettingEntry, key: string): string {
+  if (inheritedNow(spec, row, key)) return ''
+  return asString(row[key])
 }
 
-/** Brings one field back into the row, empty, so that it can be filled in here. */
-function declareField(spec: SettingSpec, row: SettingEntry, field: SettingSpec) {
-  row[field.key] = field.type === 'bool' ? false : ''
+function setField(row: SettingEntry, key: string, event: Event) {
+  const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+  row[key] = target.value
 }
+
 
 function rowsOf(spec: SettingSpec): SettingEntry[] {
   const rows = entriesOf(values.value[spec.key])
@@ -737,30 +723,14 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               </span>
             </div>
 
-            <!-- What this scope has not decided yet, as one small link each: an empty
-                 box for every field of the module would be a page of values somebody
-                 forgot to fill in. -->
             <!-- This row's own Save, below its own fields: a row is saved by itself, so
                  changing one's namespace is never also a chance to rewrite the other's
                  kubeconfig. It is here, at the end, and not under the row's name where
                  it would be a button above the thing it acts on. -->
-            <div v-if="mayEdit && hiddenFieldsOf(spec, row).length" class="setting-entry-more">
-              <span class="muted small">also:</span>
-              <button
-                v-for="field in hiddenFieldsOf(spec, row)"
-                :key="field.key"
-                class="link-button"
-                type="button"
-                :disabled="busy"
-                @click="declareField(spec, row, field)"
-              >
-                {{ field.label }}
-              </button>
-            </div>
 
 
             <div
-              v-for="field in fieldsOf(spec, row).filter((one) => !(props.hideFields ?? []).includes(one.key))"
+              v-for="field in (spec.items?.fields ?? []).filter((one) => !(props.hideFields ?? []).includes(one.key))"
               :key="field.key"
               class="setting-field"
             >
@@ -780,7 +750,10 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 type="button"
                 role="switch"
                 :aria-checked="row[field.key] === true"
-                :title="row[field.key] === true ? 'On' : 'Off'"
+                :disabled="!mayEdit || inheritedNow(spec, row, field.key)"
+                :title="inheritedNow(spec, row, field.key)
+                  ? 'inherited — switch it to decide it here'
+                  : (row[field.key] === true ? 'On' : 'Off')"
                 @click="row[field.key] = row[field.key] !== true"
               >
                 <span class="knob" />
@@ -789,7 +762,8 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 v-else-if="field.type === 'enum'"
                 :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
-                v-model="row[field.key]"
+                :value="shownValue(spec, row, field.key)"
+                @change="setField(row, field.key, $event)"
               >
                 <option v-for="option in field.options ?? []" :key="option" :value="option">
                   {{ option }}
@@ -801,18 +775,22 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 v-else-if="field.type === 'text'"
                 :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
-                v-model="row[field.key]"
+                :value="shownValue(spec, row, field.key)"
+                @input="setField(row, field.key, $event)"
                 rows="6"
                 spellcheck="false"
-                placeholder="Paste the file's contents here"
+                :placeholder="inheritedNow(spec, row, field.key) ? 'inherited' : `Paste the file's contents here`"
               />
               <input
                 v-else
                 :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
-                v-model="row[field.key]"
+                :value="shownValue(spec, row, field.key)"
+                @input="setField(row, field.key, $event)"
                 :type="field.secret ? 'password' : 'text'"
-                :placeholder="field.default !== undefined ? String(field.default) : ''"
+                :placeholder="inheritedNow(spec, row, field.key)
+                  ? 'inherited'
+                  : (field.default !== undefined ? String(field.default) : '')"
               />
             </div>
             <div class="setting-entry-actions">
@@ -1074,13 +1052,6 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
 }
 
 /* A row's own Save, under its own fields. */
-.setting-entry-more {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
-  margin-top: 10px;
-}
 
 .setting-entry-actions {
   display: flex;
