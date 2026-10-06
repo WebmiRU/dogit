@@ -121,7 +121,9 @@ async function flip(place: Place, key: 'inUse' | 'autodeploy') {
     const what = key === 'inUse'
       ? `${place.name} is now ${now ? 'in use' : 'not in use'}`
       : `${place.name} is now deployed ${now ? 'by a push' : 'only by hand'}`
-    notify(what, { type: 'success', timer: 5000 })
+    // Seconds, not milliseconds: a number five thousand here is a notice that
+    // stays for an hour and a half, and everybody's screen fills with them.
+    notify(what, { type: 'success', timer: 5 })
   } catch (caught) {
     place.inUse = before.inUse
     place.autodeploy = before.autodeploy
@@ -187,13 +189,13 @@ watch(() => props.module.id, load)
             :class="{ on: place.autodeploy }"
             type="button"
             role="switch"
+            aria-label="Autodeploy here"
             :aria-checked="place.autodeploy"
             :disabled="saving === place.name || !props.canManage || !place.inUse"
             @click.stop="flip(place, 'autodeploy')"
           >
             <span class="knob" />
           </button>
-          <span class="switch-state">{{ place.autodeploy ? 'ON' : 'OFF' }}</span>
         </label>
 
         <!-- No name on this one: the switch and its state are the whole of it. The

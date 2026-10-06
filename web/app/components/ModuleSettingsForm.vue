@@ -759,7 +759,11 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                    asks whether a push may do it by itself. They are different questions:
                    the first takes the place away, the second leaves it here for somebody
                    to deploy to on purpose. -->
-              <div v-if="spec.items?.identify?.length" class="row-switches" :title="inheritedNote">
+              <div
+                v-if="spec.items?.identify?.length && !onlyRow"
+                class="row-switches"
+                :title="inheritedNote"
+              >
               <label
                 class="row-switch"
               >
@@ -800,7 +804,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               >
                 Remove
               </button>
-              <span v-else class="row-inherited-note">
+              <span v-else-if="!onlyRow" class="row-inherited-note">
                 written above — edit it there, or switch it off here
               </span>
             </div>
