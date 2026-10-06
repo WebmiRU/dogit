@@ -909,6 +909,71 @@ label {
   opacity: 0.8;
 }
 
+/* A section made of parts. The heading wears the row an entry wears, so the list reads as
+   one list rather than as two, and it is dimmed rather than absent: a heading that leads
+   nowhere is a heading nobody would have written. */
+.nav-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.nav-heading.active {
+  color: var(--text);
+}
+
+/* The parts sit under their heading, indented and off a rule, because they belong to it:
+   at the same indent as a section they would be two lists of equals, and a reader would
+   not know that Docker is one of three kinds of registry and Projects is the only thing
+   it is. */
+.nav-children {
+  margin: 0 0 6px 17px;
+  padding-left: 18px;
+  border-left: 1px solid var(--border);
+}
+
+.nav-child {
+  display: block;
+  padding: 5px 10px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.nav-child:hover {
+  background: var(--bg-inset);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nav-child.active {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Marked, not hidden: named enough that its absence is a fact about the product, and greyed
+   so it reads as "not yet" rather than as "nothing here". */
+.nav-child-planned {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.nav-child-planned em {
+  font-size: 11px;
+  font-style: normal;
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding-top: 16px;

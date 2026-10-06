@@ -39,12 +39,27 @@ onMounted(() => {
   onBeforeUnmount(() => document.removeEventListener('click', close))
 })
 
+interface NavChild {
+  label: string
+  /** Absent while this kind has no backend, which is what marks it rather than hides it. */
+  to?: string
+  /** Why it leads nowhere yet, when it does. */
+  note?: string
+}
+
 interface NavItem {
   label: string
   to: string
   icon: string
   /** Prefix used to highlight the entry, so project pages keep Projects lit. */
   match?: string
+  /**
+   * A section made of parts rather than one page: the label becomes a heading and the parts
+   * are always shown under it. Not a link and not a disclosure — a section's parts are
+   * short enough to read at a glance, and hiding them behind a click hides the shape of the
+   * product from the one place that shows it.
+   */
+  parts?: NavChild[]
 }
 
 const navItems = computed<NavItem[]>(() => [
@@ -53,6 +68,17 @@ const navItems = computed<NavItem[]>(() => [
   { label: 'Groups', to: '/groups', icon: '◫', match: '/groups' },
   { label: 'Merge requests', to: '/merge-requests', icon: '⑂', match: '/merge-requests' },
   { label: 'Activity', to: '/activity', icon: '≡', match: '/activity' },
+  {
+    label: 'Registries',
+    to: '/registry',
+    icon: '⬓',
+    match: '/registry',
+    parts: [
+      { label: 'Docker', to: '/registry/docker' },
+      { label: 'PHP (Composer)', note: 'not implemented yet' },
+      { label: 'NPM (Node.js)', note: 'not implemented yet' },
+    ],
+  },
 ])
 
 function isActive(item: NavItem): boolean {
@@ -130,16 +156,49 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
              thing about it: pipelines are reached from the project they belong to,
              which is also where a person looking for one actually is. -->
         <nav>
-          <NuxtLink
-            v-for="item in navItems"
-            :key="item.label"
-            :to="item.to"
-            class="nav-item"
-            :class="{ active: isActive(item) && !(item.match === '/projects' && onRepository) }"
-          >
-            <span class="nav-icon">{{ item.icon }}</span>
-            {{ item.label }}
-          </NuxtLink>
+          <template v-for="item in navItems" :key="item.label">
+            <!-- A section made of parts is a heading with the parts under it. The heading
+                 is not a link: the section has no page of its own — each part is its own
+                 list — so a link here would be a second way to the first part, and two
+                 entries for one place leave a reader unable to tell which one they are on. -->
+            <div v-if="item.parts" class="nav-group">
+              <div class="nav-heading" :class="{ active: isActive(item) }">
+                <span class="nav-icon">{{ item.icon }}</span>
+                {{ item.label }}
+              </div>
+              <div class="nav-children">
+                <template v-for="part in item.parts" :key="part.label">
+                  <NuxtLink
+                    v-if="part.to"
+                    :to="part.to"
+                    class="nav-child"
+                    :class="{
+                      active: route.path === part.to || route.path.startsWith(`${part.to}/`),
+                    }"
+                  >
+                    {{ part.label }}
+                  </NuxtLink>
+                  <!-- Named rather than hidden, like every other part of this product
+                       without a backend yet: a part that is merely absent is a part nobody
+                       knows is coming. -->
+                  <span v-else class="nav-child nav-child-planned" :title="part.note">
+                    {{ part.label }}
+                    <em>{{ part.note }}</em>
+                  </span>
+                </template>
+              </div>
+            </div>
+
+            <NuxtLink
+              v-else
+              :to="item.to"
+              class="nav-item"
+              :class="{ active: isActive(item) && !(item.match === '/projects' && onRepository) }"
+            >
+              <span class="nav-icon">{{ item.icon }}</span>
+              {{ item.label }}
+            </NuxtLink>
+          </template>
         </nav>
 
         <div class="sidebar-footer">

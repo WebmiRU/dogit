@@ -204,6 +204,24 @@ func (s *Server) Register(r chi.Router) {
 
 		authenticated.Get("/admin/overview", s.handleAdminOverview)
 
+		// The registries an administrator has written down. One path per kind, because
+		// the three kinds are not one thing wearing three labels: a Docker registry is a
+		// host reached with a login and a password, a Composer or npm repository is a
+		// token under a path. Sharing one endpoint would mean every kind's fields being
+		// optional for the other two, and a field nobody may leave out is a field
+		// somebody will leave out.
+		//
+		// Under /registry rather than /admin: an address is not a thing only the
+		// administration looks after, and this path sits beside the module's own
+		// /registry/access, which asks about the same word from the other direction.
+		authenticated.Route("/registry", func(registries chi.Router) {
+			registries.Get("/docker", s.handleListDockerRegistries)
+			registries.Get("/docker/{registryID}", s.handleGetDockerRegistry)
+			registries.Post("/docker", s.handleCreateDockerRegistry)
+			registries.Patch("/docker/{registryID}", s.handleUpdateDockerRegistry)
+			registries.Delete("/docker/{registryID}", s.handleDeleteDockerRegistry)
+		})
+
 		authenticated.Get("/groups", s.handleListGroups)
 		authenticated.Post("/groups", s.handleCreateGroup)
 		authenticated.Get("/groups/{groupID}", s.handleGetGroup)
