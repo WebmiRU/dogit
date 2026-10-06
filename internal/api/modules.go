@@ -531,7 +531,16 @@ func (s *Server) handleSetModuleSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.store.Integrations().SetSetting(r.Context(), integration.ID, scopeType, scopeID, key, value); err != nil {
+	// A list with nothing in it says nothing at this level, and a level that says
+	// nothing is a level with no row: stored, it would be an empty answer to a question
+	// that has an inherited one waiting above it.
+	if isEmptyList(value) {
+		if err := s.store.Integrations().DeleteSettingAt(r.Context(), integration.ID,
+			scopeType, scopeID, key); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+	} else if err := s.store.Integrations().SetSetting(r.Context(), integration.ID, scopeType, scopeID, key, value); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -665,7 +674,13 @@ func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		if err := s.store.Integrations().SetSetting(r.Context(), integration.ID,
+		if isEmptyList(value) {
+			if err := s.store.Integrations().DeleteSettingAt(r.Context(), integration.ID,
+				scopeType, scopeID, key); err != nil {
+				s.writeError(w, r, err)
+				return
+			}
+		} else if err := s.store.Integrations().SetSetting(r.Context(), integration.ID,
 			scopeType, scopeID, key, value); err != nil {
 			s.writeError(w, r, err)
 			return
@@ -1179,6 +1194,15 @@ func withoutEmpties(integration *models.Integration, key string, value json.RawM
 		return value, nil
 	}
 	return encoded, nil
+}
+
+// isEmptyList says whether a value is a list with nothing in it.
+func isEmptyList(value json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return false
+	}
+	return string(trimmed) == "[]" || string(trimmed) == "[ ]" || string(trimmed) == "[]\n"
 }
 
 func sameJSON(one, other json.RawMessage) bool {

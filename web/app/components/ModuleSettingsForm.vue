@@ -188,8 +188,12 @@ function renamed(spec: SettingSpec, row: SettingEntry, index: number): boolean {
  */
 function fieldLocked(spec: SettingSpec, row: SettingEntry, index: number, key: string): boolean {
   if (!mayEdit.value) return true
-  if (!(spec.items?.identify ?? []).includes(key)) return inheritedNow(spec, row, key)
-  return !rowIsOurs(spec, row, index)
+  // The name of a row this scope has decided nothing about is locked, and nothing else
+  // is: an inherited field is empty and says so, and writing in it is how this scope
+  // takes it over. A locked inherited field would be a value this project could never
+  // change, which is the one thing an override has to allow.
+  if ((spec.items?.identify ?? []).includes(key)) return !rowIsOurs(spec, row, index)
+  return false
 }
 
 /**
@@ -528,6 +532,21 @@ function setField(spec: SettingSpec, row: SettingEntry, key: string, event: Even
   row[key] = target.value
 }
 
+/**
+ * A switch nobody here has decided.
+ *
+ * It shows neither position, because neither is true: the value is whatever the level
+ * above holds, and this page has not been told what that is. The first click is the
+ * decision, and it is "on"; the second is "off".
+ */
+function toggleBool(row: SettingEntry, key: string) {
+  row[key] = inheritedNowBool(row, key) ? true : !row[key]
+}
+
+function inheritedNowBool(row: SettingEntry, key: string): boolean {
+  return !(key in row)
+}
+
 /** What the core sends back for a secret it holds rather than returns. */
 const secretMask = '********'
 
@@ -757,15 +776,15 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               <button
                 v-if="field.type === 'bool'"
                 class="switch"
-                :class="{ on: row[field.key] === true }"
+                :class="{ on: row[field.key] === true, undecided: inheritedNow(spec, row, field.key) }"
                 type="button"
                 role="switch"
                 :aria-checked="row[field.key] === true"
-                :disabled="!mayEdit || inheritedNow(spec, row, field.key)"
+                :disabled="!mayEdit"
                 :title="inheritedNow(spec, row, field.key)
-                  ? 'inherited — switch it to decide it here'
+                  ? 'not decided here — switch it on to decide it here'
                   : (row[field.key] === true ? 'On' : 'Off')"
-                @click="row[field.key] = row[field.key] !== true"
+                @click="toggleBool(row, field.key)"
               >
                 <span class="knob" />
               </button>
@@ -1086,6 +1105,15 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
   visibility: visible;
 }
 
+/* A switch nobody here has decided: shown with its knob in the middle, because it is
+   in neither position — the value belongs to the level above and this page has not been
+   told what it is. */
+.switch.undecided .knob {
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0.6;
+}
+
 .setting-field {
   display: flex;
   flex-wrap: wrap;
@@ -1094,7 +1122,16 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
   padding: 7px 0;
 }
 
-.setting-field + .setting-field {
+.setting-field + /* A switch nobody here has decided: shown with its knob in the middle, because it is
+   in neither position — the value belongs to the level above and this page has not been
+   told what it is. */
+.switch.undecided .knob {
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0.6;
+}
+
+.setting-field {
   border-top: 1px solid var(--border);
 }
 
