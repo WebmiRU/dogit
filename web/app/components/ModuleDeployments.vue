@@ -1861,7 +1861,15 @@ watch(() => props.module.id, load)
                        "yes": a row that has not been answered about is not a row that has
                        been found. -->
                   <td class="small registry-cell">
-                    <span v-if="availabilityOf(image.name) === 'present'" class="muted">
+                    <!-- An answer, so a badge like every other answer on this page: a
+                         column of words and one coloured chip in it reads as a value the
+                         registry has rather than as the shape of the list. Blue, which is
+                         what a fact that is all right wears. -->
+                    <span
+                      v-if="availabilityOf(image.name) === 'present'"
+                      class="badge badge-blue"
+                      title="the registry this place pulls from has this image"
+                    >
                       there
                     </span>
                     <span
