@@ -1029,7 +1029,7 @@ function availabilityOf(image: string): 'present' | 'missing' | 'unknown' | '' {
  */
 function revertBlocked(image: string): string {
   return availabilityOf(image) === 'missing'
-    ? 'the registry this place pulls from does not have this image any more'
+    ? 'the registry this place pulls from has answered that it does not have this image'
     : ''
 }
 
@@ -1861,28 +1861,30 @@ watch(() => props.module.id, load)
                        "yes": a row that has not been answered about is not a row that has
                        been found. -->
                   <td class="small registry-cell">
-                    <!-- An answer, so a badge like every other answer on this page: a
-                         column of words and one coloured chip in it reads as a value the
-                         registry has rather than as the shape of the list. Blue, which is
-                         what a fact that is all right wears. -->
+                    <!-- Named for the state of the image rather than for the place it is
+                         or is not in: "there" needs a "there" the reader has to supply,
+                         and "gone" claims it once was — which is a claim the registry
+                         never made. It said it does not have this manifest, and that is
+                         all either word here is allowed to say. Blue is what a fact that
+                         is all right wears. -->
                     <span
                       v-if="availabilityOf(image.name) === 'present'"
                       class="badge badge-blue"
                       title="the registry this place pulls from has this image"
                     >
-                      there
+                      Available
                     </span>
                     <span
                       v-else-if="availabilityOf(image.name) === 'missing'"
                       class="badge badge-warning"
                       title="the registry this place pulls from has answered that it does not have this image"
                     >
-                      gone
+                      Unavailable
                     </span>
                     <span
                       v-else-if="availabilityOf(image.name) === 'unknown'"
                       class="muted"
-                      title="the registry did not answer, so whether this image is there is not known"
+                      title="the registry did not answer, so whether this image can be pulled from it is not known"
                     >
                       not known
                     </span>
