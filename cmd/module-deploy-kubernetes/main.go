@@ -208,6 +208,12 @@ func manifest() map[string]any {
 							// A multi-line field rather than a password box: a kubeconfig is a
 							// document, and pasting one into a single-line input would trim it.
 							"type": "text",
+							// Shown here, to an administrator, and never sent below this level.
+							// Not marked secret: a masked kubeconfig is one nobody can check is
+							// still there, and the person pasting a certificate bundle needs to
+							// see what they pasted. Marked inheritable it would be nothing —
+							// which is the point: a value goes to the levels below only when the
+							// module says so, and a cluster's keys are not something it says.
 							"description": "The contents of a kubeconfig, pasted in, for when this module runs " +
 								"outside the cluster. `kubectl config view --raw` prints one. Only an " +
 								"administrator sees this page, so it is shown back like any other " +
@@ -220,9 +226,10 @@ func manifest() map[string]any {
 							"description": "Which context in that file to use. Empty means the file's current one.",
 						},
 						{
-							"key":   "default_namespace",
-							"label": "Default namespace",
-							"type":  "string",
+							"key":         "default_namespace",
+							"inheritable": true,
+							"label":       "Default namespace",
+							"type":        "string",
 							"description": "Where a project that does not name a namespace deploys to. dogit " +
 								"never creates namespaces: one is somebody's decision, made where they can see " +
 								"what is already in it.",
@@ -233,9 +240,10 @@ func manifest() map[string]any {
 							// twenty seconds and one that takes four minutes are both normal,
 							// and a single number is either an endless wait on the fast one or a
 							// rollout declared stuck on the slow one.
-							"key":   "rollout_timeout",
-							"label": "Rollout timeout",
-							"type":  "int",
+							"key":         "rollout_timeout",
+							"inheritable": true,
+							"label":       "Rollout timeout",
+							"type":        "int",
 							"description": "Seconds to wait for this cluster's rollout before a deployment is " +
 								"called stuck. Empty means ten minutes. A project's own configuration may " +
 								"ask for less, and does so for one run.",
@@ -257,9 +265,10 @@ func manifest() map[string]any {
 								"a public mirror needs.",
 						},
 						{
-							"key":   "keep_jobs",
-							"label": "Keep finished jobs",
-							"type":  "bool",
+							"key":         "keep_jobs",
+							"inheritable": true,
+							"label":       "Keep finished jobs",
+							"type":        "bool",
 							"description": "Leave this cluster's migration and check Jobs in place after they " +
 								"finish. Off by default: a namespace full of finished Jobs is a namespace " +
 								"nobody can read. It does nothing at all where the project declares no " +

@@ -1087,8 +1087,92 @@ func (s *Server) handleGetModuleSettings(w http.ResponseWriter, r *http.Request)
 			spec, ok := specs[key]
 			return spec, ok
 		}),
-		"schema": integration.Capabilities.Settings,
+		// What the level above decided, so a page can show a reader what a place is
+		// actually configured with instead of a row of empty fields. Secrets are not in
+		// it — see inheritedSettings.
+		"inherited": inheritedSettings(inherited, integration.Capabilities.Settings),
+		"schema":    integration.Capabilities.Settings,
 	})
+}
+
+// inheritedSettings is what the level above decided, with the secrets taken out of it.
+//
+// Sent now, where before it was not sent at all, and the change is narrow on purpose: an
+// answer a reader cannot see is an answer they have to guess at, and a page of inherited
+// rows whose fields are all empty does not say "this place is configured above" — it says
+// nothing, which is how a person ends up writing a value that was already there.
+//
+// What is not sent is what must not be: a secret, and anything the module did not publish
+// downward. Both are left out of their row entirely rather than blanked or masked — a mask
+// is a value a form can save back, and a field that arrives empty is indistinguishable from
+// one nobody decided, which is the distinction this all exists to keep apart.
+//
+// The rule that used to govern this said values from a level above are never sent. It was
+// right about credentials and too broad about the rest: an address is not a credential, and
+// a row of nothing is not a place. What the module says about a field is now the whole of
+// the decision, in both directions — publish it and it arrives, and the default is that a
+// module has not.
+func inheritedSettings(inherited map[string]json.RawMessage,
+	specs []models.SettingSpec) map[string]json.RawMessage {
+
+	out := map[string]json.RawMessage{}
+	for key, value := range inherited {
+		var spec *models.SettingSpec
+		for i := range specs {
+			if specs[i].Key == key {
+				spec = &specs[i]
+				break
+			}
+		}
+		if spec == nil {
+			continue
+		}
+		if spec.Items == nil || len(spec.Items.Identify) == 0 {
+			if spec.Secret || !spec.Inheritable {
+				continue
+			}
+			out[key] = value
+			continue
+		}
+
+		// A list: the rows, with the secret fields of each row left out. The row's identity
+		// is not a secret and is how a page matches the row above to the row it shows.
+		var rows []map[string]json.RawMessage
+		if err := json.Unmarshal(value, &rows); err != nil {
+			continue
+		}
+		// What does not go down: a secret, because it is write-only everywhere, and a
+		// field the module did not publish downward, which is every field by default.
+		//
+		// The row's own identity always does, and it is not an exception to the rule — it
+		// is not an answer. It is where the row is, and a page handed a row it cannot
+		// address cannot match it to the row it is showing, which is the same reason the
+		// name and namespace of an inherited row travel with "own".
+		stays := map[string]bool{}
+		for _, field := range spec.Items.Fields {
+			if field.Secret || !field.Inheritable {
+				stays[field.Key] = true
+			}
+		}
+		for _, field := range spec.Items.Identify {
+			stays[field] = false
+		}
+		kept := make([]map[string]json.RawMessage, 0, len(rows))
+		for _, row := range rows {
+			one := make(map[string]json.RawMessage, len(row))
+			for field, raw := range row {
+				if stays[field] {
+					continue
+				}
+				one[field] = raw
+			}
+			kept = append(kept, one)
+		}
+		if encoded, err := json.Marshal(kept); err == nil {
+			out[key] = encoded
+		}
+	}
+	return out
 }
 
 // ownSettings is what one scope decided: the effective values minus the ones that are

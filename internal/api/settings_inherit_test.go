@@ -361,16 +361,40 @@ func TestASettingsPageIsToldOnlyWhatItsOwnScopeDecided(t *testing.T) {
 		t.Errorf("the second place is called %v, want it called stage", stage["dogit_row_name"])
 	}
 
-	// And nothing anywhere in the answer is the instance's: not in "own", not in the
-	// raw rows, and not under a key this build does not even read.
+	// And nothing anywhere in the answer is a credential of the instance's: not in "own",
+	// not in the raw rows, and not in the section that carries what the levels above
+	// decided. That last part used to be enforced by the section not existing at all —
+	// every value from above was refused the page outright — and now it is enforced by
+	// what the module publishes downward: this module's manifest marks nothing as
+	// inheritable, so a field it did not declare as safe stays above. A page that was sent
+	// this instance's kubeconfig would be a page in every project that inherits a row of
+	// clusters, and a module author forgetting a mark is exactly how that happens.
 	body := recorder.Body.String()
-	for _, secret := range []string{"INSTANCE-KUBECONFIG", "STAGE-KUBECONFIG", "inherited"} {
+	for _, secret := range []string{"INSTANCE-KUBECONFIG", "STAGE-KUBECONFIG"} {
 		if strings.Contains(body, secret) {
 			t.Errorf("the answer carries %q: %s", secret, body)
 		}
 	}
 	if strings.Contains(body, `"effective"`) {
 		t.Errorf("the answer still carries the effective values: %s", body)
+	}
+
+	var above struct {
+		Inherited map[string][]map[string]any `json:"inherited"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &above); err != nil {
+		t.Fatalf("read the inherited section: %v", err)
+	}
+	for key, rows := range above.Inherited {
+		for _, row := range rows {
+			for field := range row {
+				if field == "dogit_row_id" || field == "name" {
+					continue
+				}
+				t.Errorf("the inherited %s carries %q, which this module never published: %v",
+					key, field, row)
+			}
+		}
 	}
 }
 

@@ -240,6 +240,20 @@ type SettingSpec struct {
 	// Secret marks a value that is write-only: it is stored but never returned.
 	Secret bool `json:"secret,omitempty"`
 
+	// Inheritable marks a value that may be sent to the levels below the one that wrote it.
+	//
+	// False by default, and the default is the safe one: a value stays where it was written
+	// unless the module says otherwise. A page below is a place fewer people may look — a
+	// project's settings are readable by anybody who can read the project — so what arrives
+	// there is what the module has deliberately published downward, and a credential is
+	// something a module keeps to itself.
+	//
+	// The alternative, sending everything above and marking the credentials, is one
+	// forgotten mark away from handing a cluster's keys to every project that inherits a
+	// row of clusters. A module author should not have to know that a field called
+	// kubeconfig is a credential for the rule to hold.
+	Inheritable bool `json:"inheritable,omitempty"`
+
 	// Items describes the fields of one entry when the type is "list".
 	//
 	// It exists because a list is the only setting whose value has fields of its own,

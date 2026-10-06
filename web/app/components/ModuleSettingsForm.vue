@@ -108,7 +108,8 @@ function asString(value: unknown): string {
  * therefore not an empty value — it is one somebody else decided, and the field says so
  * in its placeholder rather than pretending to be blank.
  */
-function fill(answer: { own?: Record<string, unknown> }) {
+function fill(answer: { own?: Record<string, unknown>; inherited?: Record<string, unknown> }) {
+  inheritedValues.value = answer.inherited ?? {}
   const next: Record<string, unknown> = {}
   for (const spec of props.module.manifest?.settings ?? []) {
     const stored = answer.own?.[spec.key]
@@ -354,7 +355,7 @@ function entriesOf(value: unknown): SettingEntry[] {
 async function load() {
   error.value = ''
   try {
-    const answer = await api.get<{ own?: Record<string, unknown> }>(
+    const answer = await api.get<{ own?: Record<string, unknown>; inherited?: Record<string, unknown> }>(
       `/modules/${props.module.id}/settings?${scopeQuery.value}`,
     )
     fill(answer)
@@ -606,6 +607,52 @@ function inheritedNow(spec: SettingSpec, row: SettingEntry, key: string): boolea
   return !(key in row)
 }
 
+/**
+ * What the level above decided for one field of this row.
+ *
+ * Shown, and not written. A page that shows nothing where a place is configured says
+ * nothing, and a reader who cannot see the value has no way to tell an unset field from one
+ * that is already right — which is how a place ends up given a namespace it did not need.
+ *
+ * Shown as a placeholder rather than as the field's value, because that is what it is: a
+ * value this scope has not decided, which typing over replaces and leaving alone keeps.
+ * Nothing here goes into what a save sends — that is still built from what this scope
+ * decided, so reading a value in cannot turn into writing it down.
+ */
+function inheritedOf(spec: SettingSpec, row: SettingEntry, key: string): string {
+  if (props.scope === 'instance') return ''
+  if (key in row) return ''
+  return asString(inheritedField(spec, row, key))
+}
+
+/** The row the level above holds that this row is, and the field of it that was asked for. */
+function inheritedField(spec: SettingSpec, row: SettingEntry, key: string): unknown {
+  const above = entriesOf(inheritedValues.value[spec.key])
+  const id = typeof row.dogit_row_id === 'string' ? row.dogit_row_id : ''
+  const name = asString(row.dogit_row_name || '').trim() ||
+    asString(row[spec.items?.identify?.[0] ?? '']).trim()
+
+  for (const one of above) {
+    const theirId = typeof one.dogit_row_id === 'string' ? one.dogit_row_id : ''
+    if (id && theirId && id === theirId) return one[key]
+    if (name && asString(one[spec.items?.identify?.[0] ?? 'name'] ?? '').trim() === name) {
+      return one[key]
+    }
+  }
+  return undefined
+}
+
+/**
+ * Whether a registry field is showing what came from above.
+ *
+ * A field the level above decided and this scope has not is drawn in the dropdown as the
+ * address it is, marked as inherited, and picked — so the reader sees where the images come
+ * from without the form pretending this scope decided it.
+ */
+function registryInherited(spec: SettingSpec, row: SettingEntry, field: SettingSpec): string {
+  return inheritedOf(spec, row, field.key)
+}
+
 function setField(spec: SettingSpec, row: SettingEntry, key: string, event: Event) {
   const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
   row[key] = target.value
@@ -625,6 +672,15 @@ function toggleBool(row: SettingEntry, key: string) {
 function inheritedNowBool(row: SettingEntry, key: string): boolean {
   return !(key in row)
 }
+
+/**
+ * What the levels above decided, kept apart from what this scope decided.
+ *
+ * Two maps and not one on purpose: a value written into `values` is a decision, and what a
+ * save sends is built from `values`. Mixing the two would let a reader who changed nothing
+ * save somebody else's answer as their own.
+ */
+const inheritedValues = ref<Record<string, unknown>>({})
 
 /** What the core sends back for a secret it holds rather than returns. */
 const secretMask = '********'
@@ -831,6 +887,14 @@ function declaresRegistryField(specs: SettingSpec[]): boolean {
   )
 }
 
+/** What a text field shows when it holds nothing: the value from above, if there is one. */
+function inheritedPlaceholder(spec: SettingSpec, row: SettingEntry, field: SettingSpec): string {
+  const fromAbove = inheritedOf(spec, row, field.key)
+  if (fromAbove) return `${fromAbove} — decided above`
+  if (inheritedNow(spec, row, field.key)) return 'inherited'
+  return field.default !== undefined ? String(field.default) : ''
+}
+
 /**
  * What a registry field offers, in the order a reader wants them.
  *
@@ -847,15 +911,23 @@ function declaresRegistryField(specs: SettingSpec[]): boolean {
  */
 const otherRegistryChoice = 'dogit:another-registry'
 
-function registryOptions(value: string): { value: string; label: string }[] {
+function registryOptions(value: string, fromAbove = ''): { value: string; label: string }[] {
   const chosen = value.trim()
   const options = [
-    { value: '', label: '— the registry this instance runs —' },
+    { value: '', label: '— by default: the registry the image was pushed to —' },
     ...registries.value.map((reg) => ({
       value: reg.url,
       label: reg.name ? `${reg.name} — ${reg.url}` : reg.url,
     })),
   ]
+
+  // What this place pulls from, decided above. Offered before everything else and marked,
+  // because it is the answer the deployment runs with right now: a reader who opens this
+  // form has to be able to see it without going to the module's page to find out.
+  const inherited = fromAbove.trim()
+  if (inherited !== '') {
+    options.unshift({ value: inherited, label: `${inherited} — decided above` })
+  }
 
   const known = options.some((option) => option.value === chosen)
   if (chosen !== '' && !known) {
@@ -888,7 +960,10 @@ function registryTyping(spec: SettingSpec, index: number | string, field: Settin
 
 /** What the dropdown shows: the address being typed, or whatever the row holds. */
 function registryShown(spec: SettingSpec, row: SettingEntry, index: number, field: SettingSpec): string {
-  return registryTyping(spec, index, field) ? otherRegistryChoice : asString(row[field.key])
+  if (registryTyping(spec, index, field)) return otherRegistryChoice
+  const own = asString(row[field.key]).trim()
+  if (own !== '') return own
+  return inheritedOf(spec, row, field.key) || own
 }
 
 /** The same open-box state for a registry kept at the top level rather than per place. */
@@ -920,6 +995,17 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
   const stillTyping = { ...typingRegistry.value }
   delete stillTyping[key]
   typingRegistry.value = stillTyping
+
+  // Picking the address that came from above is picking "not here": the form must not turn
+  // a reader reading the current value into a decision they did not mean to make, and a row
+  // that saves an answer equal to the one above is a row that has decided nothing and says
+  // it has.
+  const fromAbove = inheritedOf(spec, row, field.key)
+  const picked = (event.target as HTMLSelectElement).value
+  if (fromAbove !== '' && picked === fromAbove.trim() && !(field.key in row)) {
+    row[field.key] = ''
+    return
+  }
   setField(spec, row, field.key, event)
 }
 </script>
@@ -1078,7 +1164,7 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
                   @change="chooseRegistry(spec, row, index, field, $event)"
                 >
                   <option
-                    v-for="option in registryOptions(asString(row[field.key]))"
+                    v-for="option in registryOptions(asString(row[field.key]), inheritedOf(spec, row, field.key))"
                     :key="option.value"
                     :value="option.value"
                   >
@@ -1117,9 +1203,10 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
                 :value="shownValue(spec, row, field.key)"
                 @input="setField(spec, row, field.key, $event)"
                 :type="field.secret ? 'password' : 'text'"
-                :placeholder="inheritedNow(spec, row, field.key)
-                  ? 'inherited'
-                  : (field.default !== undefined ? String(field.default) : '')"
+                :title="inheritedNow(spec, row, field.key)
+                  ? 'decided above, not here — type to decide it here'
+                  : ''"
+                :placeholder="inheritedPlaceholder(spec, row, field)"
               />
             </div>
             <div class="setting-entry-actions">
