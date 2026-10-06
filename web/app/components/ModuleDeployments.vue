@@ -645,6 +645,10 @@ const verdict = computed<{ tone: 'working' | 'ok' | 'bad'; word: string; cls: st
     return { tone: 'working', word: 'deploying', cls: 'badge-warning' }
   }
   if (last.state === 'abandoned') return { tone: 'bad', word: 'abandoned', cls: 'badge-red' }
+  // The edge follows the run, not the badge: a red "failed" under a green edge is two
+  // answers to one question, and the edge is what is read first — from across a page,
+  // and from the row above, where the dot repeats this same colour.
+  if (last.state === 'failed') return { tone: 'bad', word: 'failed', cls: 'badge-red' }
   return { tone: 'ok', word: last.state || 'unknown', cls: badgeClass(last.state) }
 })
 
@@ -1263,15 +1267,22 @@ watch(() => props.module.id, load)
           <span class="spacer" />
           <!-- How long, and how long ago. The same two facts in every state: a clock
                that appears only while something is moving teaches people to look
-               elsewhere the moment it stops. While it runs the seconds count; after it
-               the ends are both given, because the length of an operation is what
-               makes a slow one worth noticing. -->
+               elsewhere the moment it stops. While it runs the seconds count. -->
           <span
             v-if="runningFor"
             class="muted small mono"
             title="how long this has been going"
           >{{ runningFor }}</span>
-          <span v-else-if="whenRun" class="muted small" :title="whenRunExact">{{ whenRun }}</span>
+          <!-- After it, the ends are given here only where nothing above already says
+               them. On a place's card the row that names the place carries "ran … , took
+               …" and its dot, and saying it a second time below squeezes out the tags
+               and the version the card is about. Drawn for a project on the module's own
+               page there is no such row above, so the card says it itself. -->
+          <span
+            v-else-if="!scopedCluster && whenRun"
+            class="muted small"
+            :title="whenRunExact"
+          >{{ whenRun }}</span>
         </div>
 
         <!-- Live while a run is under way, and still here afterwards: the list is

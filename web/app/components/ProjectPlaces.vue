@@ -22,6 +22,8 @@
  * rewrite the other's answer.
  */
 import type { ModuleRow } from '~/types/module'
+import { formatDuration, timeAgo } from '~/utils/format'
+import { onRewake } from '~/lib/eventSocket'
 
 const props = defineProps<{
   projectId: string
@@ -57,6 +59,17 @@ interface Place {
 }
 
 const places = ref<Place[]>([])
+
+/**
+ * What last ran in each place, as the module reports it.
+ *
+ * Asked for per place rather than once for the project: a page of places shows one
+ * card, and a card for one place cannot answer for the others. One small request per
+ * place is the price of every row on the page carrying its own answer, and the answer
+ * comes from the same place the card would have asked — so the row and the card beside
+ * it cannot disagree about the same deployment.
+ */
+const runs = ref<Record<string, { state: string; started_at?: string; finished_at?: string; duration_ms?: number }>>({})
 /** The same rows as they are stored at the levels above, keyed by name. */
 const inherited = ref<Record<string, Record<string, unknown>>>({})
 const { add: notify } = useNotifyPool()
@@ -64,6 +77,14 @@ const { add: notify } = useNotifyPool()
 const loading = ref(true)
 const saving = ref('')
 const error = ref('')
+
+/** One deployment, as the module's history reports it. */
+interface Run {
+  state: string
+  started_at?: string
+  finished_at?: string
+  duration_ms?: number
+}
 
 /** The name of the place being added, and whether the form for it is open. */
 const adding = ref(false)
@@ -122,6 +143,84 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * Reads what last ran in each place on this page.
+ *
+ * One request per place, and only for the places on the page. A place with no
+ * deployment at all is left with no entry rather than an empty one, so that its row
+ * shows nothing rather than a claim about a deployment that never happened.
+ */
+async function loadRuns() {
+  const target = props.module.kind.split(':')[1] ?? ''
+  const answers = await Promise.all(places.value.map(async (place) => {
+    const query = new URLSearchParams({
+      target,
+      page: '1',
+      per_page: '1',
+      cluster: place.name,
+      namespace: place.namespace,
+    })
+    const answer = await api.get<{ deployments?: Run[] }>(
+      `/projects/${props.projectId}/deployments?${query}`,
+    )
+    return [place.name, answer.deployments?.[0]] as const
+  }))
+  const found: Record<string, Run> = {}
+  for (const [name, run] of answers) if (run) found[name] = run
+  runs.value = found
+}
+
+/** The clock, read every half minute so that "3 minutes ago" does not stand still. */
+const tick = ref(Date.now())
+let ticker: ReturnType<typeof setInterval> | undefined
+onMounted(() => { ticker = setInterval(() => { tick.value = Date.now() }, 30_000) })
+onUnmounted(() => clearInterval(ticker))
+
+/**
+ * The one line a row carries about its last deployment.
+ *
+ * The same words the card under it uses, because it is the same fact: when the last run
+ * was and how long it took. A row that said it more briefly than the card would be two
+ * answers to one question, and the row is the one read first.
+ */
+function ranAt(place: Place): string {
+  void tick.value
+  const run = runs.value[place.name]
+  if (!run?.started_at) return ''
+  const when = timeAgo(run.started_at)
+  if (!when) return ''
+  if (!run.finished_at) return `started ${when}, still going`
+  const took = formatDuration(run.duration_ms ?? spanOf(run))
+  return took ? `ran ${when}, took ${took}` : `ran ${when}`
+}
+
+/** How long it took, from its own two ends when it did not say. */
+function spanOf(run: Run): number | undefined {
+  if (!run.started_at || !run.finished_at) return undefined
+  const from = new Date(run.started_at).getTime()
+  const to = new Date(run.finished_at).getTime()
+  return Number.isNaN(from) || Number.isNaN(to) ? undefined : Math.max(0, to - from)
+}
+
+/**
+ * The row's own colour, and what it says.
+ *
+ * The same three words and the same three colours as the edge of the card below it,
+ * from the same run: green for one that ended well, yellow for one going on, red for
+ * one that did not, and grey for a place nothing has been deployed to yet. It repeats
+ * what the edge says on purpose — the edge is inside a fold, and a list of places has
+ * to be readable without opening any of them.
+ */
+function stateTone(place: Place): { tone: string; word: string } {
+  const run = runs.value[place.name]
+  if (!run) return { tone: 'unknown', word: 'nothing deployed here yet' }
+  const word = run.state || 'unknown'
+  if (word === 'running') return { tone: 'working', word: 'deploying' }
+  if (word === 'succeeded') return { tone: 'ok', word: 'the last deployment ended well' }
+  if (word === 'failed' || word === 'abandoned') return { tone: 'bad', word: `the last deployment ${word}` }
+  return { tone: 'unknown', word: `the last deployment ${word}` }
 }
 
 /**
@@ -227,8 +326,41 @@ async function addPlace() {
   }
 }
 
-onMounted(load)
-watch(() => props.module.id, load)
+/**
+ * What each place last ran is part of what this list is: a row that cannot say how its
+ * last deployment went is a row somebody has to open to find out. Read with the places,
+ * and again whenever the socket comes back — a page that was blind while a deployment
+ * ran must not go on showing what was true before it.
+ */
+async function loadEverything() {
+  await load()
+  try {
+    await loadRuns()
+  } catch {
+    // A row without its state is a row without a dot; it is not a page that has failed.
+  }
+}
+
+onMounted(loadEverything)
+watch(() => props.module.id, loadEverything)
+onRewake(() => {
+  void loadEverything()
+})
+
+// A dot that only changes when the page is opened is a dot about the past. Read again
+// when something happens to a place, and not on every line of it: a rollout says where
+// it has got several times a second, and the answer does not change that often.
+let runsSoon: ReturnType<typeof setTimeout> | undefined
+watchEvents({
+  kinds: ['deploy.history', 'deploy.operation'],
+  project: () => props.projectPath,
+  onEvent: () => {
+    clearTimeout(runsSoon)
+    runsSoon = setTimeout(() => {
+      void loadRuns().catch(() => {})
+    }, 800)
+  },
+})
 </script>
 
 <template>
@@ -256,64 +388,86 @@ watch(() => props.module.id, load)
          name would close the fold and lose the tab somebody was on. -->
     <details v-for="(place, index) in places" :key="place.id ?? place.name" class="place">
       <summary class="place-head">
-        <span class="place-name mono">{{ place.name }}</span>
-        <span v-if="place.namespace" class="muted small">{{ place.namespace }}</span>
+        <!-- Three things on one line, and three places for them: what this place is
+             called and whose decision it is, the two answers this project has about it,
+             and how its last deployment went. The switches sit in the middle because
+             they are what the row is for, and the row's name and its last run are the
+             two facts either side of them. -->
+        <span class="place-leading">
+          <span class="place-name mono">{{ place.name }}</span>
+          <span v-if="place.namespace" class="muted small">{{ place.namespace }}</span>
 
-        <!-- Whose place this is, said once, where the place is named. A page that cannot
-             answer "whose setting is this" is a page nobody will trust enough to switch
-             anything off in — and the answer belongs beside the two switches that are
-             this project's own answers about it. -->
-        <span class="badge place-origin" :class="{ ours: place.ours }">
-          {{ place.ours ? 'changed here' : 'inherited' }}
+          <!-- Whose place this is, said once, where the place is named. A page that cannot
+               answer "whose setting is this" is a page nobody will trust enough to switch
+               anything off in. -->
+          <span class="badge place-origin" :class="{ ours: place.ours }">
+            {{ place.ours ? 'changed here' : 'inherited' }}
+          </span>
         </span>
 
-        <!-- The two answers this project has about this place, in the row that names it,
-             so that a list of places can be read without opening any of them. Clicking
-             one saves it at once; clicking the row itself only opens or closes. -->
-        <label
-          class="switch-pair"
-          @click.stop
-          title="Autodeploy: whether a push or a tag may deploy to this place by itself. Off means the run still happens and the image is still built — only the deployment here waits for somebody to start it by hand."
-        >
-          <button
-            class="switch"
-            :class="{ on: place.autodeploy }"
-            type="button"
-            role="switch"
-            aria-label="Autodeploy here"
-            :aria-checked="place.autodeploy"
-            :disabled="saving === place.name || !props.canManage || !place.inUse"
-            @click.stop="flip(place, 'autodeploy')"
+        <!-- The two answers this project has about this place, in the row that names the
+             place, so that a list of places can be read without opening any of them.
+             Clicking one saves it at once; clicking the row itself only opens or closes. -->
+        <span class="place-switches">
+          <label
+            class="switch-pair"
+            @click.stop
+            title="Autodeploy: whether a push or a tag may deploy to this place by itself. Off means the run still happens and the image is still built — only the deployment here waits for somebody to start it by hand."
           >
-            <span class="knob" />
-          </button>
-          <span class="switch-name">Autodeploy</span>
-        </label>
+            <button
+              class="switch"
+              :class="{ on: place.autodeploy }"
+              type="button"
+              role="switch"
+              aria-label="Autodeploy here"
+              :aria-checked="place.autodeploy"
+              :disabled="saving === place.name || !props.canManage || !place.inUse"
+              @click.stop="flip(place, 'autodeploy')"
+            >
+              <span class="knob" />
+            </button>
+            <span class="switch-name">Autodeploy</span>
+          </label>
 
-        <!-- This one's label is its state, ON or OFF, and it sits where the other
-             labels sit: a switch with a name on its left and a switch with a name on its
-             right is two rows that read as one, and every switch on the page should be
-             found by looking in the same place for its name. What the switch answers —
-             may this project deploy here at all — is in its tooltip. -->
-        <label
-          class="switch-pair"
-          @click.stop
-          title="In use: whether this project may deploy here at all. Off leaves the place configured on the module's own page and untouched here — switched off for this project, not deleted."
-        >
-          <button
-            class="switch"
-            :class="{ on: place.inUse }"
-            type="button"
-            role="switch"
-            aria-label="In use here"
-            :aria-checked="place.inUse"
-            :disabled="saving === place.name || !props.canManage"
-            @click.stop="flip(place, 'inUse')"
+          <!-- This one's label is its state, ON or OFF, and it sits where the other
+               labels sit: a switch with a name on its left and a switch with a name on
+               its right is two rows that read as one, and every switch on the page
+               should be found by looking in the same place for its name. What the switch
+               answers — may this project deploy here at all — is in its tooltip. -->
+          <label
+            class="switch-pair"
+            @click.stop
+            title="In use: whether this project may deploy here at all. Off leaves the place configured on the module's own page and untouched here — switched off for this project, not deleted."
           >
-            <span class="knob" />
-          </button>
-          <span class="switch-state">{{ place.inUse ? 'ON' : 'OFF' }}</span>
-        </label>
+            <button
+              class="switch"
+              :class="{ on: place.inUse }"
+              type="button"
+              role="switch"
+              aria-label="In use here"
+              :aria-checked="place.inUse"
+              :disabled="saving === place.name || !props.canManage"
+              @click.stop="flip(place, 'inUse')"
+            >
+              <span class="knob" />
+            </button>
+            <span class="switch-state">{{ place.inUse ? 'ON' : 'OFF' }}</span>
+          </label>
+        </span>
+
+        <!-- How the last deployment here went, in words and in one dot. The dot repeats
+             the colour of the card's edge on purpose: the edge is inside a fold, and a
+             list of places has to be read without opening any of them. -->
+        <span class="place-trailing">
+          <span v-if="ranAt(place)" class="muted small place-ran">{{ ranAt(place) }}</span>
+          <span
+            class="place-state"
+            :class="stateTone(place).tone"
+            :title="stateTone(place).word"
+            :aria-label="stateTone(place).word"
+            role="img"
+          />
+        </span>
       </summary>
 
       <div class="place-body">
@@ -400,14 +554,84 @@ watch(() => props.module.id, load)
    of different heights — a name, a badge, a switch and two labels — and centring them
    puts four different lines through the middle of one row. Their feet on one line is what
    makes a row of mixed things read as one row. */
+/* A grid of three, because that is what the row is: a name on the left, the two
+   switches in the middle, the last run on the right, and nothing in the row that has
+   to be measured to find its place. Every cell is centred on the same line — the row
+   is one line of text with a switch and a dot in it, and a dot that sits a few pixels
+   below its own sentence reads as belonging to the row underneath it. */
 .place-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 16px;
   padding: 12px 14px;
   cursor: pointer;
   list-style: none;
+}
+
+/* Name, namespace and the badge that says whose place this is: the left third, and it
+   may be as long as it likes — the switches do not move when it is. */
+.place-leading {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+/* The two switches, in the middle of the row, because they are what the row is for. */
+.place-switches {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 18px;
+}
+
+/* The last run and its dot, hard against the right edge, and as wide as the right
+   third so that the dot is the same distance from the edge on every row. */
+.place-trailing {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.place-ran {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * The state of the last deployment, as one dot: the same three colours as the card's
+ * edge, because it is the same answer. Big enough to be seen from the end of a list,
+ * quiet enough that a row of them does not shout.
+ */
+.place-state {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  align-self: center;
+  border-radius: 50%;
+  background: var(--border-strong, #30363d);
+}
+
+.place-state.ok { background: var(--green); }
+.place-state.working { background: var(--yellow); }
+.place-state.bad { background: var(--red); }
+
+/* Narrow places: the switches keep their place in the middle and the row wraps under
+   it, rather than the three columns squeezing each other into unreadability. */
+@media (max-width: 900px) {
+  .place-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .place-switches {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-start;
+  }
 }
 
 .place-head::-webkit-details-marker {
@@ -416,6 +640,9 @@ watch(() => props.module.id, load)
 
 .place-name {
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .place-note {
