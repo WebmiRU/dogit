@@ -92,18 +92,22 @@ function countsIn(heard?: DeployProgress): { done: number; of: number } | null {
 
   // Pods on their way out, said as "7 pod(s) still running the previous image".
   //
-  // Seven is what is left, not what is done, so it is counted against the most there
-  // ever was: the number drains, and the bar fills as the old pods go. Without the
-  // peak every frame reads "0 of 7", "0 of 4", "0 of 1" and a bar that never moves,
-  // which is worse than no bar — it says the drain has not started while it is
-  // visibly under way.
+  // Seven is what is left, so it is counted against how many the workload has — which
+  // the module says in the same line, and which is the only number here that is not a
+  // leftover from whatever this page was watching before. Guessing it instead — taking
+  // the first leftover as the whole — is what made a three-pod workload say "0 of 4" and
+  // then "1 of 5": the first frame of a rollout sees one or two pods still up, so the
+  // bar's full length is that, and it can never be more.
   const draining = /(\d+)\s+pod\(s\)\s+still running/.exec(heard.message ?? '')
   if (draining) {
     const left = Number(draining[1])
+    if (heard.desired && heard.desired > 0) {
+      return { done: Math.max(0, heard.desired - left), of: heard.desired }
+    }
     const key = heard.phase
     const peak = Math.max(peaks.value[key] ?? 0, left)
     peaks.value = { ...peaks.value, [key]: peak }
-    return { done: peak - left, of: peak }
+    return { done: Math.max(0, peak - left), of: peak }
   }
 
   return null
@@ -111,6 +115,16 @@ function countsIn(heard?: DeployProgress): { done: number; of: number } | null {
 
 /** The most a draining phase has ever had left, so its bar can be counted forwards. */
 const peaks = ref<Record<string, number>>({})
+
+// Forgotten when the operation is over. Kept across one, and the next rollback inherits
+// the longest drain anybody has watched: a two-pod drain of yesterday is the full length
+// of today's bar, which fills to a quarter and stops.
+watch(
+  () => (props.seen ?? []).length,
+  (lines, had) => {
+    if (lines === 0 && had > 0) peaks.value = {}
+  },
+)
 
 /**
  * Where each step has got to.

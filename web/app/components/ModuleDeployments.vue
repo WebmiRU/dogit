@@ -59,7 +59,18 @@ const props = defineProps<{
    * it deployed, and the module knows what is there. Asked once for the whole page and
    * handed down, because the answer is per place and the page already has it.
    */
-  nowRunning?: { image: string; tags?: string[] } | null
+  nowRunning?: { image: string; tags?: string[]; pods: number; desired: number } | null
+  /**
+   * The image this place is being taken off, while a rollout takes one off.
+   *
+   * The other half of a rolling update: pods are on both images at once, and the one
+   * they are leaving is still serving traffic. Marking only the one being put on says
+   * half of what the cluster is doing, and the half that is missing is the one anybody
+   * watching a slow drain needs.
+   */
+  replacing?: string
+  /** How many pods are still on the image being taken off. */
+  replacingPods?: number
   /**
    * Whether to show what the repository says about where this goes.
    *
@@ -71,7 +82,19 @@ const props = defineProps<{
 }>()
 
 /** Said when this place's settings were written, so a list of places can redraw. */
-const emit = defineEmits<{ settingsChanged: [] }>()
+const emit = defineEmits<{
+  settingsChanged: []
+  /**
+   * What this card thinks of itself, for the row above to draw as its dot.
+   *
+   * Said rather than asked for: the row and the card answer the same question — is this
+   * place working — and read apart they come to disagree the moment one of them is a
+   * moment older than the other. A row with a grey dot beside a green frame leaves the
+   * reader deciding which of the two to believe, and both were drawn from facts about
+   * the same deployment.
+   */
+  state: [said: { tone: string; word: string }]
+}>()
 
 /** One page of the history, and what is left of it. */
 interface DeploymentsPage {
@@ -604,6 +627,17 @@ const idleProgress = computed<DeployProgress | null>(() => {
  */
 const running = ref<DeployProgress['deployment'] | null>(null)
 
+/**
+ * The image this card last saw going out to this place, kept after the operation ends.
+ *
+ * Kept because that is what the row's dot and its badges have to agree with once
+ * nothing is moving: a page that watched a rollout knows which image it left behind,
+ * and asking the module again — a request per deployment, for something it just said —
+ * is both a round trip the answer has already made and a page whose resting state is a
+ * second behind its own last event.
+ */
+const lastOut = ref<{ image: string; tags?: string[] } | null>(null)
+
 /** The row the module has opened and not yet closed, if there is one. */
 const newestRunning = computed(() =>
   deployments.value.find((one) => one.state === 'running') ?? null)
@@ -730,6 +764,11 @@ const verdict = computed<{ tone: 'working' | 'ok' | 'bad' | 'waiting'; word: str
 const stateBadge = computed(() => verdict.value.word)
 const stateBadgeClass = computed(() => verdict.value.cls)
 
+// To the row above, which draws it as a dot. Watched rather than sent at the moments
+// this card learns something: a verdict that is only sent when it is read is a verdict
+// the row cannot have.
+watch(verdict, (said) => emit('state', { tone: said.tone, word: said.word }), { immediate: true })
+
 /**
  * Whether this place is running this image right now.
  *
@@ -745,11 +784,60 @@ const stateBadgeClass = computed(() => verdict.value.cls)
  * what it is.
  */
 const runningImage = computed(() => {
+  // What this card watched going out, first: it is the freshest answer there is, and it
+  // was correct at the moment it was given.
+  if (lastOut.value?.image) return lastOut.value.image
+  // Then what the place says now, for a page that was opened after the fact.
   if (props.nowRunning?.image) return props.nowRunning.image
   const settled = deployments.value.find((one) =>
     one.state === 'succeeded' || one.state === 'reverted' || one.state === 'rolled_back')
   return settled?.image ?? ''
 })
+
+/**
+ * What the rollout under way says about the images, from the module's own lines.
+ *
+ * Read from the stream rather than asked for: during a rollout the answers are arriving
+ * many times a minute anyway, and a page that asks the module separately is a request
+ * behind the thing it is drawing — which is how "running 3/3" appeared only once the
+ * rollout was over, on a card that had been showing a dash the whole time.
+ */
+const liveSplit = computed(() => {
+  const image = running.value?.image
+  if (!image) return null
+
+  let ready = 0
+  let desired = 0
+  let previous = ''
+  let retiring = 0
+  for (const one of activeSeen.value) {
+    if (one.ready || one.desired) {
+      ready = one.ready || ready
+      desired = one.desired || desired
+    }
+    if (one.previous) {
+      previous = one.previous
+      retiring = one.retiring ?? retiring
+    }
+  }
+  if (!desired) return null
+  return { image, ready, desired, previous, retiring }
+})
+
+/**
+ * How many of this place's pods have stopped running the image it is being taken off.
+ *
+ * Counted forwards from what is left, against how many pods the place runs — the same
+ * arithmetic the step in the log does, so the badge and the bar say the same thing at
+ * the same moment. "Retiring now" on its own was true for the whole minute and could
+ * not be watched.
+ */
+const retiredDone = computed(() => {
+  const total = retiredTotal.value
+  const left = liveSplit.value ? liveSplit.value.retiring : (props.replacingPods ?? 0)
+  return total > 0 ? Math.max(0, total - left) : 0
+})
+const retiredTotal = computed(() => liveSplit.value?.desired || (props.nowRunning?.desired ?? 0))
 
 /**
  * Whether this image is the one this place is on, right now.
@@ -760,7 +848,26 @@ const runningImage = computed(() => {
  * brought back is an older row.
  */
 function isRunningImage(image: string | undefined): boolean {
-  return Boolean(image) && image === runningImage.value
+  if (!image) return false
+  if (liveSplit.value) return image === liveSplit.value.image
+  return image === runningImage.value
+}
+
+/** How many pods are on this image right now, of how many this place runs. */
+function runningPods(): { on: number; of: number } {
+  if (liveSplit.value) return { on: liveSplit.value.ready, of: liveSplit.value.desired }
+  if (lastOut.value) {
+    // The rollout this card watched end: it said how many pods were up on it, and that
+    // is a fact about a moment that has passed and does not need asking about again.
+    const said = [...activeSeen.value].reverse().find((one) => one.ready || one.desired)
+    if (said?.desired) return { on: said.ready ?? 0, of: said.desired }
+  }
+  return { on: props.nowRunning?.pods ?? 0, of: props.nowRunning?.desired ?? 0 }
+}
+
+/** The image this place is being taken off while a rollout takes one off. */
+function retiringImage(): string {
+  return liveSplit.value?.previous || (props.replacing ?? '')
 }
 
 /** The digest the run is applying, for the title attribute on the rows. */
@@ -1072,6 +1179,11 @@ function noteOperation(payload: Record<string, unknown>) {
     desired: Number(payload.desired ?? 0),
     step: Number(payload.step ?? 0),
     of: Number(payload.of ?? 0),
+    // What the rollout said about the image it is taking off, kept as it said it: the
+    // figures on this page during a rollout come from the module's own lines, and a
+    // figure read out of a sentence is a figure somebody has to keep correct.
+    previous: typeof payload.previous === 'string' && payload.previous ? payload.previous : undefined,
+    retiring: typeof payload.retiring === 'number' ? payload.retiring : undefined,
     finished: payload.finished === true,
     failed: payload.failed === true,
   }
@@ -1081,6 +1193,8 @@ function noteOperation(payload: Record<string, unknown>) {
   // from the first line rather than after the last one.
   if (payload.deployment && typeof payload.deployment === 'object') {
     running.value = payload.deployment as NonNullable<DeployProgress['deployment']>
+    const record = running.value
+    if (record?.image) lastOut.value = { image: record.image, tags: record.tags }
   }
 
   // The phase joins the list of those under way, or leaves it. A phase that has said
@@ -1653,11 +1767,41 @@ watch(() => props.module.id, load)
                     <span v-else class="muted">never deployed</span>
                   </td>
                   <td class="actions-col">
+                    <!-- Not gated on the row having a deployment of its own: an image
+                         that is being rolled out right now is the one this place is
+                         being put on, and its catalogue row has nothing recorded yet —
+                         no operations, no place, a dash in the last column. Gated on it,
+                         the one row the whole rollout is about was the one row with no
+                         numbers on it, and the figures appeared only once the
+                         deployment was written down and the page had read the list
+                         again. -->
                     <span
-                      v-if="image.live && isRunningImage(image.name)"
+                      v-if="isRunningImage(image.name)"
                       class="badge badge-green"
+                      :title="`${runningPods().on} of ${runningPods().of} pods are on this image right now`"
                     >
-                      running now
+                      <!-- Without the fraction when there is none to give: a line that
+                           carries no counts is the end of a rollout, and "0 of 0" is a
+                           claim about a place with no pods rather than a place with
+                           three. The words alone are then the whole of the answer. -->
+                      <template v-if="runningPods().of > 0">
+                        Running {{ runningPods().on }}/{{ runningPods().of }}
+                      </template>
+                      <template v-else>Running now</template>
+                    </span>
+                    <!-- Still up, and on its way out: neither "running here" nor
+                         "gone", which is why it is a colour of its own rather than a
+                         grey version of the first one. -->
+                    <!-- The drain, counted forwards like the log counts it: "retire 1 of
+                         3" is one old pod gone of three, which is the same figure the
+                         step under it is filling towards — and a badge that only says
+                         "retiring" cannot be watched, only noticed. -->
+                    <span
+                      v-else-if="image.live && retiringImage() && image.name === retiringImage()"
+                      class="badge badge-warning"
+                      :title="`${liveSplit?.retiring ?? props.replacingPods ?? 0} pod(s) are still on this image while the place is moved to another`"
+                    >
+                      Retire {{ retiredDone }}/{{ retiredTotal }}
                     </span>
                     <button
                       v-else-if="props.canManage && image.live"

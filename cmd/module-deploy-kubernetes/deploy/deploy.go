@@ -706,6 +706,12 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		Cluster:   target.Cluster,
 		Namespace: namespace,
 		Image:     target.Image,
+		// The names this image was published under when it was deployed here, so a page
+		// watching the rollback say which version is going back rather than a digest it
+		// has to look up. Taken from the deployment being reverted, which is where they
+		// were written down.
+		Tags:      target.Tags,
+		Commit:    target.Commit,
 		Workload:  workload,
 		State:     StateRunning,
 		Phase:     PhaseApply,
@@ -716,12 +722,60 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		return reverted, err
 	}
 
-	// Watching, as with a deploy: the pods are the progress.
-	stop, counted := d.watchRollout(ctx, Request{Progress: request.Progress, Rollout: workload,
+	// Watching, as with a deploy: the pods are the progress — and every line of it names
+	// the record it is about, so that a page can mark the image being put back from the
+	// first line rather than waiting for the end of the rollout to be told what it was
+	// watching. Sent without the record it has nothing to mark: the digits arrive with
+	// no image beside them, and a table of images does not move for the whole rollback.
+	// What it said, written down when it is over, as a deployment's is.
+	//
+	// A rollback that kept nothing left a page opened a minute later with no steps and
+	// no figures at all — the live lines exist only for somebody watching, and a record
+	// that does not carry them is a record that cannot answer "what did it do" to the
+	// person who comes to find out.
+	said := []LogLine{}
+	say := func(progress Progress) {
+		if progress.Message != "" {
+			said = append(said, LogLine{
+				Phase: progress.Phase, Message: progress.Message,
+				Step: progress.Step, Of: progress.Of,
+			})
+		}
+		if progress.Deployment == nil {
+			progress.Deployment = &reverted
+		}
+		// Through the helper, which tolerates a caller that asked for no narration at
+		// all — a rollback run from a test or a script still records what it did, and
+		// there being nobody watching is not a reason to stop.
+		report(request.Progress, progress)
+	}
+
+	stop, counted := d.watchRollout(ctx, Request{Progress: say, Rollout: workload,
 		Namespace: namespace, Image: target.Image})
 	rollout, err := d.client.SetImage(ctx, namespace, workload, target.Image, timeout)
+
+	// And then the old pods, which a rolling update sends away after the new ones are
+	// serving — the same wait a deployment makes, and for the same reason: stopping when
+	// the last new pod is ready cuts the watch off before the drain is reported, and the
+	// record of a rollback then ends with "one pod still running the previous image" and
+	// nothing that says it finished. Bounded, because removing a pod is the cluster's
+	// business and a finalizer left on one must not hang a rollback.
+	drainDeadline := time.Now().Add(drainGrace)
+	for {
+		_, _, retired := counted()
+		if err != nil || retired == 0 || time.Now().After(drainDeadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 	stop()
 	wanted, ready, retired := counted()
+	if final, cerr := d.client.Counts(ctx, namespace, workload, target.Image); cerr == nil {
+		wanted, ready = final.Desired, final.Ready
+	}
 	if err != nil {
 		failed, finishErr := d.finish(ctx, reverted, PhaseApply, StateFailed, err.Error())
 		if finishErr != nil {
@@ -730,24 +784,26 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		return failed, err
 	}
 	d.logf("put %s back on %s: %s", target.Image, workload, rollout.Reason)
-
-	report(request.Progress, Progress{Phase: StepApply, Message: fmt.Sprintf(
-		"%s now runs %s", workload, target.Image)})
-
-	// The rollback is a deployment like any other, and it rolled containers out like
-	// any other: its history row says so.
 	if err := d.history.Counts(ctx, reverted.ID, wanted, ready, retired); err != nil {
 		d.logf("record what the rollback rolled out: %v", err)
 	}
 
-	report(request.Progress, Progress{Phase: StepRollout, Ready: int(rollout.Ready),
-		Desired: int(rollout.Desired), Message: rollout.Reason})
+	report(say, Progress{Phase: StepApply, Message: fmt.Sprintf(
+		"%s now runs %s", workload, target.Image)})
+
+	// And that the drain is over, in the words the deploy path uses: a record whose last
+	// line is a count that is still going down has never said it finished.
+	report(say, Progress{Phase: StepRollout, Ready: wanted, Desired: ready,
+		Message: fmt.Sprintf("every pod is running the image again (%d of %d)", ready, wanted)})
 
 	reverted, err = d.finish(ctx, reverted, PhaseApply, StateReverted,
 		fmt.Sprintf("the image of deployment %s was put back on %s; a migration, a ConfigMap and "+
 			"anything else applied alongside were left as they are", request.ID, workload))
 	if err != nil {
 		return reverted, err
+	}
+	if err := d.history.Log(ctx, reverted.ID, said); err != nil {
+		d.logf("could not write down the rollback log: %v", err)
 	}
 	return reverted, nil
 }
@@ -764,6 +820,20 @@ type Progress struct {
 	// rather than three lines in a row with nothing to count.
 	Step int `json:"step,omitempty"`
 	Of   int `json:"of,omitempty"`
+	// Previous is what the pods being taken off are running, by digest, while a rollout
+	// has some to take off.
+	//
+	// Carried on the line rather than looked up afterwards because the line is what a
+	// page is watching: it arrives when the drain changes, it arrives from the module
+	// that watched the pods, and it names the image the step is about — so the same
+	// figure that says "one pod still on it" says which one. A page that has to ask the
+	// module what is there is a page that is a request behind the thing it is drawing.
+	Previous string `json:"previous,omitempty"`
+	// Retiring is how many pods are still on `Previous`, as a number rather than only as
+	// words. Sent so that a page can count the drain forwards — "retire 1 of 3" is a
+	// figure, and a figure is better off read from a field than guessed out of a
+	// sentence that is written for a person.
+	Retiring int `json:"retiring,omitempty"`
 	// Message is the sentence to show, in this module's words.
 	Message string `json:"message"`
 	// Ready and Desired are the pods, when this is about pods.
@@ -976,10 +1046,11 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) (func(), f
 				if counts.Ready != lastReady || counts.Desired != lastReadyDesired {
 					lastReady, lastReadyDesired = counts.Ready, counts.Desired
 					request.Progress(Progress{
-						Phase:   StepRollout,
-						Message: fmt.Sprintf("%d of %d running the new image", counts.Ready, counts.Desired),
-						Ready:   counts.Ready,
-						Desired: counts.Desired,
+						Phase:    StepRollout,
+						Message:  fmt.Sprintf("%d of %d running the new image", counts.Ready, counts.Desired),
+						Ready:    counts.Ready,
+						Desired:  counts.Desired,
+						Previous: counts.OldImage,
 					})
 				}
 
@@ -992,9 +1063,20 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) (func(), f
 				// last thing anybody reads about this phase is a count that is still
 				// going down, which never becomes the sentence that says it finished.
 				if counts.OldUp > 0 {
+					// How many there are altogether, not only how many are left.
+					//
+					// Without it a page watching this drain has nothing to count
+					// against: it takes the first number it hears as the whole, so a
+					// rollout that began with two pods still up is "0 of 2" for ever,
+					// with a bar that fills to the end while a third pod is still
+					// serving. The number of pods is the one this step is about.
 					request.Progress(Progress{
-						Phase:   StepRetire,
-						Message: fmt.Sprintf("%d pod(s) still running the previous image", counts.OldUp),
+						Phase:    StepRetire,
+						Message:  fmt.Sprintf("%d pod(s) still running the previous image", counts.OldUp),
+						Ready:    counts.Ready,
+						Desired:  counts.Desired,
+						Previous: counts.OldImage,
+						Retiring: counts.OldUp,
 					})
 					return
 				}

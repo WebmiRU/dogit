@@ -184,6 +184,16 @@ export interface DeployProgress {
   /** Pods ready and wanted, while a rollout is happening. */
   ready?: number
   desired?: number
+  /**
+   * The image being taken off, and how many pods are still on it.
+   *
+   * Said by the module as the rollout goes, so that a page marks the image that is
+   * leaving while it is still there — a table of images refreshed by asking a question
+   * during a rollout is a request behind the thing it is drawing, and answers late
+   * enough to be wrong about which one is which.
+   */
+  previous?: string
+  retiring?: number
   /** Which of the things this phase had to do, and which it is on. */
   step?: number
   of?: number

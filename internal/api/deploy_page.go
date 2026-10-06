@@ -509,34 +509,21 @@ func (s *Server) carryOutRevert(ctx context.Context, module *models.Integration,
 	project *models.Project, body []byte, request revertRequest, user *models.User) {
 
 	answer, err := s.callDeployModuleStream(ctx, module, "/revert", body, func(line []byte) {
-		// Each line the module sends is relayed as an event, so a page watching the
-		// history sees the pods coming up rather than nothing for two minutes and then
-		// a state change.
-		var progress struct {
-			Phase   string `json:"phase"`
-			Message string `json:"message"`
-			Ready   int    `json:"ready"`
-			Desired int    `json:"desired"`
-			Failed  bool   `json:"failed"`
+		// The module's line, whole, with the one thing it cannot know added: which
+		// place this is about. A revert is somebody choosing a place and asking for an
+		// image there, and it is that place's card that has to show it happening —
+		// without this the lines belong to no place, and a card about one place shows
+		// nothing while its own workload is being changed, which is a log that stops
+		// mid-run with no failure anywhere.
+		place := map[string]any{
+			"cluster": request.Cluster, "namespace": request.Namespace,
+			"workload": request.Workload,
 		}
-		if json.Unmarshal(line, &progress) != nil || progress.Message == "" {
+		if len(bytes.TrimSpace(line)) == 0 {
 			return
 		}
-		s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, map[string]any{
-			"phase": progress.Phase, "message": progress.Message,
-			"ready": progress.Ready, "desired": progress.Desired,
-			// Which place this is about, which is the whole of what the core knows
-			// about it: a revert is somebody choosing a place and asking for an image
-			// there, and it is that place's card that has to show it happening. Sent
-			// without this, the lines belong to no place, and a card about one place
-			// shows nothing at all while its own workload is being changed — a log that
-			// stops mid-run with no failure anywhere, which is the one thing a log must
-			// never be.
-			"deployment": map[string]any{
-				"cluster": request.Cluster, "namespace": request.Namespace,
-				"workload": request.Workload,
-			},
-		})
+		s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation,
+			relayOf(line, 0, place))
 	})
 	if err != nil {
 		s.log.Warn("a rollback did not finish", "project", project.Path,

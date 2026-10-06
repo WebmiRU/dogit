@@ -333,22 +333,15 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 
 				// The operation's own event. Separate from the history below because
 				// this arrives many times a minute and that arrives once.
-				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, map[string]any{
-					"job_id":   job.ID,
-					"phase":    progress.Phase,
-					"message":  progress.Message,
-					"ready":    progress.Ready,
-					"desired":  progress.Desired,
-					"step":     progress.Step,
-					"of":       progress.Of,
-					"finished": progress.Finished,
-					// The record, so a page watching has the image, the tags and the
-					// workload from the first line of the stream rather than from the
-					// history written at the end. Every line carries it: which record
-					// this is never changes, and a client that had to notice the one
-					// line carrying it would have a race with its own first paint.
-					"deployment": progress.Deployment,
-				})
+				//
+				// The module's line, whole. Not the fields this build happens to know
+				// about: a module says what is happening — which pods are on which
+				// image, how many of each, what it is about to do next — and a core
+				// that picks the fields out of it is a core that has to be taught a new
+				// field every time a module learns to say something. What belongs here
+				// is routing, not editing: who is allowed to hear it, and where it goes.
+				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation,
+					relayOf([]byte(trimmed), job.ID, progress.Deployment))
 
 				if stepDelay > 0 {
 					time.Sleep(stepDelay)
@@ -401,10 +394,42 @@ type deployProgress struct {
 	// arrow stays on a step whose work finished, and nobody can say when it did.
 	Finished bool `json:"finished"`
 	Done     bool `json:"done"`
+	// Previous is what the pods being taken off are running, while a rollout has some to
+	// take off. Read here only because it is read by nothing — the line below is relayed
+	// whole — and the field is named so that a reader of this struct finds it.
+	Previous string `json:"previous,omitempty"`
 	// Deployment is the record the module is writing. Carried on every line, not only
 	// on the last one: a page that gets it once at the end has to spend the whole
 	// rollout with an empty row, which is exactly when somebody is reading it.
 	Deployment map[string]any `json:"deployment,omitempty"`
+}
+
+// relayOf is the module's own line, as an event, with the two things the core knows and
+// the module cannot: which job this is about, and which record it is about — the latter
+// carried on every line so that a page listening from the first of them has the image
+// and the workload from the first, rather than a race with its own first paint.
+func relayOf(line []byte, jobID int64, record map[string]any) map[string]any {
+	payload := map[string]any{}
+	if len(line) > 0 {
+		// A line that is not an object is the module's own to explain; it is relayed as
+		// a message so that a page is not left waiting for a field that never arrives.
+		_ = json.Unmarshal(line, &payload)
+	}
+	if len(payload) == 0 {
+		payload["message"] = strings.TrimSpace(string(line))
+	}
+	payload["job_id"] = jobID
+	// The module's own record wins. What the core adds is a place to hang it on, for the
+	// operations where the module has no record to send — a rollback's own lines carry
+	// theirs — and overwriting a record that says which image is going back, with one that
+	// says only which place it is going back to, is how a page watched a rollback for a
+	// minute with no image to mark.
+	if record != nil {
+		if _, said := payload["deployment"]; !said {
+			payload["deployment"] = record
+		}
+	}
+	return payload
 }
 
 // progressLine is one step as it goes into the job's log.

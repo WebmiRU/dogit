@@ -116,6 +116,11 @@ type Client interface {
 	// cluster still has any idea what ran before.
 	SetImage(ctx context.Context, namespace, name, image string, timeout time.Duration) (Rollout, error)
 
+	// RunningImages is what a workload's pods are actually running, counted by digest —
+	// more than one answer while a rollout is under way, and the Deployment's template
+	// is only the one it is heading for.
+	RunningImages(ctx context.Context, namespace, name string) ([]ImageCount, error)
+
 	// RunningImage is what a workload's containers are running right now.
 	//
 	// Asked on its own so that a refusal can be made before an answer begins: a caller
@@ -622,10 +627,14 @@ func (c *clusterClient) RunningImage(ctx context.Context, namespace, name string
 // pods are usually still terminating when the new ones report ready, and somebody
 // watching wants to see that drain rather than be told it finished.
 type RolloutCounts struct {
-	Ready       int
-	Desired     int
-	OldUp       int
-	OldScaledTo int
+	Ready   int
+	Desired int
+	OldUp   int
+	// OldImage is what the pods being taken off are running, by digest, when they agree
+	// on it. Empty when nothing is being taken off, and also when the pods being retired
+	// are on more than one image — which is a real state during a rollback onto a version
+	// that was itself a rollback — and a number for two images is not a fact.
+	OldImage string
 }
 
 // Counts reads a workload's pods and says how far along it is.
@@ -646,7 +655,9 @@ func (c *clusterClient) Counts(ctx context.Context, namespace, name, image strin
 	}
 	counts := RolloutCounts{Desired: int(desired), Ready: int(deployment.Status.ReadyReplicas)}
 
-	pods, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	pods, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelectorOf(deployment),
+	})
 	if err != nil {
 		// Not knowing is not knowing; the counts read so far are still true.
 		return counts, nil
@@ -657,14 +668,115 @@ func (c *clusterClient) Counts(ctx context.Context, namespace, name, image strin
 		if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
 			continue
 		}
+		// A pod on its way out is not counted. It is still running its image and it is
+		// still counted by nothing else that matters: the cluster takes terminating pods
+		// out of a workload's available replicas the moment it starts deleting them.
+		// Counted here, a place finished rolling out kept announcing that the image it
+		// had just replaced was still there — for as long as the pod took to go, which
+		// is a minute of a badge that has nothing left to say.
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
 
+		// What the container is running, not what its spec was written with.
+		//
+		// The two differ exactly when it matters: a pod of the new ReplicaSet whose
+		// image has not been pulled yet is on the old one, and a pod somebody changed
+		// by hand is on neither. Counted from the spec, a rollout reports the old pods
+		// gone while a third of the place is still serving the old image — and the
+		// number of them goes up and down as surge pods come and go, which is how a
+		// three-pod workload came to say it was retiring five.
 		for _, container := range pod.Spec.Containers {
-			if container.Image != image {
+			running := container.Image
+			for _, status := range pod.Status.ContainerStatuses {
+				if status.Name == container.Name && status.ImageID != "" {
+					running = status.ImageID
+					break
+				}
+			}
+			if running != image {
 				counts.OldUp++
 			}
 		}
 	}
 	return counts, nil
+}
+
+// ImageCount is how many pods are running one image.
+type ImageCount struct {
+	Image string
+	Pods  int
+}
+
+// RunningImages is what a workload's pods are actually running, counted by digest.
+//
+// During a rolling update there is more than one answer and the Deployment's template
+// is only the one it is heading for: it names the new image from the moment the update
+// is accepted, while most of the pods are still on the old one. A page asked "what is
+// running here" and answered from the template says the rollout is finished the
+// second it begins, and marks an image as live while every pod serving traffic is on
+// another.
+//
+// The digest is the container's own `imageID` rather than what its spec was written
+// with, so a pod somebody changed by hand, or one whose tag was moved since it was
+// pulled, is counted as what it is running rather than as what it was asked to run.
+func (c *clusterClient) RunningImages(ctx context.Context, namespace,
+	name string) ([]ImageCount, error) {
+
+	deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("there is no deployment called %s in %s", name, namespace)
+		}
+		return nil, fmt.Errorf("read deployment %s: %w", name, err)
+	}
+
+	pods, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelectorOf(deployment),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read the pods of %s: %w", name, err)
+	}
+
+	byImage := map[string]int{}
+	order := []string{}
+	for index := range pods.Items {
+		pod := pods.Items[index]
+		if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
+			continue
+		}
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.ImageID == "" {
+				continue
+			}
+			if _, seen := byImage[status.ImageID]; !seen {
+				order = append(order, status.ImageID)
+			}
+			byImage[status.ImageID]++
+		}
+	}
+
+	out := make([]ImageCount, 0, len(order))
+	for _, image := range order {
+		out = append(out, ImageCount{Image: image, Pods: byImage[image]})
+	}
+	return out, nil
+}
+
+// labelSelectorOf is the selector a workload's own pods carry.
+//
+// Used for every reading of a namespace's pods, because a namespace is not a workload:
+// a namespace with two of them answers "how many pods are on the old image" with a
+// number that counts both, and the drain of one looks like a rollout that will not
+// finish.
+func labelSelectorOf(deployment *appsv1.Deployment) string {
+	if deployment.Spec.Selector == nil {
+		return ""
+	}
+	return metav1.FormatLabelSelector(deployment.Spec.Selector)
 }
 
 // rolloutResync is how often the truth is re-read outright while a watch is running.
@@ -693,7 +805,15 @@ type podSeen struct {
 	// ready is the pod's own readiness, which is not the same as running: a pod that is
 	// up but not yet serving is running the new image and not yet one of the ones that
 	// work, and conflating the two is how a rollout reports itself finished early.
+	// ready is the pod's own readiness, which is not the same as running: a pod that is
+	// up but not yet serving is running the new image and not yet one of the ones that
+	// work, and conflating the two is how a rollout reports itself finished early.
 	ready bool
+	// image is what the pod's container is actually running, by digest, so that the
+	// rollout can say which image it is taking off as well as how many are left on it.
+	// Without it a page watching a rollback can count the drain and not say what is
+	// draining, which is half the answer.
+	image string
 }
 
 // currentRevision finds the ReplicaSet a rollout is aiming at: the newest one this
@@ -827,7 +947,7 @@ func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image 
 		for index := range fresh.Items {
 			remember(pods, &fresh.Items[index], revision)
 		}
-		counts := tally(pods, desired)
+		counts := tally(pods, desired, image)
 
 		// A frame is only worth sending if it says something new. Silence every five
 		// seconds would fill the log with the same numbers and teach whoever reads it
@@ -871,7 +991,7 @@ func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image 
 		for index := range current.Items {
 			remember(pods, &current.Items[index], revision)
 		}
-		counts := tally(pods, desired)
+		counts := tally(pods, desired, image)
 		if !said || counts != last {
 			last, said = counts, true
 			onChange(counts)
@@ -920,6 +1040,29 @@ func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image 
 				case watch.Deleted:
 					delete(pods, string(pod.UID))
 				default:
+					// A pod the cached revision calls old may be the first of the new
+					// ones: the revision is read when the watch is taken, and a rollout
+					// creates its pods after that.
+					//
+					// Judged against what was cached, the new pod counts among the old
+					// for as long as the watch runs, and the drain goes up and down by
+					// one for the whole rollout — a number that cannot be watched
+					// because it does not stay still. So an unfamiliar revision is
+					// asked about at once and the truth is re-read: one list and one
+					// read per rollout, and every pod judged against what the cluster
+					// says rather than against what it said when the watch began.
+					own := podRevision(pod)
+					if own != "" && own != revision {
+						latest, err := currentRevision(ctx, c.typed, namespace, name)
+						if err == nil && latest != "" && latest != revision {
+							revision = latest
+							if err := sync(true); err != nil {
+								ended = true
+								break
+							}
+							continue
+						}
+					}
 					remember(pods, pod, revision)
 				}
 
@@ -927,7 +1070,7 @@ func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image 
 				// Two changes that happen to leave the counts equal are still two
 				// things that happened, and the person watching wants the path, not
 				// the compressions of it.
-				counts := tally(pods, desired)
+				counts := tally(pods, desired, image)
 				if counts != last {
 					last = counts
 					onChange(counts)
@@ -953,16 +1096,26 @@ func remember(pods map[string]podSeen, pod *corev1.Pod, revision string) {
 		delete(pods, string(pod.UID))
 		return
 	}
+	if pod.DeletionTimestamp != nil {
+		// Being deleted already. The cluster takes such a pod out of the workload's
+		// availability the moment deletion starts, and counted here it keeps a rollout
+		// reporting a drain that has visibly finished for as long as the pod takes to go.
+		delete(pods, string(pod.UID))
+		return
+	}
 
 	// Whether it is serving yet, asked of the containers' own statuses and matched by
 	// name — the only field the spec and the status agree on. A pod that is up but not
 	// yet ready is not one of the ones that would take traffic, and counting it is how a
 	// rollout reports itself finished while it is still starting.
 	serving := false
+	running := ""
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.Ready {
 			serving = true
-			break
+		}
+		if running == "" && status.ImageID != "" {
+			running = status.ImageID
 		}
 	}
 
@@ -971,6 +1124,7 @@ func remember(pods map[string]podSeen, pod *corev1.Pod, revision string) {
 		revision: own,
 		new:      revision != "" && own == revision,
 		ready:    serving,
+		image:    running,
 	}
 }
 
@@ -981,20 +1135,44 @@ func remember(pods map[string]podSeen, pod *corev1.Pod, revision string) {
 // any earlier revision — the ones this rollout is replacing — and deliberately not
 // every pod that is not yet ready: a new pod still starting is not an old pod, and
 // counting it as one makes the number climb while nothing is draining.
-func tally(pods map[string]podSeen, desired int) RolloutCounts {
+func tally(pods map[string]podSeen, desired int, image string) RolloutCounts {
 	counts := RolloutCounts{Desired: desired}
+	oldImage, mixed := "", false
 	for _, pod := range pods {
-		if pod.revision == "" {
+		// What is on the pods, not which revision they belong to.
+		//
+		// A pod of the new set that the cluster has not named the revision of yet —
+		// the one that appears first, the whole time the drain is watched — was
+		// counted among the old by revision, so the drain went up and down by one for
+		// every rollout: a number that cannot be watched because it does not stay
+		// still. Its image already says what it is, and the image is the question the
+		// line answers: "still running the previous image" is about images.
+		if pod.image == "" || image == "" {
+			// It has not said which image it is on, and saying nothing is not the same
+			// as saying it is on the old one.
 			continue
 		}
-		if !pod.new {
-			counts.OldUp++
+		if pod.image == image {
+			if pod.ready {
+				counts.Ready++
+			}
 			continue
 		}
-		if pod.ready {
-			counts.Ready++
+
+		counts.OldUp++
+		// One image or none: with two of them the pods being retired are on more
+		// than one, and naming either would be naming half a drain. An empty answer is
+		// kept: a page marking the image that is leaving needs to know it is one, and a
+		// half-named drain is worse than an unnamed one.
+		switch {
+		case mixed:
+		case oldImage == "":
+			oldImage = pod.image
+		case oldImage != pod.image:
+			oldImage, mixed = "", true
 		}
 	}
+	counts.OldImage = oldImage
 
 	// Never more ready than were asked for. A pod left over from a wider previous state
 	// — a scale-down not yet acted on, a pod that has outlived its revision — is

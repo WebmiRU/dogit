@@ -521,6 +521,29 @@ func (c *coreClient) handleCurrent(w http.ResponseWriter, r *http.Request) {
 		answer["desired"] = state.Desired
 		answer["settled"] = state.Done
 	}
+	// What the pods are on, which during a rollout is more than one thing and is not
+	// the same as what the workload is set to.
+	//
+	// Read from the pods rather than from the Deployment's template because the
+	// template names the new image the moment the update is accepted: a page answered
+	// from it marks the new image as running while every pod serving traffic is still
+	// on the old one, and reports a rollout as finished before it has begun. With both
+	// answers the page can say which is coming and which is going, and mark the image
+	// that is being replaced as such while it is still up.
+	if pods, err := client.RunningImages(ctx, namespace, workload); err == nil && len(pods) > 0 {
+		on := make([]map[string]any, 0, len(pods))
+		for _, one := range pods {
+			entry := map[string]any{"image": one.Image, "pods": one.Pods}
+			// The names for this one too: an image being taken off a place is one
+			// somebody is watching go, and "retiring [75b0eb9ad0e2]" is a state they can
+			// act on where a bare digest is something to look up.
+			if tags, err := c.history.TagsOf(ctx, project, name, namespace, one.Image); err == nil && len(tags) > 0 {
+				entry["tags"] = tags
+			}
+			on = append(on, entry)
+		}
+		answer["pods"] = on
+	}
 	if tags, err := c.history.TagsOf(ctx, project, name, namespace, image); err == nil && len(tags) > 0 {
 		// From the whole history and not from the newest record, which after a rollback
 		// is the rollback's own: it says which image went back and nothing about what

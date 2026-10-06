@@ -119,6 +119,15 @@ func (f *fakeClient) RunningImage(_ context.Context, _, _ string) (string, error
 	return f.setImageFails, nil
 }
 
+// RunningImages is one answer while there is one image on the place, which is what
+// these tests set up: the fake has no cluster to have a half-finished rollout in.
+func (f *fakeClient) RunningImages(_ context.Context, _, _ string) ([]k8s.ImageCount, error) {
+	if f.setImageFails == "" && f.setImageTo == "" {
+		return nil, nil
+	}
+	return []k8s.ImageCount{{Image: f.setImageTo, Pods: 1}}, nil
+}
+
 func (f *fakeClient) Revisions(_ context.Context, _, _ string) ([]k8s.Revision, error) {
 	return nil, nil
 }

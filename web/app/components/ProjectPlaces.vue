@@ -280,8 +280,79 @@ interface CurrentAnswer {
   ready?: number
   desired?: number
   settled?: boolean
+  /** What the pods are actually running, by digest — more than one while a rollout goes. */
+  pods?: { image: string; pods: number; tags?: string[] }[]
   asked?: string
   reason?: string
+}
+
+/**
+ * The image this place is on right now, and how many pods are on it.
+ *
+ * From the pods and not from what the workload is set to: the setting names the image
+ * the rollout is heading for from the moment it is accepted, so a place mid-rollout
+ * would be reported as running the new image while every pod is still on the old one.
+ */
+function onPods(place: Place): { image: string; pods: number; tags?: string[] }[] {
+  const answer = current.value[place.name]
+  if (!answer?.known) return []
+  const pods = answer.pods ?? []
+  return pods.length > 0 ? pods : answer.image ? [{ image: answer.image, pods: answer.desired ?? 0 }] : []
+}
+
+/** The image on the most pods here — what this place is actually being served by. */
+function servedBy(place: Place): string {
+  const pods = onPods(place)
+  if (pods.length === 0) return ''
+  const most = pods.reduce((a, b) => (b.pods > a.pods ? b : a))
+  return most.image
+}
+
+/**
+ * The image this place is being put on, as soon as one pod is on it.
+ *
+ * The workload's own image, not the one with the most pods: a rollout that has put one
+ * of three pods on the new image is already a rollout onto that image, and calling the
+ * place "running" the old one until the last pod turns over says the opposite of what is
+ * happening for the whole minute it takes.
+ */
+function comingOn(place: Place): string {
+  const answer = current.value[place.name]
+  if (!answer?.known || !answer.image) return ''
+  const started = (answer.pods ?? []).some((one) => one.image === answer.image)
+  return started ? answer.image : ''
+}
+
+/**
+ * The one line about what is here: the image being put on where a rollout has begun,
+ * and the one it is being served from otherwise.
+ */
+function primaryImage(place: Place): string {
+  return comingOn(place) || servedBy(place)
+}
+
+/**
+ * The image being taken off this place, if a rollout is taking one off.
+ *
+ * A pod on an image the workload is no longer set to: on its way out and still serving
+ * traffic, which is the one state that is neither "running here" nor "gone" and that a
+ * page marking images in two colours has to be able to say.
+ */
+function replacing(place: Place): string {
+  const answer = current.value[place.name]
+  if (!answer?.known) return ''
+  const here = primaryImage(place)
+  const outgoing = onPods(place).filter((one) => one.image !== here)
+  if (outgoing.length === 0) return ''
+  const most = outgoing.reduce((a, b) => (b.pods > a.pods ? b : a))
+  return most.image
+}
+
+/** How many pods are on the image this place is being taken off. */
+function replacingPods(place: Place): number {
+  const leaving = replacing(place)
+  if (!leaving) return 0
+  return onPods(place).find((one) => one.image === leaving)?.pods ?? 0
 }
 
 /**
@@ -305,39 +376,132 @@ interface CurrentAnswer {
  */
 function runningTags(place: Place): string[] {
   const answer = current.value[place.name]
-  if (!answer?.known || !answer.image) return []
-  return answer.tags ?? []
+  if (!answer?.known) return []
+  const image = primaryImage(place)
+  const on = (answer.pods ?? []).find((one) => one.image === image)
+  return on?.tags ?? answer.tags ?? []
 }
 
 function runningDigest(place: Place): string {
   const answer = current.value[place.name]
-  if (!answer?.known || !answer.image) return ''
-  return shortDigest(answer.image)
+  if (!answer?.known) return ''
+  return shortDigest(servedBy(place))
 }
 
 /** What the module says is running in this place, in the shape the card takes. */
-function nowRunning(place: Place): { image: string; tags?: string[] } | null {
+function nowRunning(place: Place): { image: string; tags?: string[]; pods: number; desired: number } | null {
   const answer = current.value[place.name]
-  if (!answer?.known || !answer.image) return null
-  return { image: answer.image, tags: answer.tags }
+  if (!answer?.known) return null
+  const image = primaryImage(place)
+  if (!image) return null
+  const on = (answer.pods ?? []).find((one) => one.image === image)
+  return {
+    image,
+    tags: on?.tags ?? answer.tags,
+    // How many pods are on it, of how many this place runs. In the badge rather than in
+    // a tooltip: "running" is a claim about pods, and "1 of 3" is the whole of what it
+    // means while a rollout is going.
+    pods: on?.pods ?? 0,
+    desired: answer.desired ?? 0,
+  }
 }
 
 function runningNow(place: Place): boolean {
   const answer = current.value[place.name]
-  return Boolean(answer?.known && answer.image)
+  return Boolean(answer?.known && servedBy(place))
+}
+
+/**
+ * How the pods stand, while a rollout is going.
+ *
+ * "2 on it · 1 still on [75b0eb9ad0e2]" — the split, in the line everybody reads. A row
+ * that says one image is running while a third of the place serves another is the same
+ * lie as the one this whole line was added to stop, said more quietly.
+ */
+function podsWording(place: Place): string {
+  const answer = current.value[place.name]
+  if (!answer?.known) return ''
+  const leaving = replacing(place)
+  const pods = onPods(place)
+  if (!leaving || pods.length < 2) return ''
+  const on = pods.filter((one) => one.image !== leaving).reduce((sum, one) => sum + one.pods, 0)
+  const off = pods.filter((one) => one.image === leaving).reduce((sum, one) => sum + one.pods, 0)
+  return `${on} on it · ${off} still on ${shortDigest(leaving)}`
 }
 
 /** What this line is a claim about, in full — the digest, where it came from, and how many of its pods. */
 function runningTitle(place: Place): string {
   const answer = current.value[place.name]
-  if (!answer?.known || !answer.image) return ''
-  const parts = [answer.image]
-  if (answer.workload) parts.push(`${answer.workload} in ${place.namespace}`)
-  if (typeof answer.ready === 'number' && typeof answer.desired === 'number') {
-    parts.push(`${answer.ready} of ${answer.desired} pods ready`)
+  if (!answer?.known) return ''
+  const parts: string[] = []
+  // What the workload is set to, and what the pods are on, said as two different facts
+  // because during a rollout they are two different facts.
+  if (answer.image) parts.push(`wanted: ${answer.image}`)
+  for (const one of onPods(place)) {
+    const names = one.tags?.length ? `${one.tags.join(' ')} ` : ''
+    parts.push(`${one.pods} pod(s) on ${names}${one.image}`)
   }
+  if (answer.workload) parts.push(`${answer.workload} in ${place.namespace}`)
   parts.push(answer.asked ? `asked: ${answer.asked}` : 'asked: this module')
   return parts.join(' · ')
+}
+
+/**
+ * What one line of a deployment says about a place, taken into this page's answer.
+ *
+ * The module's own fields, read as the module wrote them: which image it is putting on,
+ * how many pods are on it, which image it is taking off and how many are left there. A
+ * line that says none of that — a build, a push, a phase of a deployment — is not about
+ * what is on the place's pods and changes nothing here.
+ */
+function noteEvent(payload: Record<string, unknown>) {
+  const record = payload.deployment as
+    | { cluster?: string; image?: string; workload?: string; tags?: string[] }
+    | undefined
+  const place = record?.cluster
+  if (!place || !record?.image) return
+
+  const ready = Number(payload.ready ?? 0)
+  const desired = Number(payload.desired ?? 0)
+  const previous = typeof payload.previous === 'string' ? payload.previous : ''
+
+  // A line that says nothing about the pods leaves the last numbers standing.
+  //
+  // The last line of every deployment is one of those — "finished", with no counts —
+  // and writing its zeroes over what came before turned a place that had just been
+  // deployed to three pods into one running "0 of 0", which is a claim about a place
+  // with no pods.
+  const before = current.value[place]
+  const on = desired > 0 ? ready : (before?.ready ?? 0)
+  const of = desired > 0 ? desired : (before?.desired ?? 0)
+
+  // Never more being taken off than the place has pods.
+  //
+  // A pod of the new set is counted among the old for a few seconds, until the cluster
+  // has named its revision — and "4 of 3 retiring" is a figure about a workload that
+  // cannot exist.
+  const leaving = typeof payload.retiring === 'number'
+    ? (of > 0 ? Math.min(payload.retiring, of) : payload.retiring)
+    : Math.max(0, of - on)
+
+  const pods: { image: string; pods: number; tags?: string[] }[] = []
+  if (of > 0) pods.push({ image: record.image, pods: on, tags: record.tags })
+  if (previous) pods.push({ image: previous, pods: leaving })
+
+  current.value = {
+    ...current.value,
+    [place]: {
+      known: true,
+      image: record.image,
+      tags: record.tags,
+      workload: record.workload,
+      ready: on,
+      desired: of,
+      settled: of > 0 && leaving === 0 && on >= of,
+      pods,
+      asked: 'the module, as it reports it',
+    },
+  }
 }
 
 /** The clock, read every half minute so that "3 minutes ago" does not stand still. */
@@ -559,16 +723,26 @@ watchEvents({
   // the whole build — which on a slow build is most of a run.
   kinds: ['deploy.history', 'deploy.operation', 'pipeline.updated'],
   project: () => props.projectPath,
-  onEvent: () => {
+  // What is running is NOT asked again here, and that is the point of the rule this
+  // project works by: a request is for a one-off read — the list of images, the list of
+  // operations — and everything that happens while somebody watches arrives over the
+  // socket. The module's own lines carry which pods are on which image as the rollout
+  // goes, and a row that asked the module on every line would be a request behind the
+  // thing it is drawing: it is how "running 3/3" showed up once the rollout had already
+  // finished, on a card that had been saying nothing for forty seconds.
+  onEvent: (event) => {
+    // What the module just said, taken as it said it. The row is about one place, and
+    // the line says which place and what is on its pods: applied here, the row's line
+    // moves with the rollout and keeps the answer the module gave when it ends. Asked
+    // for instead, the row is a request behind the thing it is drawing — it says the
+    // image from before for as long as the rollout takes, which is the whole minute
+    // somebody is watching it.
+    noteEvent(event.payload ?? {})
+
     clearTimeout(runsSoon)
     runsSoon = setTimeout(() => {
       void loadQueued().catch(() => {})
       void loadRuns().catch(() => {})
-      // Asked again when a deployment ends, because that is the moment the answer
-      // changes: what was there before this one is what the module would say now, and a
-      // row that keeps naming the version from before its own deployment is a row about
-      // the past.
-      void loadCurrent().catch(() => {})
     }, 800)
   },
 })
@@ -689,6 +863,9 @@ watchEvents({
               class="tag mono"
             >{{ tag }}</span>
             <span class="badge badge-neutral place-running-digest mono">{{ runningDigest(place) }}</span>
+            <span v-if="podsWording(place)" class="muted place-running-split">
+              {{ podsWording(place) }}
+            </span>
           </span>
           <span v-else-if="current[place.name]?.reason" class="muted small place-running">
             {{ current[place.name]?.reason }}
@@ -717,6 +894,8 @@ watchEvents({
           :place="{ cluster: place.name, namespace: place.namespace }"
           :queued="place.queued"
           :now-running="nowRunning(place)"
+          :replacing="replacing(place)"
+          :replacing-pods="replacingPods(place)"
           :show-repository="index === 0"
           @state="onCardState(place.name, $event)"
           @settings-changed="load"
@@ -856,6 +1035,10 @@ watchEvents({
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+.place-running-split {
+  font-size: 11px;
 }
 
 .place-running-digest {
