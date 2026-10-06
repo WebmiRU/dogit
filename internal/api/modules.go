@@ -871,6 +871,20 @@ func checkSettingType(spec models.SettingSpec, value json.RawMessage) error {
 		}
 		return errBadRequestf("%s must be one of: %s", spec.Label, strings.Join(spec.Options, ", "))
 
+	case "registry":
+		// A registry is an address, checked as one while the operator is still looking at
+		// the field. What it is not checked against is the list of registries: an address
+		// nobody has written down is a public mirror, and the cluster may reach it with no
+		// credential at all, so refusing it here would be dogit insisting that every
+		// registry its clusters pull from is one dogit has heard of.
+		if err := json.Unmarshal(value, &text); err != nil {
+			return errBadRequestf("%s must be a registry address", spec.Label)
+		}
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
+		return checkDockerRegistryURL(text)
+
 	case "list":
 		return checkListSetting(spec, value)
 

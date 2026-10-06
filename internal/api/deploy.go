@@ -107,6 +107,11 @@ type registryCredential struct {
 	// Address is the registry host:port, which has to match the image name exactly.
 	Address string `json:"address"`
 	Token   string `json:"token"`
+	// Username pairs with the token. Registries that issue a token rather than a password
+	// want the token in the password field and anything here, which is the Docker
+	// convention every client follows; a registry that issues neither is reached with its
+	// own login, which is what an address from the list of registries brings.
+	Username string `json:"username,omitempty"`
 	// SecretName is what the module should call the Secret it writes.
 	SecretName string `json:"secret_name"`
 }
@@ -221,19 +226,6 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		Tags:           s.deployedImageTags(ctx, repoDir, pipelineRun),
 		Commit:         shortRunSHA(pipelineRun),
 	}
-	// The credential the cluster pulls with.
-	//
-	// The registry is private by default, so a cluster given nothing to pull with will
-	// sit at ImagePullBackOff and the deployment will fail on a rollout timeout with no
-	// cause in it. Minted per project, for a pull and nothing else, and it goes to the
-	// module and nowhere else.
-	credential, err := s.registryCredential(ctx, job, image)
-	if err != nil {
-		log("  registry:   %v\n", err)
-	} else if credential != nil {
-		log("  registry:   %s (the cluster will pull with a credential of ours)\n", credential.Address)
-	}
-	request.Registry = credential
 
 	request.Expect.Secrets = spec.Expect.Secrets
 	request.Expect.ConfigMaps = spec.Expect.ConfigMaps
@@ -241,6 +233,28 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	target, err := s.deployModule(ctx, spec.Module)
 	if err != nil {
 		return err
+	}
+
+	// Which registry this place pulls from, and what it pulls with.
+	//
+	// The place's own row may name one, and when it does that is where the image is
+	// fetched from — the same path and the same digest at another address, so the thing
+	// rolled out is the thing that was built. With nothing named, or with the registry this
+	// instance runs named, this is the path every deployment took before any of this
+	// existed: the address the image carries, and a credential minted per project for a
+	// pull and nothing else.
+	//
+	// The registry is private by default, so a cluster given nothing to pull with will sit
+	// at ImagePullBackOff and the deployment will fail on a rollout timeout with no cause
+	// in it. That credential goes to the module and nowhere else.
+	pull, err := s.placePullFor(ctx, project, target, spec.Target, image, log)
+	switch {
+	case err != nil:
+		log("  registry:   %v\n", err)
+	case pull != nil:
+		log("  registry:   %s%s\n", pull.Address, pullSaid(pull))
+		request.Image = pull.Image
+		request.Registry = pull.credential()
 	}
 
 	body, err := json.Marshal(request)
@@ -946,7 +960,7 @@ func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image, 
 	// belongs to the builder account rather than to whoever pressed the button — the
 	// same reasoning as the push credential, for the same reason: this happens at
 	// three in the morning and acts for the project, not for a session.
-	token, err := s.resolveToken(ctx, registry, job)
+	token, err := s.resolveToken(ctx, registry, job.ProjectPath)
 	if err != nil {
 		return "", err
 	}
@@ -995,14 +1009,14 @@ func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image, 
 
 // resolveToken is a short-lived pull credential for this project's images.
 func (s *Server) resolveToken(ctx context.Context, registry *models.Integration,
-	job *store.Job) (string, error) {
+	projectPath string) (string, error) {
 
 	builder, err := s.serviceUser(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	project, err := s.store.Projects().ByPath(ctx, job.ProjectPath)
+	project, err := s.store.Projects().ByPath(ctx, projectPath)
 	if err != nil {
 		return "", err
 	}
@@ -1099,44 +1113,6 @@ func (s *Server) buildTag(ctx context.Context, run *store.Pipeline) string {
 		}
 	}
 	return ""
-}
-
-// registryCredential is what this project's cluster pulls its images with, or nil
-// when there is nothing to say.
-//
-// Nil rather than an error for a missing registry: a deployment of an image from
-// somewhere else is a real thing somebody does, and refusing it would be dogit
-// deciding that images come from dogit.
-// The image is passed in rather than read off the job, because a deploy job builds
-// nothing: its own build is empty, and a credential asked for from it is a credential
-// for nothing at all — which is how a private registry ends up being pulled from with
-// no way in and a rollout that times out with no cause.
-func (s *Server) registryCredential(ctx context.Context, job *store.Job, image string) (*registryCredential, error) {
-	image = strings.TrimSpace(image)
-	if image == "" {
-		return nil, nil
-	}
-
-	registry, err := s.store.Integrations().ByKind(ctx, registryKind)
-	if err != nil {
-		return nil, fmt.Errorf("no registry is installed on this instance")
-	}
-
-	repository, _ := splitImage(image)
-	if repository == "" {
-		return nil, nil
-	}
-
-	token, err := s.resolveToken(ctx, registry, job)
-	if err != nil {
-		return nil, err
-	}
-
-	return &registryCredential{
-		Address:    registryHostFrom(repository),
-		Token:      token,
-		SecretName: "dogit-registry",
-	}, nil
 }
 
 // registryHostFrom is the host and port out of an image name.

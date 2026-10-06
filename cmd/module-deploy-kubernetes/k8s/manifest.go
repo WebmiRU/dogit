@@ -225,6 +225,52 @@ var podSpecPaths = map[string][]string{
 	"Pod":     {"spec"},
 }
 
+// ImageAtRegistry is the same image, at another registry.
+//
+// Only the host is replaced: the path, the tag and the digest are all kept, because a
+// digest is the content and a mirror of the same storage serves the same content under its
+// own name. What a mirror of different storage serves is not the same image, and that comes
+// out as a pull that fails rather than as a rollout of something else — which is the whole
+// reason an image is pinned to a digest before it is applied.
+func ImageAtRegistry(image, address string) string {
+	image = strings.TrimSpace(image)
+	address = RegistryHost(address)
+	if image == "" || address == "" {
+		return image
+	}
+
+	host := image
+	if slash := strings.Index(host, "/"); slash >= 0 {
+		host = host[:slash]
+	} else {
+		// No host at all: docker reads an unqualified name as Docker Hub's, so there is
+		// nothing to replace and the whole name is the path.
+		return address + "/" + image
+	}
+	if strings.EqualFold(host, address) {
+		return image
+	}
+	return address + "/" + strings.TrimPrefix(image, host+"/")
+}
+
+// RegistryHost is an address as a host, without the scheme and without the trailing slash.
+//
+// What a person writes is not what an auth entry is keyed by: an image name carries the
+// host and the port and nothing else, so "https://registry.example.com/" and
+// "registry.example.com" have to be the same address by the time either is compared with
+// one or written into a docker config. A path is kept — a registry served under a prefix is
+// named with it.
+func RegistryHost(address string) string {
+	address = strings.TrimSpace(address)
+	for _, scheme := range []string{"http://", "https://"} {
+		if strings.HasPrefix(strings.ToLower(address), scheme) {
+			address = address[len(scheme):]
+			break
+		}
+	}
+	return strings.TrimRight(address, "/")
+}
+
 // WithPullSecret puts a pull secret on the pod template of a manifest.
 //
 // Only when the manifest actually has a pod template: a Service or a ConfigMap is not

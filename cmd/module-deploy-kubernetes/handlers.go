@@ -61,11 +61,7 @@ type deployRequest struct {
 	// Registry is the credential the cluster pulls with, when it will not serve the
 	// image on its own. Nil means the registry is open to the cluster and there is
 	// nothing to write.
-	Registry *struct {
-		Address    string `json:"address"`
-		Token      string `json:"token"`
-		SecretName string `json:"secret_name"`
-	} `json:"registry"`
+	Registry *deployRegistry `json:"registry"`
 
 	WaitForRollout bool   `json:"wait_for_rollout"`
 	Rollout        string `json:"rollout"`
@@ -78,6 +74,45 @@ type jobRequest struct {
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
 	Body       string `json:"body"`
+}
+
+// deployRegistry is what the core tells this module about the registry a place pulls from:
+// the address, and the credential for it when there is one.
+//
+// A token goes in the password field with any username, which is the Docker convention
+// every client follows; a registry that issues neither is reached with its own login, which
+// is what the core sends when the address came from the list of registries rather than from
+// this instance.
+type deployRegistry struct {
+	Address    string `json:"address"`
+	Token      string `json:"token"`
+	Username   string `json:"username"`
+	SecretName string `json:"secret_name"`
+}
+
+// pullSecretOf is the Secret to write into the namespace, or nil when there is nothing to
+// write: a public mirror needs no credential, and a secret built for an address nobody
+// recognised would be a secret for nothing.
+func pullSecretOf(registry *deployRegistry) *k8s.PullSecret {
+	if registry == nil || registry.Token == "" {
+		return nil
+	}
+	return &k8s.PullSecret{
+		Name:     pullSecretName(registry.SecretName),
+		Address:  registry.Address,
+		Token:    registry.Token,
+		Username: registry.Username,
+	}
+}
+
+// registryAddressOf is the address to fetch an image from, empty when the core named none —
+// which is the case that means "the registry this image already carries", and so the record
+// is used as it stands.
+func registryAddressOf(registry *deployRegistry) string {
+	if registry == nil {
+		return ""
+	}
+	return registry.Address
 }
 
 func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
@@ -229,14 +264,12 @@ func (c *coreClient) deployOne(ctx context.Context, request deployRequest, place
 	// The credential the cluster pulls with, when the core sent one. A cluster that
 	// cannot pull is a rollout that never finishes, and the message for that is a
 	// timeout with no cause in it.
-	var pullSecret *k8s.PullSecret
-	if request.Registry != nil && request.Registry.Token != "" {
-		pullSecret = &k8s.PullSecret{
-			Name:    pullSecretName(request.Registry.SecretName),
-			Address: request.Registry.Address,
-			Token:   request.Registry.Token,
-		}
-	}
+	//
+	// A username comes with it when the registry issues tokens to nobody and wants a login
+	// of its own — a registry from the list rather than the one this instance runs. Either
+	// way the token goes in the password field, which is the Docker convention, so the two
+	// are the same secret as far as the cluster is concerned.
+	pullSecret := pullSecretOf(request.Registry)
 
 	return deployer.Run(ctx, deploy.Request{
 		Progress:       deploy.ClosingPhases(say),
@@ -353,6 +386,11 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 		Workload  string `json:"workload"`
 		// ID is the deployment to go back to.
 		ID string `json:"deployment_id"`
+		// Registry is the address this place pulls its images from, when it is not the one
+		// the record names: the same image, the same digest, another name for it. Sent
+		// with the credential for it, because a rollback that names an address nobody
+		// wrote a secret for is a rollback that fails on a pull.
+		Registry *deployRegistry `json:"registry"`
 	}
 	if err := decode(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -444,11 +482,13 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 	})
 
 	record, err := deployer.Revert(ctx, deploy.RevertRequest{
-		Progress:  stream.send,
-		ID:        id,
-		Workload:  request.Workload,
-		Namespace: namespace,
-		Timeout:   cluster.timeout(),
+		Progress:   stream.send,
+		ID:         id,
+		Workload:   request.Workload,
+		Namespace:  namespace,
+		Timeout:    cluster.timeout(),
+		Registry:   registryAddressOf(request.Registry),
+		PullSecret: pullSecretOf(request.Registry),
 	})
 	// A refusal before anything was written is a refusal; anything after is part of the
 	// stream, so that a revert that started and then failed is told rather than

@@ -163,7 +163,7 @@ func (s *Server) dockerRegistryModules(r *http.Request) ([]map[string]any, error
 		if integration.Kind != registryKind {
 			continue
 		}
-		address, err := s.registryAddress(r, integration)
+		address, err := s.registryAddress(r.Context(), integration)
 		if err != nil {
 			return nil, err
 		}

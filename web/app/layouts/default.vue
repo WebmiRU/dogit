@@ -19,13 +19,11 @@ watchEffect(() => {
 })
 
 const userMenuOpen = ref(false)
-const adminMenuOpen = ref(false)
 
 // Any navigation closes the popovers; leaving them open would cover the page the
 // user just asked for.
 watch(() => route.fullPath, () => {
   userMenuOpen.value = false
-  adminMenuOpen.value = false
 })
 
 onMounted(() => {
@@ -33,7 +31,6 @@ onMounted(() => {
     const target = event.target as HTMLElement | null
     if (target?.closest('.menu-anchor')) return
     userMenuOpen.value = false
-    adminMenuOpen.value = false
   }
   document.addEventListener('click', close)
   onBeforeUnmount(() => document.removeEventListener('click', close))
@@ -79,12 +76,49 @@ const navItems = computed<NavItem[]>(() => [
       { label: 'NPM (Node.js)', note: 'not implemented yet' },
     ],
   },
+  {
+    // Administration was a dropdown in the top bar, behind a button that said "Admin" and
+    // hid the fact that it held five pages. In the sidebar it is a section like any other:
+    // its parts are listed, they are the same parts, and a reader can see what there is
+    // before deciding to click anything.
+    label: 'Administration',
+    to: '/admin',
+    icon: '⚙',
+    match: '/admin',
+    // Shown to everybody in the sidebar and answered by the pages themselves for those who
+    // are not administrators: the section says what the instance has, and a reader who
+    // clicks a part is told it needs administrator rights rather than finding a page that
+    // quietly renders nothing.
+    parts: [
+      { label: 'Overview', to: '/admin' },
+      { label: 'Modules', to: '/admin/modules' },
+      { label: 'Users', to: '/admin/users' },
+      { label: 'Runners', to: '/admin/runners' },
+      { label: 'Settings', note: 'not implemented yet' },
+    ],
+  },
 ])
 
 function isActive(item: NavItem): boolean {
   if (item.match === '/') return route.path === '/'
   if (item.match) return route.path === item.match || route.path.startsWith(`${item.match}/`)
   return route.path.startsWith(item.to)
+}
+
+/**
+ * Whether one part of a section is the page being looked at.
+ *
+ * Exactly, for the part that is the section's own address — that is Overview, and
+ * "/admin" is a prefix of "/admin/modules", so a prefix rule would light up Overview on
+ * every administration page and leave two entries lit at once. Everything below it matches
+ * by prefix, because that is what a module's own page needs: "/admin/modules" has to stay
+ * lit while its settings tab is open.
+ */
+function partIsActive(item: NavItem, part: NavChild): boolean {
+  if (!part.to) return false
+  if (route.path === part.to) return true
+  if (part.to === item.to) return false
+  return route.path.startsWith(`${part.to}/`)
 }
 
 /** Project pages keep the repository tabs; the sidebar only highlights sections. */
@@ -108,27 +142,10 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
 
       <div v-if="user" class="menu-anchor">
         <button
-          class="btn"
-          type="button"
-          @click="adminMenuOpen = !adminMenuOpen; userMenuOpen = false"
-        >
-          Admin
-        </button>
-        <div v-if="adminMenuOpen" class="menu">
-          <NuxtLink to="/admin" class="menu-item">Overview</NuxtLink>
-          <NuxtLink to="/admin/modules" class="menu-item">Modules</NuxtLink>
-          <NuxtLink to="/admin/users" class="menu-item">Users</NuxtLink>
-          <NuxtLink to="/admin/runners" class="menu-item">Runners</NuxtLink>
-          <NuxtLink to="/admin/settings" class="menu-item menu-item-disabled">Settings</NuxtLink>
-        </div>
-      </div>
-
-      <div v-if="user" class="menu-anchor">
-        <button
           class="avatar-button"
           type="button"
           :aria-expanded="userMenuOpen"
-          @click="userMenuOpen = !userMenuOpen; adminMenuOpen = false"
+          @click="userMenuOpen = !userMenuOpen"
         >
           <UserAvatar :name="user.username" :size="30" />
         </button>
@@ -172,9 +189,7 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
                     v-if="part.to"
                     :to="part.to"
                     class="nav-child"
-                    :class="{
-                      active: route.path === part.to || route.path.startsWith(`${part.to}/`),
-                    }"
+                    :class="{ active: partIsActive(item, part) }"
                   >
                     {{ part.label }}
                   </NuxtLink>

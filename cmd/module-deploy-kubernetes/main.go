@@ -241,6 +241,22 @@ func manifest() map[string]any {
 								"ask for less, and does so for one run.",
 						},
 						{
+							"key":   "registry",
+							"label": "Registry",
+							"type":  "registry",
+							"description": "Which registry this place pulls its images from. Empty means the " +
+								"registry this instance runs, which is where the images were pushed — the " +
+								"ordinary case, and the one to leave alone unless this cluster cannot " +
+								"reach that address. Name a mirror, or another address for the same images, " +
+								"when it cannot: the path and the digest stay exactly as they were, so what " +
+								"is rolled out is still the thing that was built. One registry per place " +
+								"on purpose — an image that lives in two registries under one name is two " +
+								"images with one name, and only the first one written is ever found. A " +
+								"registry picked from the list of registries brings its own login; an address " +
+								"that is not on that list is pulled from without a credential, which is what " +
+								"a public mirror needs.",
+						},
+						{
 							"key":   "keep_jobs",
 							"label": "Keep finished jobs",
 							"type":  "bool",

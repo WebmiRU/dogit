@@ -13,6 +13,7 @@
  * project's own value does not change what its group or the instance uses.
  */
 import type { ModuleRow, SettingEntry, SettingSpec } from '~/types/module'
+import type { DockerRegistry, DockerRegistryPage } from '~/types/registry'
 
 const props = withDefaults(
   defineProps<{
@@ -793,8 +794,134 @@ function entryTitle(spec: SettingSpec, row: SettingEntry): string {
   return 'a new row'
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadRegistries()
+})
 watch(() => [props.module.id, props.scope, props.scopeId], load)
+
+/**
+ * The registries this instance knows about, for a field that picks one.
+ *
+ * Fetched once, and only when the module actually declares such a field: the list is the
+ * administrator's own address book, and a settings form for a module that asks for no
+ * registry has no business asking for one. A fetch that fails, or an instance with nothing
+ * written down yet, leaves the field a plain text input — still usable, because what a
+ * registry needs is text and a mirror nobody wrote down is a legitimate thing to name.
+ */
+const registries = ref<DockerRegistry[]>([])
+
+async function loadRegistries() {
+  if (!declaresRegistryField(props.module.manifest?.settings ?? [])) return
+  try {
+    const answer = await api.get<DockerRegistryPage>('/registry/docker', { page: 1 })
+    registries.value = answer.registries
+  } catch {
+    // Nothing said: the field falls back to text in the template, which is the honest
+    // thing when the list could not be read, rather than an empty dropdown that looks
+    // like an answer.
+  }
+}
+
+/** Whether any of these settings, or any field of one of them, is a registry. */
+function declaresRegistryField(specs: SettingSpec[]): boolean {
+  return specs.some(
+    (spec) => spec.type === 'registry' ||
+      (spec.items?.fields ?? []).some((field) => field.type === 'registry'),
+  )
+}
+
+/**
+ * What a registry field offers, in the order a reader wants them.
+ *
+ * The instance's own registry first and empty, because that is the answer for nearly every
+ * place and it is what an empty field has always meant. Then the ones an administrator wrote
+ * down — the module's own registry among them, which is a registry like any other and belongs
+ * in the same list rather than named twice somewhere else. Then "another address", which is
+ * how a public mirror nobody wrote down gets named: it needs no credential, so refusing to
+ * offer it would be refusing to describe a real thing.
+ *
+ * An address already saved that is no longer on the list stays in the list, marked as what
+ * it is. Dropping it would make the field show something else than the value being saved,
+ * and saving that would quietly change where the images come from.
+ */
+const otherRegistryChoice = 'dogit:another-registry'
+
+function registryOptions(value: string): { value: string; label: string }[] {
+  const chosen = value.trim()
+  const options = [
+    { value: '', label: '— the registry this instance runs —' },
+    ...registries.value.map((reg) => ({
+      value: reg.url,
+      label: reg.name ? `${reg.name} — ${reg.url}` : reg.url,
+    })),
+  ]
+
+  const known = options.some((option) => option.value === chosen)
+  if (chosen !== '' && !known) {
+    options.push({ value: chosen, label: `${chosen} (not on the list of registries)` })
+  }
+  options.push({ value: otherRegistryChoice, label: 'another address…' })
+  return options
+}
+
+
+
+/**
+ * Which registry fields are showing the "type an address" box.
+ *
+ * Kept apart from the values themselves on purpose. The address lives in the row, where it
+ * is saved and inherited like every other value; whether the box is open is a thing about
+ * this browser's view of the form and nothing else. Folding the marker into the value would
+ * make the field change the instant a character was typed — the first letter would replace
+ * the marker and close the box under the reader's cursor.
+ */
+const typingRegistry = ref<Record<string, boolean>>({})
+
+function registryKey(spec: SettingSpec, index: number | string, field: SettingSpec): string {
+  return `${spec.key}-${index}-${field.key}`
+}
+
+function registryTyping(spec: SettingSpec, index: number | string, field: SettingSpec): boolean {
+  return typingRegistry.value[registryKey(spec, index, field)] === true
+}
+
+/** What the dropdown shows: the address being typed, or whatever the row holds. */
+function registryShown(spec: SettingSpec, row: SettingEntry, index: number, field: SettingSpec): string {
+  return registryTyping(spec, index, field) ? otherRegistryChoice : asString(row[field.key])
+}
+
+/** The same open-box state for a registry kept at the top level rather than per place. */
+function plainRegistryTyping(spec: SettingSpec): boolean {
+  return typingRegistry.value[`${spec.key}-top`] === true
+}
+
+function choosePlainRegistry(spec: SettingSpec, event: Event) {
+  const chosen = (event.target as HTMLSelectElement).value
+  const key = `${spec.key}-top`
+  if (chosen === otherRegistryChoice) {
+    typingRegistry.value = { ...typingRegistry.value, [key]: true }
+    return
+  }
+  const stillTyping = { ...typingRegistry.value }
+  delete stillTyping[key]
+  typingRegistry.value = stillTyping
+  values.value[spec.key] = chosen
+}
+
+function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
+	field: SettingSpec, event: Event) {
+  const chosen = (event.target as HTMLSelectElement).value
+  if (chosen === otherRegistryChoice) {
+    typingRegistry.value = { ...typingRegistry.value, [registryKey(spec, index, field)]: true }
+    return
+  }
+  const key = registryKey(spec, index, field)
+  const stillTyping = { ...typingRegistry.value }
+  delete stillTyping[key]
+  typingRegistry.value = stillTyping
+  setField(spec, row, field.key, event)
+}
 </script>
 
 <template>
@@ -937,6 +1064,40 @@ watch(() => [props.module.id, props.scope, props.scopeId], load)
                   {{ option }}
                 </option>
               </select>
+              <!-- A registry is picked rather than typed, because an address typed here
+                   is an address that has to be right: one character out is a registry
+                   nobody has, which pulls anonymously and fails on the rollout. The list
+                   is this instance's own; the last option is always "type one", for the
+                   mirror that was never written down. -->
+              <template v-else-if="field.type === 'registry'">
+                <select
+                  v-if="registries.length > 0"
+                  :disabled="fieldLocked(spec, row, index, field.key)"
+                  :id="`${spec.key}-${index}-${field.key}`"
+                  :value="registryShown(spec, row, index, field)"
+                  @change="chooseRegistry(spec, row, index, field, $event)"
+                >
+                  <option
+                    v-for="option in registryOptions(asString(row[field.key]))"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+                <!-- Open while it is being typed, and closed again the moment an address
+                     is chosen from the list: the box is here for the address, and leaving
+                     it open under a select that already names one would be two answers to
+                     one question. -->
+                <input
+                  v-if="registryTyping(spec, index, field)"
+                  :id="`${spec.key}-${index}-${field.key}-address`"
+                  :value="asString(row[field.key])"
+                  :disabled="fieldLocked(spec, row, index, field.key)"
+                  placeholder="harbor.example.com, or mirror.example.com"
+                  @input="setField(spec, row, field.key, $event)"
+                />
+              </template>
               <!-- A document, not a word: a kubeconfig pasted into a one-line box
                    loses its newlines and stops being a kubeconfig at all. -->
               <textarea
@@ -1038,6 +1199,29 @@ watch(() => [props.module.id, props.scope, props.scopeId], load)
             rows="6"
             spellcheck="false"
           />
+          <!-- The same picker as inside a row, for a module that keeps its registry at the
+               top level rather than per place. One control and one fallback, because two
+               versions of "which registry" is one of them quietly out of step. -->
+          <template v-else-if="spec.type === 'registry'">
+            <select
+              v-if="registries.length > 0"
+              v-model="values[spec.key] as string"
+              @change="choosePlainRegistry(spec, $event)"
+            >
+              <option
+                v-for="option in registryOptions(String(values[spec.key] ?? ''))"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+            <input
+              v-if="plainRegistryTyping(spec)"
+              v-model="values[spec.key] as string"
+              placeholder="harbor.example.com, or mirror.example.com"
+            />
+          </template>
           <input
             v-else
             v-model="values[spec.key]"

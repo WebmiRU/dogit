@@ -688,6 +688,31 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		timeout = 10 * time.Minute
 	}
 
+	// Which address this place pulls from, and the image as that address serves it.
+	//
+	// A record says the registry its image came from, and a place may since have been
+	// pointed somewhere else — a mirror, or another name for the same storage. The digest
+	// is the content and does not move, so what goes back on the workload is the same
+	// image, fetched the way this place fetches images now. Going back to the address the
+	// record happens to name instead would put the pods onto a registry whose credential is
+	// no longer written in this namespace, and the rollback would fail on a pull with
+	// nothing in the log to say why.
+	image := target.Image
+	if request.Registry != "" {
+		image = k8s.ImageAtRegistry(image, request.Registry)
+	}
+
+	// The credential for that address, written before anything is applied, for the same
+	// reason a deployment writes it first: a namespace whose pods cannot pull is a
+	// namespace whose pods never start, and finding that out from a rollout timeout is a
+	// long way round.
+	if request.PullSecret != nil {
+		if err := d.client.EnsurePullSecret(ctx, namespace, *request.PullSecret); err != nil {
+			return Deployment{}, err
+		}
+		d.logf("wrote the pull secret %s", request.PullSecret.Name)
+	}
+
 	// The place is taken before anything is changed, not after.
 	//
 	// Written the other way round for a while: roll the pods, then write down what was
@@ -705,7 +730,11 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		Project:   target.Project,
 		Cluster:   target.Cluster,
 		Namespace: namespace,
-		Image:     target.Image,
+		// The image as this place pulls it, which is the record's image unless the place
+		// has since been pointed at another address. Recorded as it is being applied: a
+		// record that named one registry while the workload ran an image fetched from
+		// another would be a record nobody could use to answer a question about it.
+		Image: image,
 		// The names this image was published under when it was deployed here, so a page
 		// watching the rollback say which version is going back rather than a digest it
 		// has to look up. Taken from the deployment being reverted, which is where they
@@ -751,8 +780,8 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 	}
 
 	stop, counted := d.watchRollout(ctx, Request{Progress: say, Rollout: workload,
-		Namespace: namespace, Image: target.Image})
-	rollout, err := d.client.SetImage(ctx, namespace, workload, target.Image, timeout)
+		Namespace: namespace, Image: image})
+	rollout, err := d.client.SetImage(ctx, namespace, workload, image, timeout)
 
 	// And then the old pods, which a rolling update sends away after the new ones are
 	// serving — the same wait a deployment makes, and for the same reason: stopping when
@@ -773,7 +802,7 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 	}
 	stop()
 	wanted, ready, retired := counted()
-	if final, cerr := d.client.Counts(ctx, namespace, workload, target.Image); cerr == nil {
+	if final, cerr := d.client.Counts(ctx, namespace, workload, image); cerr == nil {
 		wanted, ready = final.Desired, final.Ready
 	}
 	if err != nil {
@@ -783,13 +812,13 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		}
 		return failed, err
 	}
-	d.logf("put %s back on %s: %s", target.Image, workload, rollout.Reason)
+	d.logf("put %s back on %s: %s", image, workload, rollout.Reason)
 	if err := d.history.Counts(ctx, reverted.ID, wanted, ready, retired); err != nil {
 		d.logf("record what the rollback rolled out: %v", err)
 	}
 
 	report(say, Progress{Phase: StepApply, Message: fmt.Sprintf(
-		"%s now runs %s", workload, target.Image)})
+		"%s now runs %s", workload, image)})
 
 	// And that the drain is over, in the words the deploy path uses: a record whose last
 	// line is a count that is still going down has never said it finished.
@@ -890,6 +919,13 @@ type RevertRequest struct {
 	Workload  string
 	Namespace string
 	Timeout   time.Duration
+	// Registry is the address this place pulls its images from, when it is not the one the
+	// record names. The image goes back at the same path and the same digest, fetched the
+	// way this place fetches images now.
+	Registry string
+	// PullSecret is the credential for that address, written into the namespace before the
+	// workload is touched.
+	PullSecret *k8s.PullSecret
 	// Progress says what is happening, as it happens.
 	Progress func(Progress)
 }

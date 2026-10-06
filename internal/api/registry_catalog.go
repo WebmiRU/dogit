@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -65,7 +66,7 @@ func (s *Server) handleRegistryCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	address, err := s.registryAddress(r, integration)
+	address, err := s.registryAddress(r.Context(), integration)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -133,9 +134,9 @@ func (s *Server) handleRegistryCatalog(w http.ResponseWriter, r *http.Request) {
 // be right when the module answers somewhere the instance's own name does not
 // reach; an unset setting means the module's own declared default, which is what a
 // default is.
-func (s *Server) registryAddress(r *http.Request, integration *models.Integration) (string, error) {
+func (s *Server) registryAddress(ctx context.Context, integration *models.Integration) (string, error) {
 	override := ""
-	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil, integration.Capabilities.Settings)
+	settings, err := s.store.Integrations().SettingsFor(ctx, integration.ID, nil, nil, integration.Capabilities.Settings)
 	if err == nil {
 		if raw, ok := settings["public_address"]; ok {
 			_ = json.Unmarshal(raw, &override)

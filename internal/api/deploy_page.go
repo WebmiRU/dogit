@@ -450,12 +450,24 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	body, err := json.Marshal(map[string]string{
+	// Which registry this place pulls from, when it names one. A rollback has no image of
+	// its own — the module reads that out of the record — so what travels with it is the
+	// address and the credential for it, and nothing at all when the place names nothing.
+	// That last case is the one that has always worked: the record carries the address, and
+	// the secret the last deployment wrote is still in the namespace.
+	registry, err := s.placeRegistryCredential(r.Context(), project, module, request.Cluster, nil)
+	if err != nil {
+		s.log.Warn("a rollback could not be told which registry its place uses",
+			"project", project.Path, "cluster", request.Cluster, "error", err)
+	}
+
+	body, err := json.Marshal(map[string]any{
 		"project":       project.Path,
 		"cluster":       request.Cluster,
 		"namespace":     request.Namespace,
 		"workload":      request.Workload,
 		"deployment_id": request.DeploymentID,
+		"registry":      registry,
 	})
 	if err != nil {
 		s.writeError(w, r, err)
