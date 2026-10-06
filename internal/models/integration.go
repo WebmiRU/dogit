@@ -271,6 +271,16 @@ type SettingItems struct {
 	// AddLabel is what the button to add another entry says. In the module's words,
 	// because "add a source" and "add a mirror" are not the same button.
 	AddLabel string `json:"add_label,omitempty"`
+
+	// Identify names the fields that say which entry this is — a cluster's name, a
+	// recipient's chat id. Naming them is what makes a list inherit entry by entry: a
+	// project that changes one cluster's namespace has not stopped using the others,
+	// and without a name to match on there is no telling which entry the smaller list
+	// was talking about.
+	//
+	// A list that names none is replaced whole by any scope below it, because merging
+	// it would mean guessing.
+	Identify []string `json:"identify,omitempty"`
 }
 
 // Integration is a registered module.

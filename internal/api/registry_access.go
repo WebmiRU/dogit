@@ -417,7 +417,7 @@ func (s *Server) handleRegistryResolve(w http.ResponseWriter, r *http.Request) {
 
 	// The naming rule is this module's own setting, read through the same
 	// inheritance every module's settings go through.
-	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil)
+	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil, integration.Capabilities.Settings)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

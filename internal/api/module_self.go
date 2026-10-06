@@ -16,7 +16,7 @@ import (
 func (s *Server) handleModuleSelf(w http.ResponseWriter, r *http.Request) {
 	integration := integrationFrom(r.Context())
 
-	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil)
+	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil, integration.Capabilities.Settings)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -127,7 +127,7 @@ func (s *Server) handleModuleSelfSettings(w http.ResponseWriter, r *http.Request
 		projectID = id
 	}
 
-	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, groupID, projectID)
+	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, groupID, projectID, integration.Capabilities.Settings)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

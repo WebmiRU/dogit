@@ -179,6 +179,10 @@ func manifest() map[string]any {
 				"description": "Where this module may deploy. A project picks one of these by name, " +
 					"so the address lives here once rather than in every repository that deploys there.",
 				"items": map[string]any{
+					// The name is what says which cluster an entry is, and saying so is
+					// what lets a group or a project change one of them without restating
+					// the rest: the list is inherited entry by entry from the level above.
+					"identify":  []string{"name"},
 					"add_label": "Add a cluster",
 					"fields": []map[string]any{
 						{

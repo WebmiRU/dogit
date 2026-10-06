@@ -23,7 +23,7 @@ func TestSettingsAreSavedAsAForm(t *testing.T) {
 		t.Fatalf("save: status %d, body %s", recorder.Code, recorder.Body.String())
 	}
 
-	effective, err := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil)
+	effective, err := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil, rf.module.Capabilities.Settings)
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestARefusedValueStopsTheWholeForm(t *testing.T) {
 	}
 
 	// Nothing was written — not even the good value, which went first in the map.
-	effective, err := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil)
+	effective, err := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil, rf.module.Capabilities.Settings)
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestASettingCanBePutBack(t *testing.T) {
 		t.Fatalf("reset: status %d, body %s", recorder.Code, recorder.Body.String())
 	}
 
-	effective, _ := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil)
+	effective, _ := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil, rf.module.Capabilities.Settings)
 	if _, stored := effective["image_name_template"]; stored {
 		t.Error("the value survived the reset")
 	}
@@ -152,7 +152,7 @@ func TestSavingTwiceUpdatesRatherThanDuplicates(t *testing.T) {
 		t.Errorf("%d rows for one setting written three times", rows)
 	}
 
-	effective, _ := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil)
+	effective, _ := rf.store.Integrations().SettingsFor(t.Context(), rf.module.ID, nil, nil, rf.module.Capabilities.Settings)
 	var template string
 	_ = json.Unmarshal(effective["image_name_template"], &template)
 	if template != "{{project}}-third" {

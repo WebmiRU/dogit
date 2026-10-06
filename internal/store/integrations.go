@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -304,7 +305,12 @@ func (r *IntegrationRepo) SetSetting(ctx context.Context, integrationID uuid.UUI
 
 // SettingsFor resolves the effective settings for a scope: instance defaults,
 // overridden by the group, overridden by the project.
-func (r *IntegrationRepo) SettingsFor(ctx context.Context, integrationID uuid.UUID, groupID, projectID *uuid.UUID) (map[string]json.RawMessage, error) {
+//
+// The specs are the module's own. They are needed because one kind of setting does not
+// take overriding as replacement: a list whose entries have names inherits entry by
+// entry, the way a module's rows do, and which lists those are is the module's business
+// and not the core's to guess.
+func (r *IntegrationRepo) SettingsFor(ctx context.Context, integrationID uuid.UUID, groupID, projectID *uuid.UUID, specs []models.SettingSpec) (map[string]json.RawMessage, error) {
 	scopes := []struct {
 		scopeType string
 		scopeID   *uuid.UUID
@@ -337,6 +343,12 @@ func (r *IntegrationRepo) SettingsFor(ctx context.Context, integrationID uuid.UU
 				rows.Close()
 				return nil, err
 			}
+			if inherited, ok := out[key]; ok {
+				if merged, ok := mergeEntries(specs, key, inherited, value); ok {
+					out[key] = merged
+					continue
+				}
+			}
 			out[key] = value
 		}
 		rows.Close()
@@ -345,6 +357,86 @@ func (r *IntegrationRepo) SettingsFor(ctx context.Context, integrationID uuid.UU
 		}
 	}
 	return out, nil
+}
+
+// mergeEntries merges a lower scope's list over an inherited one, entry by entry, and
+// says whether it did.
+//
+// It applies only where the module named what identifies an entry — a list of clusters
+// is a list of places, each with a name, and a project that changes one cluster's
+// namespace has not stopped using the other two. Any other list is replaced whole,
+// because there is no telling which of its entries the smaller list was talking about,
+// and a half-merged answer there would be a guess.
+//
+// The smaller scope names only the fields it means to change; the rest are inherited as
+// they were. An entry whose name nobody gave is kept as its own rather than merged into
+// anything, because an empty name is not a reference to a row that exists.
+func mergeEntries(specs []models.SettingSpec, key string, inherited, override json.RawMessage) (json.RawMessage, bool) {
+	var spec *models.SettingSpec
+	for i := range specs {
+		if specs[i].Key == key {
+			spec = &specs[i]
+			break
+		}
+	}
+	if spec == nil || spec.Type != "list" || spec.Items == nil || len(spec.Items.Identify) == 0 {
+		return nil, false
+	}
+
+	var base, over []map[string]any
+	if err := json.Unmarshal(inherited, &base); err != nil {
+		return nil, false
+	}
+	if err := json.Unmarshal(override, &over); err != nil {
+		return nil, false
+	}
+
+	nameOf := func(entry map[string]any) string {
+		parts := make([]string, 0, len(spec.Items.Identify))
+		for _, field := range spec.Items.Identify {
+			text, _ := entry[field].(string)
+			if text == "" {
+				// Half a name is not a name. Merging on it would join two entries that
+				// only appear to be the same one.
+				return ""
+			}
+			parts = append(parts, text)
+		}
+		return strings.Join(parts, " ")
+	}
+
+	merged := make([]map[string]any, len(base))
+	for i, entry := range base {
+		copied := make(map[string]any, len(entry))
+		for field, value := range entry {
+			copied[field] = value
+		}
+		merged[i] = copied
+	}
+	for _, entry := range over {
+		name := nameOf(entry)
+		replaced := false
+		if name != "" {
+			for _, existing := range merged {
+				if nameOf(existing) == name {
+					for field, value := range entry {
+						existing[field] = value
+					}
+					replaced = true
+					break
+				}
+			}
+		}
+		if !replaced {
+			merged = append(merged, entry)
+		}
+	}
+
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // SettingsAt returns the raw rows at one scope, for the settings UI.

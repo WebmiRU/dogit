@@ -41,6 +41,11 @@ const { add: notify } = useNotifyPool()
 // and having nothing to render before the first keystroke.
 const values = ref<Record<string, unknown>>({})
 const saved = ref<Record<string, unknown>>({})
+// The rows the levels above this scope decide, keyed by setting. Kept because a list
+// that inherits entry by entry must not be written down whole at every level below:
+// that would freeze somebody else's cluster in this project's settings the first time
+// anybody opened this page and pressed Save.
+const inherited = ref<Record<string, unknown>>({})
 const busy = ref(false)
 const error = ref('')
 
@@ -64,15 +69,23 @@ function asString(value: unknown): string {
  * something a form can read a value out of by key. Effective is what a job would
  * actually run with, which is also what should be shown.
  */
-function fill(answer: { effective?: Record<string, unknown> }) {
+function fill(answer: {
+  effective?: Record<string, unknown>
+  inherited?: Record<string, unknown>
+}) {
   const next: Record<string, unknown> = {}
+  const above: Record<string, unknown> = {}
   for (const spec of props.module.manifest?.settings ?? []) {
     const stored = answer.effective?.[spec.key]
     next[spec.key] = isList(spec)
       ? entriesOf(stored)
       : asString(stored ?? spec.default ?? '')
+    if (isList(spec)) above[spec.key] = entriesOf(answer.inherited?.[spec.key])
   }
   values.value = next
+  // What the levels above this one decide, kept so that saving here does not write
+  // their rows down again as if this scope had decided them.
+  inherited.value = above
   // A copy that goes all the way down, not one level.
   //
   // `{ ...next }` copies the keys and hands over the values themselves, which is
@@ -88,6 +101,124 @@ function fill(answer: { effective?: Record<string, unknown> }) {
 
 function isList(spec: SettingSpec): boolean {
   return spec.type === 'list'
+}
+
+/**
+ * The name that says which row this is, or nothing when the module names none.
+ *
+ * The same rule as the core's: a row with a half-written name is not a reference to
+ * another row, and joining them would be a guess.
+ */
+function rowName(spec: SettingSpec, row: SettingEntry): string {
+  const identify = spec.items?.identify ?? []
+  if (!identify.length) return ''
+  const parts: string[] = []
+  for (const field of identify) {
+    const text = asString(row[field]).trim()
+    if (!text) return ''
+    parts.push(text)
+  }
+  return parts.join(' ')
+}
+
+/** Whether one row is worth writing at this scope at all. */
+function rowIsOurs(spec: SettingSpec, row: SettingEntry): boolean {
+  const above = entriesOf(inherited.value[spec.key])
+  const name = rowName(spec, row)
+  // A list the module does not name entries of cannot be told apart row by row, so
+  // what is saved is what is on screen, as before.
+  if (!name) return true
+  const was = above.find((one) => rowName(spec, one) === name)
+  if (!was) return true
+  return JSON.stringify(orderFields(spec, was)) !== JSON.stringify(orderFields(spec, row))
+}
+
+/** A row with its fields in the module's own order, so two rows compare honestly. */
+function orderFields(spec: SettingSpec, row: SettingEntry): SettingEntry {
+  const out: SettingEntry = {}
+  for (const field of spec.items?.fields ?? []) {
+    if (field.key in row) out[field.key] = row[field.key]
+  }
+  for (const [key, value] of Object.entries(row)) {
+    if (!(key in out)) out[key] = value
+  }
+  return out
+}
+
+/**
+ * A list as it is written at this scope: only what this scope decided.
+ *
+ * A row that matches what came from above is left out entirely, and a row that differs
+ * keeps only the fields that differ. Two reasons, and the second is the important one:
+ *
+ * - saving here then changes what was meant to change and nothing else;
+ * - a field copied down from above is a copy. The level above changes its cluster's
+ *   kubeconfig tomorrow and the copy here is yesterday's, silently, and nobody editing
+ *   this page would ever see that this project holds a value of its own.
+ *
+ * What the core sends back is the effective list, so the row that comes back still
+ * shows every field. Nothing is lost; what is stored is only what was decided here.
+ */
+function listSettable(spec: SettingSpec, raw: unknown): unknown {
+  if (!isList(spec)) return settingValue(spec, raw)
+
+  const rows: SettingEntry[] = []
+  for (const row of entriesOf(raw)) {
+    if (!rowIsOurs(spec, row)) continue
+    const above = entriesOf(inherited.value[spec.key]).find(
+      (one) => rowName(spec, one) === rowName(spec, row),
+    )
+    const own: SettingEntry = {}
+    let kept = 0
+    for (const field of spec.items?.fields ?? []) {
+      if (!(field.key in row)) continue
+      if (above && sameValue(above[field.key], row[field.key])) continue
+      own[field.key] = row[field.key]
+      kept++
+    }
+    // A row whose name is what makes it a row at all: without it nothing above could
+    // ever be matched to it.
+    for (const key of spec.items?.identify ?? []) {
+      own[key] = row[key]
+      kept++
+    }
+    if (kept) rows.push(coerceRow(spec, own))
+  }
+  if (!rows.length) return undefined
+  return rows
+}
+
+/**
+ * One row as the setting wants it, for the fields it carries.
+ *
+ * Not listValue, which fills in every declared field: that is right for a row being
+ * written whole and wrong here, where a field that was left out is a field this scope
+ * has no opinion about, and writing it as an empty value would be an opinion.
+ */
+function coerceRow(spec: SettingSpec, row: SettingEntry): SettingEntry {
+  const fields = spec.items?.fields ?? []
+  const out: SettingEntry = {}
+  for (const field of fields) {
+    if (!(field.key in row)) continue
+    const value = row[field.key]
+    if (field.secret && value === secretMask) {
+      // Kept as the mask, so the core leaves the stored value alone rather than
+      // storing a row of asterisks over somebody's token.
+      out[field.key] = secretMask
+      continue
+    }
+    out[field.key] = fieldValue(field, value)
+  }
+  for (const key of spec.items?.identify ?? []) {
+    if (key in out || !(key in row)) continue
+    out[key] = row[key]
+  }
+  return out
+}
+
+/** Two field values, compared as values rather than as strings. */
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 }
 
 /**
@@ -196,7 +327,7 @@ async function save() {
   const payload: Record<string, unknown> = {}
   for (const spec of props.module.manifest?.settings ?? []) {
     if (!(spec.key in dirty)) continue
-    const value = settingValue(spec, dirty[spec.key])
+    const value = listSettable(spec, dirty[spec.key])
     if (value === undefined) continue
     payload[spec.key] = value
   }
@@ -315,6 +446,16 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
           <div v-for="(row, index) in rowsOf(spec)" :key="index" class="setting-entry">
             <div class="setting-entry-head">
               <span class="setting-entry-name">{{ entryTitle(spec, row) }}</span>
+              <!-- Which of these rows are this scope's own. Without it a page of
+                   inherited rows looks like a page of things decided here, and the
+                   first save writes all of them down as if they had been. -->
+              <span
+                v-if="spec.items?.identify?.length && scope !== 'instance'"
+                class="setting-entry-origin"
+                :class="{ ours: rowIsOurs(spec, row) }"
+              >
+                {{ rowIsOurs(spec, row) ? 'changed here' : 'inherited' }}
+              </span>
               <button
                 class="link-button"
                 type="button"
@@ -527,6 +668,27 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
 /* The name a row is known by: which cluster, which mirror, which feed. */
 .setting-entry-name {
   font-weight: 600;
+}
+
+/*
+ * Where a row comes from. Two words, and the difference between them is the whole
+ * point of inheritance: an inherited row is somebody else's decision that this scope
+ * has not touched, and a row marked as changed here is this scope's own.
+ */
+.setting-entry-origin {
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.setting-entry-origin.ours {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .setting-field {

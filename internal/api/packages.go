@@ -85,7 +85,7 @@ func (s *Server) handleProjectImages(w http.ResponseWriter, r *http.Request) {
 	// An unset setting means the module's own declared default, which is what a
 	// default is: the module said where it publishes itself when it started.
 	override := ""
-	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil)
+	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil, integration.Capabilities.Settings)
 	if err == nil {
 		if raw, ok := settings["public_address"]; ok {
 			_ = json.Unmarshal(raw, &override)

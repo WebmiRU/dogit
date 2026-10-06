@@ -12,6 +12,13 @@ export interface SettingItems {
   fields: SettingSpec[]
   /** What the button to add another entry says, in the module's words. */
   add_label?: string
+  /**
+   * The fields that say which entry this is — a cluster's name, a recipient's chat id.
+   *
+   * Naming them is what makes a list inherit entry by entry: a project that changes
+   * one cluster's namespace has not stopped using the others.
+   */
+  identify?: string[]
 }
 
 export interface SettingSpec {

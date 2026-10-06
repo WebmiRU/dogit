@@ -135,7 +135,7 @@ func (s *Server) handleRegistryCatalog(w http.ResponseWriter, r *http.Request) {
 // default is.
 func (s *Server) registryAddress(r *http.Request, integration *models.Integration) (string, error) {
 	override := ""
-	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil)
+	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil, integration.Capabilities.Settings)
 	if err == nil {
 		if raw, ok := settings["public_address"]; ok {
 			_ = json.Unmarshal(raw, &override)

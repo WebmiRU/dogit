@@ -781,7 +781,7 @@ func (s *Server) registryCredentialsFor(r *http.Request, job *store.Job) (map[st
 		return nil, err
 	}
 
-	settings, err := s.store.Integrations().SettingsFor(r.Context(), registry.ID, nil, &project.ID)
+	settings, err := s.store.Integrations().SettingsFor(r.Context(), registry.ID, nil, &project.ID, registry.Capabilities.Settings)
 	if err != nil {
 		return nil, err
 	}

@@ -201,7 +201,7 @@ func moduleStatus(ctx context.Context, args []string) error {
 		projectID = &project.ID
 	}
 
-	settings, err := a.Store.Integrations().SettingsFor(ctx, integration.ID, nil, projectID)
+	settings, err := a.Store.Integrations().SettingsFor(ctx, integration.ID, nil, projectID, integration.Capabilities.Settings)
 	if err != nil {
 		return err
 	}
