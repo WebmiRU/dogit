@@ -29,9 +29,14 @@ func TestTheModulesOwnRegistryIsInTheListWithoutBeingCopied(t *testing.T) {
 	if row.Name != "our own registry" {
 		t.Errorf("the row is called %q, want the module's own name", row.Name)
 	}
-	if row.URL != "https://"+modulePublishedAddress {
-		t.Errorf("the row says %q, want the address the module publishes (%q)",
-			row.URL, "https://"+modulePublishedAddress)
+	// Bare, though the module publishes it with a scheme: every other row on this page is
+	// written that way, and a list showing one address each way round is a list somebody
+	// reads as two registries where there is one. The module's own published address is
+	// still what it is — this page shows the host, and the place that picks it gets the
+	// host, which is what an image name and a pull secret are both written with.
+	if row.URL != modulePublishedAddress {
+		t.Errorf("the row says %q, want the address the module publishes, bare (%q)",
+			row.URL, modulePublishedAddress)
 	}
 	if row.IntegrationID != module.ID.String() {
 		t.Errorf("the row names the module %s, want %s", row.IntegrationID, module.ID)

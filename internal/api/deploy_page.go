@@ -450,13 +450,24 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Which registry this place pulls from, when it names one. A rollback has no image of
-	// its own — the module reads that out of the record — so what travels with it is the
-	// address and the credential for it, and nothing at all when the place names nothing.
-	// That last case is the one that has always worked: the record carries the address, and
-	// the secret the last deployment wrote is still in the namespace.
+	// Which registry this place pulls from, and what it pulls with. A rollback has no image
+	// of its own — the module reads that out of the record — so what travels with it is the
+	// address and the credential, under the same rule a deployment is held to.
+	//
+	// A place that names no registry cannot be rolled back, and that is said here, to the
+	// person who asked, rather than found out in a namespace minutes later: the record
+	// carries the address, but a rollback to a version whose image cannot be fetched leaves
+	// the workload on whatever the failed rollout left behind, which is the worst of both
+	// versions and neither of them.
 	registry, err := s.placeRegistryCredential(r.Context(), project, module, request.Cluster, nil)
 	if err != nil {
+		if sentence, refused := registryRefusal(err); refused {
+			s.log.Info("a rollback was refused before it started",
+				"project", project.Path, "cluster", request.Cluster,
+				"deployment", request.DeploymentID, "user", user.Username, "reason", sentence)
+			s.writeError(w, r, errBadRequest(sentence))
+			return
+		}
 		s.log.Warn("a rollback could not be told which registry its place uses",
 			"project", project.Path, "cluster", request.Cluster, "error", err)
 	}

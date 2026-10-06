@@ -75,55 +75,39 @@ func TestATrailingSlashIsNotADifferentAddress(t *testing.T) {
 	}
 }
 
-// The default is one record's flag, not a paragraph of convention. Marking one default
-// has to take the flag off whichever record had it, in the same breath — and the table's
-// index is what makes "at the same time" the only arrangement available.
-func TestThereIsOneDefaultAndMarkingAnotherMovesIt(t *testing.T) {
+// There is no such thing as the default one, and a list where every row is an ordinary
+// row has one less thing to be wrong about: writing to a record changes that record, and
+// nothing else anywhere in the table.
+func TestWritingToARegistryChangesNothingAboutTheOthers(t *testing.T) {
 	st := dbtest.Open(t)
 	ctx := context.Background()
 
-	first := store.DockerRegistry{URL: dbtest.Unique("first.example.com")}
+	first := store.DockerRegistry{URL: dbtest.Unique("first.example.com"), Note: "the first one"}
 	if err := st.DockerRegistries().Create(ctx, &first); err != nil {
 		t.Fatalf("write the first registry down: %v", err)
 	}
-	second := store.DockerRegistry{URL: dbtest.Unique("second.example.com")}
+	second := store.DockerRegistry{URL: dbtest.Unique("second.example.com"), Note: "the second one"}
 	if err := st.DockerRegistries().Create(ctx, &second); err != nil {
 		t.Fatalf("write the second registry down: %v", err)
 	}
 
-	// The way an administrator does it: mark one, and whoever had it stops having it
-	// without anybody having to remember to.
-	first.Default = true
+	first.Note = "edited"
 	if err := st.DockerRegistries().Update(ctx, &first); err != nil {
-		t.Fatalf("mark the first one the default: %v", err)
+		t.Fatalf("edit the first one: %v", err)
 	}
 
-	// A second record cannot be created as the default while the first holds it: the table
-	// permits one, and it says so rather than letting both be true at once.
-	third := store.DockerRegistry{URL: dbtest.Unique("third.example.com"), Default: true}
-	if err := st.DockerRegistries().Create(ctx, &third); !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("a second default: %v, want a conflict", err)
-	}
-
-	// And marking the other one moves it.
-	second.Default = true
-	if err := st.DockerRegistries().Update(ctx, &second); err != nil {
-		t.Fatalf("move the default: %v", err)
-	}
-
-	wasDefault, err := st.DockerRegistries().ByID(ctx, first.ID)
-	if err != nil {
-		t.Fatalf("read the first registry back: %v", err)
-	}
-	if wasDefault.Default {
-		t.Error("the first registry is still marked default after another was marked")
-	}
-	isDefault, err := st.DockerRegistries().ByID(ctx, second.ID)
+	// The neighbour is a record of its own, and the way a page learned it is an ordinary
+	// page of a list — so an edit of one row cannot reach it.
+	after, err := st.DockerRegistries().ByID(ctx, second.ID)
 	if err != nil {
 		t.Fatalf("read the second registry back: %v", err)
 	}
-	if !isDefault.Default {
-		t.Error("the second registry was marked default and is not")
+	if after.Note != "the second one" {
+		t.Errorf("editing one registry changed its neighbour's note to %q", after.Note)
+	}
+	if !after.UpdatedAt.Equal(second.UpdatedAt) {
+		t.Errorf("editing one registry touched its neighbour's timestamp: %v, want %v",
+			after.UpdatedAt, second.UpdatedAt)
 	}
 }
 
@@ -263,35 +247,33 @@ func TestAPagePastTheEndStillKnowsHowManyThereAre(t *testing.T) {
 	}
 }
 
-// The table refuses two different things, and it must refuse each with the truth about it.
-// Told "that address is already on the list" for a record whose address is not on the list,
-// an administrator goes looking for a duplicate they did not write, and the registry they
-// were trying to add stays unwritten.
-func TestARefusalSaysWhichThingWasAlreadyThere(t *testing.T) {
+// The one thing the table refuses is a second record for an address that is already on the
+// list, and the refusal names that address — it is the only thing anybody can do about it,
+// and it is why the uniqueness is case-insensitive: an address that differs from a written
+// one only in case names the same machine, and two records for one machine would mean a
+// deployment could pull from whichever it read first.
+func TestTheRefusalNamesTheAddressThatIsAlreadyThere(t *testing.T) {
 	st := dbtest.Open(t)
 	ctx := context.Background()
 
-	held := store.DockerRegistry{URL: dbtest.Unique("held.example.com")}
-	if err := st.DockerRegistries().Create(ctx, &held); err != nil {
+	written := store.DockerRegistry{URL: dbtest.Unique("held.example.com")}
+	if err := st.DockerRegistries().Create(ctx, &written); err != nil {
 		t.Fatalf("write a registry down: %v", err)
 	}
-	held.Default = true
-	if err := st.DockerRegistries().Update(ctx, &held); err != nil {
-		t.Fatalf("mark it the default: %v", err)
-	}
 
-	// A different address, refused because the default is taken rather than because the
-	// address is on the list — and the sentence must not claim the address is.
-	other := store.DockerRegistry{URL: dbtest.Unique("other.example.com"), Default: true}
-	err := st.DockerRegistries().Create(ctx, &other)
+	// The same machine written in another case, which is a duplicate and not a second
+	// registry: two records for one host is a list where a deployment pulls from whichever
+	// row it read first.
+	same := store.DockerRegistry{URL: strings.ToUpper(written.URL)}
+	err := st.DockerRegistries().Create(ctx, &same)
 	if !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("a second default: %v, want a conflict", err)
+		t.Fatalf("a second record for one address: %v, want a conflict", err)
 	}
-	if strings.Contains(err.Error(), other.URL) {
-		t.Errorf("the refusal names %q, which is not on the list: %v", other.URL, err)
-	}
-	if !strings.Contains(err.Error(), "default") {
-		t.Errorf("the refusal does not say what is in the way: %v", err)
+	// The refusal names the address as it was written in the record being refused, which is
+	// what the person who wrote it can search for — hence the case-insensitive comparison
+	// against the address already on the list.
+	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(written.URL)) {
+		t.Errorf("the refusal does not name the address that is already on the list: %v", err)
 	}
 }
 

@@ -690,13 +690,32 @@ const secretMask = '********'
  *
  * Every declared field present with a blank value, so the row renders as a form
  * rather than growing fields one keystroke at a time as each is first typed into.
+ *
+ * The one field that does not start blank is the registry, which starts as whatever the
+ * module's own registry setting says — found by its type rather than by its name, because
+ * this form reads a manifest and does not know what any module calls its settings. It is a
+ * value for a row being created and nothing else: no deployment reads it, so changing it
+ * moves no place, and a place that names a registry keeps that one.
  */
 function newEntry(spec: SettingSpec): SettingEntry {
   const row: SettingEntry = {}
   for (const field of spec.items?.fields ?? []) {
-    row[field.key] = field.type === 'bool' ? false : ''
+    if (field.type === 'bool') {
+      row[field.key] = false
+      continue
+    }
+    row[field.key] = field.type === 'registry' ? newRowRegistry() : ''
   }
   return row
+}
+
+/** What a module's own registry setting is set to, or nothing when it declares none. */
+function newRowRegistry(): string {
+  for (const spec of props.module.manifest?.settings ?? []) {
+    if (spec.type !== 'registry') continue
+    return asString(values.value[spec.key]).trim()
+  }
+  return ''
 }
 
 /**
@@ -898,23 +917,45 @@ function inheritedPlaceholder(spec: SettingSpec, row: SettingEntry, field: Setti
 /**
  * What a registry field offers, in the order a reader wants them.
  *
- * The instance's own registry first and empty, because that is the answer for nearly every
- * place and it is what an empty field has always meant. Then the ones an administrator wrote
- * down — the module's own registry among them, which is a registry like any other and belongs
- * in the same list rather than named twice somewhere else. Then "another address", which is
- * how a public mirror nobody wrote down gets named: it needs no credential, so refusing to
- * offer it would be refusing to describe a real thing.
+ * Empty first, and it says plainly that nothing is chosen: an empty row is a row a
+ * deployment is refused over, so an option that read like a default would be promising
+ * something the field cannot deliver. Then the ones on the list of registries — the module's
+ * own among them, which is a registry like any other and belongs in the same list rather than
+ * named twice somewhere else — and then "another address", for the address somebody knows and
+ * has not written down yet. That last one is how a registry gets added to the list by the
+ * people who use it: they type it here, and a deployment says which one is missing.
  *
- * An address already saved that is no longer on the list stays in the list, marked as what
- * it is. Dropping it would make the field show something else than the value being saved,
- * and saving that would quietly change where the images come from.
+ * An address already saved that is not on the list stays in the list, marked as what it is.
+ * Dropping it would make the field show something else than the value being saved, and
+ * saving that would quietly change where the images come from.
  */
 const otherRegistryChoice = 'dogit:another-registry'
+
+/**
+ * How two addresses are compared, which is the way the core compares them too.
+ *
+ * A scheme and a trailing slash are how a person writes an address, and neither is part of
+ * the host a credential is filed under or an image name carries. Compared as text, a value
+ * saved as "https://harbor.example.com/" is not on a list holding "harbor.example.com" —
+ * and the field then falls back to its first option and says a place is unchosen when it
+ * names a registry quite happily.
+ */
+function registryAddress(address: string): string {
+  return asString(address).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+}
+
+/** Whether a saved value names one of the options, spelled the way the option is. */
+function registrySpelling(options: { value: string; label: string }[], value: string): string {
+  const wanted = registryAddress(value)
+  if (wanted === '') return ''
+  const match = options.find((option) => registryAddress(option.value) === wanted)
+  return match?.value ?? value
+}
 
 function registryOptions(value: string, fromAbove = ''): { value: string; label: string }[] {
   const chosen = value.trim()
   const options = [
-    { value: '', label: '— by default: the registry the image was pushed to —' },
+    { value: '', label: '— not chosen —' },
     ...registries.value.map((reg) => ({
       value: reg.url,
       label: reg.name ? `${reg.name} — ${reg.url}` : reg.url,
@@ -929,9 +970,12 @@ function registryOptions(value: string, fromAbove = ''): { value: string; label:
     options.unshift({ value: inherited, label: `${inherited} — decided above` })
   }
 
-  const known = options.some((option) => option.value === chosen)
+  const known = options.some((option) => registryAddress(option.value) === registryAddress(chosen))
   if (chosen !== '' && !known) {
-    options.push({ value: chosen, label: `${chosen} (not on the list of registries)` })
+    options.push({
+      value: chosen,
+      label: `${chosen} (not in the list of registries — deployments are refused)`,
+    })
   }
   options.push({ value: otherRegistryChoice, label: 'another address…' })
   return options
@@ -962,7 +1006,7 @@ function registryTyping(spec: SettingSpec, index: number | string, field: Settin
 function registryShown(spec: SettingSpec, row: SettingEntry, index: number, field: SettingSpec): string {
   if (registryTyping(spec, index, field)) return otherRegistryChoice
   const own = asString(row[field.key]).trim()
-  if (own !== '') return own
+  if (own !== '') return registrySpelling(registryOptions(own), own)
   return inheritedOf(spec, row, field.key) || own
 }
 

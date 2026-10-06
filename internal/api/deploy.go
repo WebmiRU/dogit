@@ -250,6 +250,18 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	pull, err := s.placePullFor(ctx, project, target, spec.Target, image, log)
 	switch {
 	case err != nil:
+		// Two kinds of "no", and only one of them stops the job. A refusal is the core
+		// saying the deployment cannot be carried out from what this instance knows —
+		// the place has named no registry, or named one that is not on the list — and it
+		// says so here rather than letting the module be sent to a cluster that would
+		// spend a rollout timeout failing to pull. Anything else is written into the log
+		// and the deployment goes on: an unanswerable registry lookup is a problem with
+		// this installation, not with the place, and refusing every deployment over it
+		// would turn one broken thing into no deployments at all.
+		if sentence, refused := registryRefusal(err); refused {
+			s.writeDeployLog(ctx, job, "This deployment cannot be carried out: "+sentence+"\n")
+			return &placeRegistryRefusal{sentence: sentence}
+		}
 		log("  registry:   %v\n", err)
 	case pull != nil:
 		log("  registry:   %s%s\n", pull.Address, pullSaid(pull))

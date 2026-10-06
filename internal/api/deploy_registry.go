@@ -52,6 +52,28 @@ type placePull struct {
 	TheInstanceRegistry bool
 }
 
+// placeRegistryRefusal is a place that cannot pull, said as a sentence for whoever asked
+// for the deployment.
+//
+// It is a type rather than a bare error because the two answers it can carry are the only
+// two that stop a deployment before the module is called, and everything else that goes
+// wrong here — a registry module that is not answering, a token that could not be minted —
+// is reported in the log and the deployment carries on. A refusal is the core declining
+// to send a job it knows cannot work, which is a different thing from a job that failed,
+// and the page has to be able to say which one it was.
+type placeRegistryRefusal struct{ sentence string }
+
+func (r *placeRegistryRefusal) Error() string { return r.sentence }
+
+// registryRefusal is whether an error is that refusal, and what it said.
+func registryRefusal(err error) (string, bool) {
+	var refusal *placeRegistryRefusal
+	if errors.As(err, &refusal) {
+		return refusal.sentence, true
+	}
+	return "", false
+}
+
 // credential is what goes to the module, or nil when there is nothing to write into the
 // cluster: a public mirror needs no credential, and a secret built for an address nobody
 // recognised would be a secret for nothing.
@@ -109,37 +131,67 @@ func (s *Server) placePullFor(ctx context.Context, project *models.Project,
 	// The registry the image is already addressed to, which is where the run pushed it.
 	instanceAddress := registryHostFrom(repository)
 
-	configured := s.configuredRegistry(ctx, project, module, place, log)
-	if configured == "" || sameRegistry(configured, instanceAddress) {
-		return s.instanceRegistryPull(ctx, project, image, instanceAddress)
-	}
-
-	pull, err := s.registryCredentialFor(ctx, project, configured)
+	chosen, err := s.placeRegistry(ctx, project, module, place, log)
 	if err != nil {
 		return nil, err
 	}
-	pull.Image = imageAtRegistry(image, configured)
+
+	// The registry this instance runs needs no lookup: the image already carries its
+	// address, and the credential for it is a token minted for this project and nothing
+	// else.
+	if sameRegistry(chosen, instanceAddress) {
+		return s.instanceRegistryPull(ctx, project, image, instanceAddress)
+	}
+
+	pull, err := s.registryCredentialFor(ctx, project, place, chosen)
+	if err != nil {
+		return nil, err
+	}
+	pull.Image = imageAtRegistry(image, chosen)
 	return pull, nil
 }
 
-// placeRegistryCredential is what a rollback needs: the place's registry, when it names one.
+// placeRegistryCredential is what a rollback needs: the place's registry and its credential.
 //
-// A rollback has no image of its own — the module reads it out of the record — so what the
-// core can offer is the address and the credential for it, and nothing when the place names
-// nothing. That case is the one that has always worked: the record carries the address, and
-// the secret written by the last deployment is still in the namespace.
+// A rollback has no image of its own — the module reads that out of the record — so what the
+// core can offer is the address and what to pull with, and it offers them under the same
+// rule a deployment is held to. It used to be sent nothing when the place named nothing,
+// which is how a rollback kept working after a place's registry setting was added and not
+// filled in: the secret the last deployment wrote was still in the namespace, and nobody
+// found out that the place no longer said where it pulled from until a cluster was rebuilt
+// and the secret was gone too.
 func (s *Server) placeRegistryCredential(ctx context.Context, project *models.Project,
 	module *models.Integration, place string, log func(string, ...any)) (*registryCredential, error) {
 
-	configured := s.configuredRegistry(ctx, project, module, place, log)
-	if configured == "" {
-		return nil, nil
+	chosen, err := s.placeRegistry(ctx, project, module, place, log)
+	if err != nil {
+		return nil, err
 	}
-	pull, err := s.registryCredentialFor(ctx, project, configured)
+	pull, err := s.registryCredentialFor(ctx, project, place, chosen)
 	if err != nil {
 		return nil, err
 	}
 	return pull.credential(), nil
+}
+
+// placeRegistry is the registry the place's own row names — or the refusal of the
+// deployment.
+//
+// A place names one registry and it has to be one the instance knows about: the registry
+// this instance runs, or a record somebody wrote down under Registries. Both refusals
+// happen here, before the module is asked to do anything, because both are things about
+// this instance and not about the cluster: a cluster that is told to pull from an address
+// nobody wrote down sits at ImagePullBackOff until somebody reads the pod's events, and
+// every one of those events is about a registry rather than about the deployment.
+func (s *Server) placeRegistry(ctx context.Context, project *models.Project,
+	module *models.Integration, place string, log func(string, ...any)) (string, error) {
+
+	chosen := s.placesRegistry(ctx, project, module, place, log)
+	if chosen == "" {
+		return "", &placeRegistryRefusal{fmt.Sprintf(
+			"%s has no registry chosen — choose one in the deploy module's settings", place)}
+	}
+	return chosen, nil
 }
 
 // instanceRegistryPull is what a place pulls with when it pulls from the registry this
@@ -168,16 +220,19 @@ func (s *Server) instanceRegistryPull(ctx context.Context, project *models.Proje
 	}, nil
 }
 
-// registryCredentialFor is what the core knows about one address.
+// registryCredentialFor is what the core knows about one address, and the refusal when it
+// knows nothing.
 //
-// Three answers, and which one it is depends only on what the core already holds: the
-// address the registry module publishes is this instance's own and gets a token minted for
-// the project; an address on the list of registries gets that record's login; and an address
-// nobody has written down gets nothing at all — which is not a refusal but an admission. A
-// public mirror needs no credential, and refusing it would be dogit insisting that every
-// registry its clusters pull from is one dogit has heard of.
+// Two answers and a refusal, and which one it is depends only on what the core already
+// holds: the address the registry module publishes is this instance's own and gets a token
+// minted for the project, and an address on the list of registries gets that record's
+// login. An address nobody has written down gets a refusal, where it used to get nothing
+// at all and a pull with no credential — which was dogit guessing that an address it had
+// never heard of was a public mirror, and a guess that is wrong is a cluster at
+// ImagePullBackOff with nothing in the events saying that the address was never written
+// down. Writing it down takes one line, and then it is not a guess.
 func (s *Server) registryCredentialFor(ctx context.Context, project *models.Project,
-	address string) (*placePull, error) {
+	place, address string) (*placePull, error) {
 
 	address = registryAddressOf(address)
 	pull := &placePull{Address: address, Anonymous: true}
@@ -208,21 +263,28 @@ func (s *Server) registryCredentialFor(ctx context.Context, project *models.Proj
 		pull.Anonymous = written.Login == "" && written.Password == ""
 		pull.InsecureTLS = written.InsecureTLS
 	case errors.Is(err, store.ErrNotFound):
+		return nil, &placeRegistryRefusal{fmt.Sprintf(
+			"the registry chosen for %s is not in the list of registries", place)}
 	default:
 		return nil, err
 	}
 	return pull, nil
 }
 
-// configuredRegistry is the address the place's own row names.
+// placesRegistry is the address the place's own row names, and empty when it names none.
 //
 // Read from the deploy module's own rows through the inheritance every module setting goes
 // through, so a group can name a registry for its places and a project can change one
-// without restating the rest. A place with no such setting, a row that has no field for it,
-// or a row that cannot be read at all, means the instance's registry — which is what an
-// empty row has always meant, and a preference that cannot be read must not stop a
-// deployment that is otherwise perfectly deployable.
-func (s *Server) configuredRegistry(ctx context.Context, project *models.Project,
+// without restating the rest. It is read from the module's rows through the core's store
+// rather than taken on the module's word, because the module is the thing being asked — a
+// module that could name any registry and be handed its password would make every registry
+// on the instance its business.
+//
+// A row that has no field for it, a row that cannot be read at all, and a place no row
+// names all answer the same way, with nothing: which is not the instance's registry by
+// default any more but an absence the caller is told about, because a place that silently
+// deploys from somewhere nobody chose is a deployment nobody can point at afterwards.
+func (s *Server) placesRegistry(ctx context.Context, project *models.Project,
 	module *models.Integration, place string, log func(string, ...any)) string {
 
 	place = strings.TrimSpace(place)

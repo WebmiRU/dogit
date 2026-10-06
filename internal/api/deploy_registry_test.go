@@ -109,31 +109,54 @@ func TestARegistryOnTheListBringsItsOwnLogin(t *testing.T) {
 	}
 }
 
-// An address nobody wrote down is a public mirror, and it is served as one: no credential is
-// invented for it and nothing is written into the cluster. Refusing it would be dogit
-// insisting that every registry its clusters pull from is one dogit has heard of.
-func TestAnAddressNobodyWroteDownIsPulledFromWithoutACredential(t *testing.T) {
+// An address nobody wrote down is refused, and the sentence says what to do about it.
+//
+// It used to be served as a public mirror, with no credential and nothing written into the
+// cluster. That was dogit guessing that an address it had never heard of needed no
+// credential, and the guess being wrong is a cluster at ImagePullBackOff for a rollout
+// timeout with every event in the pod talking about a registry rather than about the
+// deployment. Writing the address down takes one line and turns the guess into a fact.
+func TestAnAddressNobodyWroteDownIsARefusal(t *testing.T) {
 	f := newPlaceRegistryFixture(t)
+	// An address of this test's own, because this database is shared with tests that write
+	// registries down and one that had written this one would be answered from the list.
+	mirror := dbtest.Unique("mirror.example.com")
 
 	pull, err := f.placePull(t, "local-k3s", "192.168.1.103:8091/test/versions@sha256:abc",
-		map[string]string{"registry": "mirror.gcr.io"})
+		map[string]string{"registry": mirror})
+	sentence, refused := registryRefusal(err)
+	if !refused {
+		t.Fatalf("a registry nobody wrote down was served as %+v, want a refusal", pull)
+	}
+	want := "the registry chosen for local-k3s is not in the list of registries"
+	if sentence != want {
+		t.Errorf("the refusal says %q, want %q", sentence, want)
+	}
+
+	// And once it is written down, the same address is served the way any registry on the
+	// list is: with its own credential.
+	written := store.DockerRegistry{URL: mirror, Login: "robot"}
+	if err := f.store.DockerRegistries().Create(t.Context(), &written); err != nil {
+		t.Fatalf("write the mirror down: %v", err)
+	}
+	pull, err = f.placePull(t, "local-k3s", "192.168.1.103:8091/test/versions@sha256:abc",
+		map[string]string{"registry": mirror})
 	if err != nil {
 		t.Fatalf("working out the registry: %v", err)
 	}
-	if !pull.Anonymous {
-		t.Error("a registry nobody wrote down is not treated as one needing no credential")
-	}
-	if pull.credential() != nil {
-		t.Error("a secret is being written into the cluster for a registry that needs none")
-	}
-	if pull.Image != "mirror.gcr.io/test/versions@sha256:abc" {
-		t.Errorf("the image is %q", pull.Image)
+	if pull.Address != mirror || pull.Username != "robot" ||
+		pull.Image != mirror+"/test/versions@sha256:abc" {
+		t.Errorf("a written-down mirror is served as %+v", pull)
 	}
 }
 
-// A place that names nothing is the case that has always worked, and it has to keep working
-// byte for byte: the address the image carries, and a token of ours.
-func TestAPlaceThatNamesNothingIsServedAsItAlwaysWas(t *testing.T) {
+// A place that names nothing is refused, and it is refused in the three shapes that all mean
+// nothing: no field, an empty field, and a field holding whitespace.
+//
+// This used to mean the instance's own registry, which is why adding the field did not
+// break anybody and also why nothing could tell whether a place had ever been looked at. A
+// deployment now says which place needs a registry and where to say it.
+func TestAPlaceThatNamesNothingIsRefused(t *testing.T) {
 	f := newPlaceRegistryFixture(t)
 	const image = "192.168.1.103:8091/test/versions@sha256:abc"
 
@@ -143,42 +166,35 @@ func TestAPlaceThatNamesNothingIsServedAsItAlwaysWas(t *testing.T) {
 		{"registry": "   "}, // the field, with nothing in it
 	} {
 		pull, err := f.placePull(t, "local-k3s", image, fields)
-		if err != nil {
-			t.Fatalf("working out the registry for %v: %v", fields, err)
+		sentence, refused := registryRefusal(err)
+		if !refused {
+			t.Fatalf("for %v: served as %+v, want a refusal", fields, pull)
 		}
-		if !pull.TheInstanceRegistry || pull.Image != image || pull.Token == "" {
-			t.Errorf("for %v: %+v — the instance's own registry, unchanged, is what this must be", fields, pull)
+		want := "local-k3s has no registry chosen — choose one in the deploy module's settings"
+		if sentence != want {
+			t.Errorf("for %v: the refusal says %q, want %q", fields, sentence, want)
 		}
 	}
 }
 
-// A place whose row cannot be read is not refused: the deployment is real and the setting is
-// a preference, so the preference is reported and the deployment goes ahead with the address
-// the image carries.
-func TestAPlaceRowThatCannotBeReadDoesNotStopTheDeployment(t *testing.T) {
+// A place nobody configured is refused the same way, because there is no row to have said
+// anything: the setting is not a preference that can be left unread, it is where the images
+// come from.
+func TestAPlaceNobodyConfiguredIsRefusedAsWell(t *testing.T) {
 	f := newPlaceRegistryFixture(t)
 
-	said := ""
 	pull, err := f.placePullWithLog(t, "no-such-place",
 		"192.168.1.103:8091/test/versions@sha256:abc",
-		func(format string, args ...any) { said = format })
-	if err != nil {
-		t.Fatalf("working out the registry: %v", err)
-	}
-	if pull.Address != "192.168.1.103:8091" || !pull.TheInstanceRegistry {
-		t.Errorf("a place nobody configured is served as %+v", pull)
-	}
-	// Nothing is said about a registry that could not be read when there was no failure to
-	// report: an unset place is not a broken one.
-	if said != "" {
-		t.Errorf("a place that simply names nothing produced %q", said)
+		func(format string, args ...any) {})
+	_, refused := registryRefusal(err)
+	if !refused {
+		t.Fatalf("a place nobody configured was served as %+v, want a refusal", pull)
 	}
 }
 
-// The credential a rollback is given is the place's registry, and nothing at all when the
-// place names none — which is the case that already worked, where the record carries the
-// address and the secret from the last deployment is still in the namespace.
-func TestARollbackIsToldItsPlacesRegistryOrNothing(t *testing.T) {
+// The credential a rollback is given is the place's registry, under the same rule a
+// deployment is held to — so a place that names none cannot be rolled back at all.
+func TestARollbackIsToldItsPlacesRegistryOrRefusedWithoutOne(t *testing.T) {
 	f := newPlaceRegistryFixture(t)
 
 	harbor := dbtest.Unique("harbor.example.com")
@@ -200,19 +216,34 @@ func TestARollbackIsToldItsPlacesRegistryOrNothing(t *testing.T) {
 		t.Errorf("the secret is called %q", credential.SecretName)
 	}
 
+	// Without a registry there is nothing to tell the module, and a rollback sent anyway
+	// would look for a secret in the namespace that no deployment was written to leave
+	// there. It used to be sent exactly like that, which is how a rollback kept working
+	// while the setting it depended on went unread.
 	f.setPlace(t, "local-k3s", nil)
 	credential, err = f.placeRegistryCredential(t, "local-k3s")
-	if err != nil {
-		t.Fatalf("working out the registry: %v", err)
+	sentence, refused := registryRefusal(err)
+	if !refused {
+		t.Fatalf("a rollback of a place that names no registry was told %+v, want a refusal",
+			credential)
 	}
-	if credential != nil {
-		t.Errorf("a rollback of a place that names no registry was told %+v", credential)
+	if sentence != "local-k3s has no registry chosen — choose one in the deploy module's settings" {
+		t.Errorf("the refusal says %q", sentence)
+	}
+
+	// The same for an address that is not on the list: a rollback is a pull of a version
+	// that is not in the cluster any more, and there is no stored secret to fall back on.
+	f.setPlace(t, "local-k3s", map[string]string{"registry": dbtest.Unique("nowhere.example.com")})
+	credential, err = f.placeRegistryCredential(t, "local-k3s")
+	if _, refused := registryRefusal(err); !refused {
+		t.Errorf("a rollback from a registry nobody wrote down was told %+v", credential)
 	}
 }
 
 // The setting is validated as an address while the operator is looking at the field, and it
-// is not validated against the list of registries: an address nobody wrote down is a public
-// mirror, and the field has to accept one.
+// is not validated against the list of registries: the point of the field is to name the
+// address somebody needs, and whether it is one this instance knows about is a separate
+// question that a deployment asks and answers in a sentence.
 func TestARegistryFieldIsValidatedAsAnAddress(t *testing.T) {
 	spec := models.SettingSpec{Key: "registry", Label: "Registry", Type: "registry"}
 

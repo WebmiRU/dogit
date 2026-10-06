@@ -58,6 +58,18 @@ interface Place {
   /** Whether a push may do it by itself. Nobody having said means yes. */
   autodeploy: boolean
   /**
+   * Where this place's images come from, and whether anybody has said.
+   *
+   * Text rather than a control: a project's page may say a place is in use here or not,
+   * but choosing where a cluster pulls from is a decision about the instance, and the
+   * only page that makes it is the module's own. An empty string means nobody has chosen,
+   * which is not the same as the instance's own registry and is said as such — a
+   * deployment is refused over it.
+   */
+  registry: string
+  /** Whether the registry is the one the level above chose rather than this project. */
+  registryFromAbove: boolean
+  /**
    * Whether the run under way has a deployment for this place that has not started.
    *
    * From the run rather than from this page's own reading of the last deployment: the
@@ -112,6 +124,19 @@ interface Run {
 const adding = ref(false)
 const newName = ref('')
 
+/**
+ * The address a row names for its registry, and where it came from.
+ *
+ * What this project wrote wins over what the level above wrote, and an empty string means
+ * nobody wrote anything — which is drawn as "not chosen" rather than as a blank, because a
+ * blank reads as a fact about a registry that does not exist.
+ */
+function registryOf(row: Record<string, unknown>, above?: string): string {
+  const own = typeof row.registry === 'string' ? row.registry.trim() : ''
+  if (own !== '') return own
+  return above ?? ''
+}
+
 /** What each row's two switches said when it was loaded, so a row knows whether it has changed. */
 const loaded = ref<Record<string, { inUse: boolean; autodeploy: boolean }>>({})
 
@@ -124,15 +149,27 @@ async function load() {
   if (places.value.length === 0) loading.value = true
   error.value = ''
   try {
-    // "own" and not "effective": the values this instance wrote for the cluster are not
-    // sent to a page, so this project sees the name of its place and what it has decided
-    // about it, and nothing else.
-    const answer = await api.get<{ own?: Record<string, unknown> }>(
+    // "own" and not "effective", with the section the levels above published added: a
+    // registry this project has decided nothing about is still the registry its images
+    // come from, and a card that could only show this project's own answers would say
+    // "not chosen" about a place that pulls perfectly well. What the levels above
+    // published is only what the module declared safe to publish, so a credential is not
+    // in here to be shown in the first place.
+    const answer = await api.get<{
+      own?: Record<string, unknown>
+      inherited?: Record<string, unknown>
+    }>(
       `/modules/${props.module.id}/settings?scope=project&projectID=${encodeURIComponent(props.projectId)}`,
     )
     const rows = Array.isArray(answer.own?.clusters)
       ? (answer.own!.clusters as Record<string, unknown>[])
       : []
+    const fromAbove = new Map<string, string>()
+    for (const row of (answer.inherited?.clusters ?? []) as Record<string, unknown>[]) {
+      const name = typeof row?.name === 'string' ? row.name.trim() : ''
+      const registry = typeof row?.registry === 'string' ? row.registry.trim() : ''
+      if (name !== '' && registry !== '') fromAbove.set(name, registry)
+    }
 
     // A row with no name is a row somebody started filling in, and it is not a place.
     // The name a row is called comes from the core when this project has not named it
@@ -154,6 +191,8 @@ async function load() {
         inUse: row.enabled !== false,
         autodeploy: row.auto_deploy !== false,
         queued: due.value[name] === true,
+        registry: registryOf(row, fromAbove.get(name)),
+        registryFromAbove: !('registry' in row) && fromAbove.has(name),
       })
     }
     places.value = seen
@@ -672,6 +711,10 @@ async function addPlace() {
       // Nothing is deploying to a place that did not exist a moment ago, whatever the
       // run under way was doing.
       queued: false,
+      // And nothing says where a place that is only a name pulls from: the row above is
+      // where that is written down, and until it is, a deployment to this name is refused.
+      // This is the state between adding a name here and the module having a row for it.
+      registry: '', registryFromAbove: false,
     }])
     adding.value = false
     newName.value = ''
@@ -786,6 +829,18 @@ watchEvents({
                anything off in. -->
           <span class="badge place-origin" :class="{ ours: place.ours }">
             {{ place.ours ? 'changed here' : 'inherited' }}
+          </span>
+
+          <!-- Where the images come from, as a fact rather than as a control: a project
+               may read where a place pulls from and may not decide it here. Said even
+               when nobody has chosen anything, because "nobody has chosen" is the thing
+               that stops a deployment and a list of places is where somebody looks first. -->
+          <span
+            class="muted small place-registry mono"
+            :class="{ unchosen: !place.registry }"
+          >
+            registry: {{ place.registry || 'not chosen' }}
+            <span v-if="place.registryFromAbove" class="place-registry-from">(decided above)</span>
           </span>
         </span>
 
@@ -1090,6 +1145,23 @@ watchEvents({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The registry, said quietly and cut off rather than wrapped: it is a fact about the
+   place, not the fact about it, and a row that grows to three lines stops being a list. */
+.place-registry {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.place-registry.unchosen {
+  color: var(--yellow);
+}
+
+.place-registry-from {
+  opacity: 0.75;
 }
 
 .place-note {

@@ -120,10 +120,9 @@ function isModule(reg: DockerRegistry): boolean {
 /**
  * The switches, as words rather than as columns.
  *
- * A column per switch would make a table eight columns wide for a fact that is one of four
- * states, and three of them are what a reader wants to see at a glance. Inline, a registry
- * that is off says so where it is, and a registry that is the default says so next to the
- * thing it is the default of.
+ * A column per switch would make a table eight columns wide for a fact that is one of three
+ * states, and all of them are what a reader wants to see at a glance. Inline, a registry that
+ * is off says so where it is.
  *
  * A module's row says its own state instead, because that is what is worth knowing about
  * it: a registry module that is switched off is not a fact about how images are pushed, it
@@ -140,7 +139,6 @@ function switches(reg: DockerRegistry): string[] {
     if (reg.published === false) said.push('publishes no address')
     return said
   }
-  if (reg.is_default) said.push('default')
   if (reg.enabled === false) said.push('off')
   if (reg.read_only) said.push('pull only')
   if (reg.insecure_tls) said.push('no TLS check')

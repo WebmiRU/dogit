@@ -106,8 +106,11 @@ func pullSecretOf(registry *deployRegistry) *k8s.PullSecret {
 }
 
 // registryAddressOf is the address to fetch an image from, empty when the core named none —
-// which is the case that means "the registry this image already carries", and so the record
-// is used as it stands.
+// which means "the registry this image already carries", and so the record is used as it
+// stands. The core refuses a place that has chosen no registry rather than sending this, so
+// what arrives here is a case that should not happen; it is handled anyway, because a module
+// that assumed the core is always right is a module that fails the long way round when it
+// is not.
 func registryAddressOf(registry *deployRegistry) string {
 	if registry == nil {
 		return ""
@@ -389,7 +392,9 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 		// Registry is the address this place pulls its images from, when it is not the one
 		// the record names: the same image, the same digest, another name for it. Sent
 		// with the credential for it, because a rollback that names an address nobody
-		// wrote a secret for is a rollback that fails on a pull.
+		// wrote a secret for is a rollback that fails on a pull. The core refuses a
+		// rollback for a place that has named no registry at all, so this is what a
+		// rollback is normally given.
 		Registry *deployRegistry `json:"registry"`
 	}
 	if err := decode(r, &request); err != nil {

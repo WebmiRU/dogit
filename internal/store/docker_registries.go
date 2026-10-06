@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // DockerRegistryRepo stores the Docker registries an administrator wrote down.
@@ -37,9 +36,6 @@ type DockerRegistry struct {
 	InsecureTLS bool
 	// ReadOnly marks a registry images may be pulled from and never pushed to.
 	ReadOnly bool
-	// Default marks the one registry pushes go to when nothing has said otherwise. At
-	// most one record in the table may carry it.
-	Default bool
 	// Note is free text for the administrator. Nothing reads it.
 	Note string
 	// Enabled false keeps the record but takes it out of use.
@@ -49,7 +45,7 @@ type DockerRegistry struct {
 }
 
 const dockerRegistryColumns = `id, name, url, login, password, insecure_tls, read_only,
-	is_default, note, enabled, created_at, updated_at`
+	note, enabled, created_at, updated_at`
 
 // dockerRegistryRows is one round trip for a page of the list and for the size of the
 // whole list: a page that says "3 of 47" counts 47 rows and reads 10 of them, and two
@@ -63,7 +59,7 @@ const dockerRegistryColumns = `id, name, url, login, password, insecure_tls, rea
 const dockerRegistryRows = `
 	WITH page AS (
 		SELECT ` + dockerRegistryColumns + ` FROM docker_registries
-		ORDER BY is_default DESC, lower(name), lower(url)
+		ORDER BY lower(name), lower(url)
 		LIMIT $1 OFFSET $2
 	)
 	SELECT (SELECT count(*) FROM docker_registries), page.* FROM page`
@@ -99,7 +95,7 @@ func (r *DockerRegistryRepo) List(ctx context.Context, f DockerRegistryListFilte
 	for rows.Next() {
 		var reg DockerRegistry
 		if err := rows.Scan(&total, &reg.ID, &reg.Name, &reg.URL, &reg.Login, &reg.Password,
-			&reg.InsecureTLS, &reg.ReadOnly, &reg.Default, &reg.Note, &reg.Enabled,
+			&reg.InsecureTLS, &reg.ReadOnly, &reg.Note, &reg.Enabled,
 			&reg.CreatedAt, &reg.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("read a docker registry: %w", err)
 		}
@@ -130,77 +126,50 @@ func (r *DockerRegistryRepo) Create(ctx context.Context, reg *DockerRegistry) er
 	reg.URL = cleanDockerURL(reg.URL)
 	err := r.s.pool.QueryRow(ctx, `
 		INSERT INTO docker_registries
-			(name, url, login, password, insecure_tls, read_only, is_default, note, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			(name, url, login, password, insecure_tls, read_only, note, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, created_at, updated_at`,
 		reg.Name, reg.URL, reg.Login, reg.Password,
-		reg.InsecureTLS, reg.ReadOnly, reg.Default, reg.Note, reg.Enabled,
+		reg.InsecureTLS, reg.ReadOnly, reg.Note, reg.Enabled,
 	).Scan(&reg.ID, &reg.CreatedAt, &reg.UpdatedAt)
 	if err != nil {
 		if IsUniqueViolation(err) {
-			return dockerRegistryConflict(err, reg.URL)
+			return fmt.Errorf("%w: the registry %q is already on the list", ErrConflict, reg.URL)
 		}
 		return fmt.Errorf("create docker registry: %w", err)
 	}
 	return nil
 }
 
-// dockerRegistryConflict says which of the two things the table refuses was refused.
-//
-// The table has two unique constraints and they are refused for opposite reasons, so one
-// sentence cannot cover both: told "that address is already on the list" for a record whose
-// address is not on the list, an administrator goes looking for a duplicate they did not
-// write, and the registry they were trying to add stays unwritten. The constraint that
-// said no is named by the database, so it can be read rather than guessed.
-func dockerRegistryConflict(err error, url string) error {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.ConstraintName == "docker_registries_default_key" {
-		return fmt.Errorf("%w: another registry is already the default, so this one cannot be",
-			ErrConflict)
-	}
-	return fmt.Errorf("%w: the registry %q is already on the list", ErrConflict, url)
-}
-
 // Update writes an edited registry back.
 //
-// One transaction, because "make this the default" is two changes and not one: the
-// record that was the default has to stop being it in the same breath that the edited
-// record starts. Between the two statements there is a moment with two defaults, which
-// the table's index does not permit — so the moment does not exist. And if the edited
-// record stops being the default, nobody is left holding the flag: a default nobody can
-// name is worse than none, since every reader would have to guess.
+// One statement, because there is nothing here that takes two: a registry is an address,
+// a credential and a handful of switches about it, and the flag that used to make two
+// records change at once is gone. What this repository holds is a list of places, not a
+// choice between them.
 func (r *DockerRegistryRepo) Update(ctx context.Context, reg *DockerRegistry) error {
 	reg.URL = cleanDockerURL(reg.URL)
-	return r.s.Tx(ctx, func(tx pgx.Tx) error {
-		if reg.Default {
-			if _, err := tx.Exec(ctx,
-				`UPDATE docker_registries SET is_default = false, updated_at = now()
-				 WHERE is_default`); err != nil {
-				return fmt.Errorf("clear the default docker registry: %w", err)
-			}
-		}
 
-		err := tx.QueryRow(ctx, `
-			UPDATE docker_registries SET
-				name = $2, url = $3, login = $4, password = $5,
-				insecure_tls = $6, read_only = $7, is_default = $8,
-				note = $9, enabled = $10, updated_at = now()
-			WHERE id = $1
-			RETURNING updated_at`, reg.ID,
-			reg.Name, reg.URL, reg.Login, reg.Password,
-			reg.InsecureTLS, reg.ReadOnly, reg.Default, reg.Note, reg.Enabled,
-		).Scan(&reg.UpdatedAt)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+	err := r.s.pool.QueryRow(ctx, `
+		UPDATE docker_registries SET
+			name = $2, url = $3, login = $4, password = $5,
+			insecure_tls = $6, read_only = $7,
+			note = $8, enabled = $9, updated_at = now()
+		WHERE id = $1
+		RETURNING updated_at`, reg.ID,
+		reg.Name, reg.URL, reg.Login, reg.Password,
+		reg.InsecureTLS, reg.ReadOnly, reg.Note, reg.Enabled,
+	).Scan(&reg.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: the registry %q is already on the list", ErrConflict, reg.URL)
 		}
-		if err != nil {
-			if IsUniqueViolation(err) {
-				return dockerRegistryConflict(err, reg.URL)
-			}
-			return fmt.Errorf("update docker registry: %w", err)
-		}
-		return nil
-	})
+		return fmt.Errorf("update docker registry: %w", err)
+	}
+	return nil
 }
 
 // ByID is one registry by its id, or ErrNotFound.
@@ -267,7 +236,7 @@ func (r *DockerRegistryRepo) Delete(ctx context.Context, id uuid.UUID) error {
 func scanDockerRegistry(row interface{ Scan(...any) error }) (*DockerRegistry, error) {
 	var reg DockerRegistry
 	err := row.Scan(&reg.ID, &reg.Name, &reg.URL, &reg.Login, &reg.Password,
-		&reg.InsecureTLS, &reg.ReadOnly, &reg.Default, &reg.Note, &reg.Enabled,
+		&reg.InsecureTLS, &reg.ReadOnly, &reg.Note, &reg.Enabled,
 		&reg.CreatedAt, &reg.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("read a docker registry: %w", err)

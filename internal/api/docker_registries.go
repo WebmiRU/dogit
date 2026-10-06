@@ -42,7 +42,6 @@ type dockerRegistryInput struct {
 	Password    *string `json:"password"`
 	InsecureTLS *bool   `json:"insecure_tls"`
 	ReadOnly    *bool   `json:"read_only"`
-	Default     *bool   `json:"is_default"`
 	Note        *string `json:"note"`
 	Enabled     *bool   `json:"enabled"`
 }
@@ -167,12 +166,18 @@ func (s *Server) dockerRegistryModules(r *http.Request) ([]map[string]any, error
 		if err != nil {
 			return nil, err
 		}
+		// Written the way every other row on this page is written: bare. A module
+		// publishes an address it serves a page on, and a page's address carries a
+		// scheme, while a registry's address is a host — what a credential is filed
+		// under and what an image name carries. Both spellings name the same machine,
+		// and a list showing one of each would have an administrator wondering whether
+		// they had two registries where they have one.
 		out = append(out, map[string]any{
 			"source":         registrySourceModule,
 			"integration_id": integration.ID,
 			"module_kind":    integration.Kind,
 			"name":           integration.Name,
-			"url":            address,
+			"url":            registryAddressOf(address),
 			"published":      address != "",
 			"enabled":        integration.Enabled,
 			"status":         integration.Status,
@@ -331,7 +336,6 @@ func dockerRegistryView(reg store.DockerRegistry) map[string]any {
 		"has_password": reg.Password != "",
 		"insecure_tls": reg.InsecureTLS,
 		"read_only":    reg.ReadOnly,
-		"is_default":   reg.Default,
 		"note":         reg.Note,
 		"enabled":      reg.Enabled,
 		"created_at":   reg.CreatedAt,
@@ -389,9 +393,6 @@ func applyDockerRegistryInput(reg *store.DockerRegistry, body dockerRegistryInpu
 	}
 	if body.ReadOnly != nil {
 		reg.ReadOnly = *body.ReadOnly
-	}
-	if body.Default != nil {
-		reg.Default = *body.Default
 	}
 	if body.Enabled != nil {
 		reg.Enabled = *body.Enabled

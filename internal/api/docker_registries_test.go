@@ -161,7 +161,7 @@ func TestEditingARegistryKeepsThePasswordUnlessTheFormSaysOtherwise(t *testing.T
 	// A form that sends what it was given, which is everything except the password.
 	code, edit := env.do(t, http.MethodPatch, "/registry/docker/"+id.String(), map[string]any{
 		"name": "internal mirror", "url": env.host(), "login": "robot",
-		"insecure_tls": true, "read_only": true, "is_default": false, "enabled": true,
+		"insecure_tls": true, "read_only": true, "enabled": true,
 	})
 	if code != http.StatusOK {
 		t.Fatalf("editing it: %d %s", code, edit)
@@ -279,40 +279,63 @@ func TestTheListIsTheAdministratorsOnly(t *testing.T) {
 }
 
 // The default is one record's flag. Marking another registry the default moves it, because
-// an administrator pressing that button means it, and having to clear the old one first is
-// a step nobody will remember.
-func TestMarkingOneRegistryDefaultMovesItFromTheLast(t *testing.T) {
+// There is no default registry, so there is no switch for one: neither the answer nor a
+// read carries any such field, and a form that still sends one is told the field does not
+// exist. Ignoring it quietly would be the worse answer twice over — the form would keep
+// showing a switch that does nothing, and a value nothing reads is a lie told in a column.
+func TestThereIsNoDefaultRegistryToSet(t *testing.T) {
 	env := newRegistryEnv(t, true)
-	// Both records are written plainly and then marked, rather than one of them being
-	// created as the default: the table permits one default, so creating one would depend
-	// on there not being one already, and whether there is depends on which other tests
-	// have run against this database.
-	_, one := env.mustCreate(t, map[string]any{"url": env.host() + "-one"})
-	first := env.id(t, one)
-	_, two := env.mustCreate(t, map[string]any{"url": env.host() + "-two"})
-	id := env.id(t, two)
+	_, created := env.mustCreate(t, map[string]any{"url": env.host()})
+	id := env.id(t, created)
 
-	code, body := env.do(t, http.MethodPatch, "/registry/docker/"+first.String(),
-		map[string]any{"is_default": true})
+	// Nothing about the record: not in what was created, not in what a read returns.
+	if strings.Contains(created, "is_default") {
+		t.Errorf("the answer carries a default flag: %s", created)
+	}
+	_, read := env.do(t, http.MethodGet, "/registry/docker/"+id.String(), nil)
+	if strings.Contains(read, "is_default") {
+		t.Errorf("reading one back carries a default flag: %s", read)
+	}
+
+	// And there is no switch to press, on either door: a form still sending the field is
+	// told it does not exist, whether it is creating or editing.
+	for _, sent := range []struct {
+		what, method, path string
+	}{
+		{"creating", http.MethodPost, "/registry/docker"},
+		{"editing", http.MethodPatch, "/registry/docker/" + id.String()},
+	} {
+		code, refused := env.do(t, sent.method, sent.path,
+			map[string]any{"url": env.host() + "-stale", "is_default": true})
+		if code != http.StatusBadRequest {
+			t.Fatalf("%s with a flag that does not exist: %d %s, want a refusal",
+				sent.what, code, refused)
+		}
+		if !strings.Contains(refused, "is_default") {
+			t.Errorf("%s: the refusal does not say which field is not one: %s", sent.what, refused)
+		}
+	}
+
+	// That refusal was about the field, not about the record or its address: the same edit
+	// without it is an ordinary edit and takes, which is what somebody carrying a stale form
+	// gets once they read what the refusal said.
+	stored, err := env.store.DockerRegistries().ByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("reading the record back: %v", err)
+	}
+	if stored.Note != "" {
+		t.Errorf("the refused edit was applied anyway: %q", stored.Note)
+	}
+	code, patched := env.do(t, http.MethodPatch, "/registry/docker/"+id.String(),
+		map[string]any{"note": "an ordinary registry"})
 	if code != http.StatusOK {
-		t.Fatalf("marking the first one the default: %d %s", code, body)
+		t.Fatalf("editing it for real: %d %s", code, patched)
 	}
-
-	code, body = env.do(t, http.MethodPatch, "/registry/docker/"+id.String(),
-		map[string]any{"is_default": true})
-	if code != http.StatusOK {
-		t.Fatalf("marking it the default: %d %s", code, body)
+	if stored, err = env.store.DockerRegistries().ByID(context.Background(), id); err != nil {
+		t.Fatalf("reading the record back: %v", err)
 	}
-
-	// Both records read back by id: what matters is where the flag ended up on these two,
-	// not how many records on the whole table happen to carry it.
-	_, moved := env.do(t, http.MethodGet, "/registry/docker/"+id.String(), nil)
-	if !strings.Contains(moved, `"is_default":true`) {
-		t.Errorf("the registry that was marked is not marked: %s", moved)
-	}
-	_, before := env.do(t, http.MethodGet, "/registry/docker/"+first.String(), nil)
-	if strings.Contains(before, `"is_default":true`) {
-		t.Errorf("the registry that was the default still is: %s", before)
+	if stored.Note != "an ordinary registry" {
+		t.Errorf("the edit did not take: %q", stored.Note)
 	}
 }
 

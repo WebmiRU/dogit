@@ -173,6 +173,25 @@ func manifest() map[string]any {
 
 		"settings": []map[string]any{
 			{
+				// The value a new place starts with, and the only thing this setting is.
+				//
+				// It is a default for creation, not a pointer: nothing reads it during a
+				// deployment, so changing it moves no place and a place that was created
+				// while it said something keeps saying that. The alternative — a "the
+				// default registry" switch that places follow — is a thing nobody can
+				// point at afterwards: a deployment from March is looked up and its
+				// registry is whatever the setting says today, which is a history that
+				// rewrites itself.
+				"key":   "registry",
+				"label": "Default registry",
+				"type":  "registry",
+				"description": "What a place offered for the first time starts with. It applies to " +
+					"rows added from now on and to nothing else: no deployment reads it, changing it " +
+					"moves no place, and a place that names a registry keeps that one whatever this " +
+					"says. Left empty, a new place starts empty too — which is a row somebody has to " +
+					"fill in, on purpose.",
+			},
+			{
 				"key":   "clusters",
 				"label": "Clusters",
 				"type":  "list",
@@ -249,20 +268,30 @@ func manifest() map[string]any {
 								"ask for less, and does so for one run.",
 						},
 						{
-							"key":   "registry",
-							"label": "Registry",
-							"type":  "registry",
-							"description": "Which registry this place pulls its images from. Empty means the " +
-								"registry this instance runs, which is where the images were pushed — the " +
-								"ordinary case, and the one to leave alone unless this cluster cannot " +
-								"reach that address. Name a mirror, or another address for the same images, " +
-								"when it cannot: the path and the digest stay exactly as they were, so what " +
-								"is rolled out is still the thing that was built. One registry per place " +
-								"on purpose — an image that lives in two registries under one name is two " +
-								"images with one name, and only the first one written is ever found. A " +
-								"registry picked from the list of registries brings its own login; an address " +
-								"that is not on that list is pulled from without a credential, which is what " +
-								"a public mirror needs.",
+							// Published downward, because where a cluster pulls from is a
+							// fact about the cluster and not a secret: a project's page says
+							// it, so that somebody reading a project can see where its images
+							// come from without being an administrator. It is an address, not
+							// a credential — the login for it stays in the core and is never
+							// sent to a page below this one.
+							"key":         "registry",
+							"inheritable": true,
+							"label":       "Registry",
+							"type":        "registry",
+							"description": "Which registry this place pulls its images from, and it has to be " +
+								"named: an empty row is refused with a sentence saying so, rather than " +
+								"deployed from wherever the image happened to be pushed. Name a mirror, " +
+								"or another address for the same images, when this cluster cannot reach " +
+								"the one this instance runs: the path and the digest stay exactly as they " +
+								"were, so what is rolled out is still the thing that was built. One " +
+								"registry per place on purpose — an image that lives in two registries " +
+								"under one name is two images with one name, and only the first one " +
+								"written is ever found. Pick one from the list of registries and it " +
+								"brings its own login; an address that is not on that list is refused " +
+								"until somebody writes it down, because dogit holds no credential for a " +
+								"registry it has never heard of and a cluster left to find that out " +
+								"waits at ImagePullBackOff. A new row starts with whatever the " +
+								"Default registry above says.",
 						},
 						{
 							"key":         "keep_jobs",
