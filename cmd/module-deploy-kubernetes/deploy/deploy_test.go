@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -162,6 +163,31 @@ type memoryHistory struct {
 	// logs is what each deployment said, kept per deployment so a test can ask what a
 	// run reported rather than only that it finished.
 	logs map[string][]LogLine
+}
+
+// TagsOf is every name an image was deployed under in one place, from the whole
+// history: what the real store does, and what makes the difference between a rollback's
+// record (which names no tag) and the version the page has to show.
+func (h *memoryHistory) TagsOf(_ context.Context, project, cluster, namespace,
+	image string) ([]string, error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	seen := map[string]bool{}
+	for _, record := range h.records[lockKey(project, cluster, namespace)] {
+		if record.Image != image {
+			continue
+		}
+		for _, tag := range record.Tags {
+			seen[tag] = true
+		}
+	}
+	tags := make([]string, 0, len(seen))
+	for tag := range seen {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	return tags, nil
 }
 
 func newHistory() *memoryHistory {

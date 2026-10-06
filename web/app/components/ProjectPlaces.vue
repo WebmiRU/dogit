@@ -22,7 +22,7 @@
  * rewrite the other's answer.
  */
 import type { ModuleRow } from '~/types/module'
-import { formatDuration, timeAgo } from '~/utils/format'
+import { formatDuration, shortDigest, timeAgo } from '~/utils/format'
 import { onRewake } from '~/lib/eventSocket'
 
 const props = defineProps<{
@@ -90,6 +90,8 @@ const due = ref<Record<string, boolean>>({})
  * it cannot disagree about the same deployment.
  */
 const runs = ref<Record<string, { state: string; started_at?: string; finished_at?: string; duration_ms?: number }>>({})
+/** What each place is running now, by the module's own answer. */
+const current = ref<Record<string, CurrentAnswer>>({})
 /** The same rows as they are stored at the levels above, keyed by name. */
 const inherited = ref<Record<string, Record<string, unknown>>>({})
 const { add: notify } = useNotifyPool()
@@ -211,6 +213,133 @@ async function loadRuns() {
   runs.value = found
 }
 
+/**
+ * What the card under a row says about that place, kept as it says it.
+ *
+ * The card is the thing that watches the deployment as it happens, so it is the thing
+ * that knows; this row only draws its verdict as a dot. Recorded per place rather than
+ * as one answer for the page, because two places in one project are two rollouts with
+ * two verdicts, and a page of one dot colour for both is a page about neither.
+ */
+const cardStates = ref<Record<string, { tone: string; word: string }>>({})
+
+function onCardState(name: string, said: { tone: string; word: string }) {
+  cardStates.value = { ...cardStates.value, [name]: said }
+}
+
+/**
+ * What each place is running right now, as its own module says.
+ *
+ * Asked of the module because only it knows how to ask: a cluster can be asked which
+ * image its workload runs, and anything this module deploys to later will have its own
+ * answer — or say plainly that it cannot tell you. Reading it out of the history instead
+ * would answer a different question, the one about what was last done here, and the two
+ * come apart the moment anybody changes a thing by hand.
+ *
+ * One request per place, and only for the places on the page. A place with no answer
+ * left out rather than filled with an empty one, so the row says nothing where it knows
+ * nothing.
+ */
+async function loadCurrent() {
+  const target = props.module.kind.split(':')[1] ?? ''
+  const answers = await Promise.all(places.value.map(async (place) => {
+    const query = new URLSearchParams({
+      target,
+      cluster: place.name,
+      namespace: place.namespace,
+    })
+    try {
+      const answer = await api.get<CurrentAnswer>(
+        `/projects/${props.projectId}/deploy-current?${query}`,
+      )
+      return [place.name, answer] as const
+    } catch {
+      // A place whose module cannot be reached has no answer, which is a different
+      // thing from an answer that says it does not know — and the row shows nothing
+      // rather than a claim it cannot support.
+      return [place.name, null] as const
+    }
+  }))
+  const found: Record<string, CurrentAnswer> = {}
+  for (const [name, answer] of answers) if (answer) found[name] = answer
+  current.value = found
+}
+
+/**
+ * What a module says is running in a place.
+ *
+ * `asked` is kept because it is the difference between "this is what is there" and
+ * "this is the last thing that was written down", and a page that shows both without
+ * saying which is which has made two claims out of one line.
+ */
+interface CurrentAnswer {
+  known?: boolean
+  image?: string
+  tags?: string[]
+  workload?: string
+  ready?: number
+  desired?: number
+  settled?: boolean
+  asked?: string
+  reason?: string
+}
+
+/**
+ * What is running in this place, in one line: the names it was published under when
+ * they are known, and the digest either way.
+ *
+ * The digest is the fact — it is what is in the cluster, and two tags can point at one
+ * digest and one tag can be moved to another. The names are beside it because a person
+ * comparing this against a release is looking for `v88.15`, not for sixty-four
+ * characters of hexadecimal. Nothing here is drawn when the module does not know:
+ * a page that guesses which image is there is the thing this whole answer exists to
+ * stop.
+ */
+/**
+ * What this place is running, as far as it is known: the names, if it has any, and the
+ * digest either way.
+ *
+ * Both, and never one instead of the other: the names are what a person compares
+ * against a release, and the digest is the only thing that says which image it is — a
+ * tag can be moved after the fact, and two tags can point at one image.
+ */
+function runningTags(place: Place): string[] {
+  const answer = current.value[place.name]
+  if (!answer?.known || !answer.image) return []
+  return answer.tags ?? []
+}
+
+function runningDigest(place: Place): string {
+  const answer = current.value[place.name]
+  if (!answer?.known || !answer.image) return ''
+  return shortDigest(answer.image)
+}
+
+/** What the module says is running in this place, in the shape the card takes. */
+function nowRunning(place: Place): { image: string; tags?: string[] } | null {
+  const answer = current.value[place.name]
+  if (!answer?.known || !answer.image) return null
+  return { image: answer.image, tags: answer.tags }
+}
+
+function runningNow(place: Place): boolean {
+  const answer = current.value[place.name]
+  return Boolean(answer?.known && answer.image)
+}
+
+/** What this line is a claim about, in full — the digest, where it came from, and how many of its pods. */
+function runningTitle(place: Place): string {
+  const answer = current.value[place.name]
+  if (!answer?.known || !answer.image) return ''
+  const parts = [answer.image]
+  if (answer.workload) parts.push(`${answer.workload} in ${place.namespace}`)
+  if (typeof answer.ready === 'number' && typeof answer.desired === 'number') {
+    parts.push(`${answer.ready} of ${answer.desired} pods ready`)
+  }
+  parts.push(answer.asked ? `asked: ${answer.asked}` : 'asked: this module')
+  return parts.join(' · ')
+}
+
 /** The clock, read every half minute so that "3 minutes ago" does not stand still. */
 const tick = ref(Date.now())
 let ticker: ReturnType<typeof setInterval> | undefined
@@ -253,6 +382,15 @@ function spanOf(run: Run): number | undefined {
  * to be readable without opening any of them.
  */
 function stateTone(place: Place): { tone: string; word: string } {
+  // What the card under it says, when the card has said anything.
+  //
+  // One answer drawn twice rather than two answers about the same thing. Read apart —
+  // a dot from this page's own fetch of the history, an edge from the card's — they
+  // disagree the moment either is a moment older than the other, and a row with a grey
+  // dot beside a green frame leaves the reader deciding which of the two to believe.
+  const said = cardStates.value[place.name]
+  if (said) return said
+
   const run = runs.value[place.name]
   // This run has not got here yet, which is not the same answer as "the last one went
   // well". The last one was a different commit, and a green dot beside a run that is
@@ -392,11 +530,17 @@ async function addPlace() {
 async function loadEverything() {
   await loadQueued()
   await load()
-  try {
-    await loadRuns()
-  } catch {
-    // A row without its state is a row without a dot; it is not a page that has failed.
-  }
+  // What is running comes last: it is asked about each place, which is only known once
+  // the places are, and it is the answer most likely to be slow — it goes to the module
+  // and sometimes to the cluster itself. The row is drawn from the other two first, so
+  // a place that takes a moment to answer still shows its name, its switches and its
+  // dot.
+  await Promise.all([
+    loadRuns().catch(() => {
+      // A row without its state is a row without a dot; it is not a page that has failed.
+    }),
+    loadCurrent().catch(() => {}),
+  ])
 }
 
 onMounted(loadEverything)
@@ -420,6 +564,11 @@ watchEvents({
     runsSoon = setTimeout(() => {
       void loadQueued().catch(() => {})
       void loadRuns().catch(() => {})
+      // Asked again when a deployment ends, because that is the moment the answer
+      // changes: what was there before this one is what the module would say now, and a
+      // row that keeps naming the version from before its own deployment is a row about
+      // the past.
+      void loadCurrent().catch(() => {})
     }, 800)
   },
 })
@@ -516,10 +665,34 @@ watchEvents({
           </label>
         </span>
 
-        <!-- How the last deployment here went, in words and in one dot. The dot repeats
-             the colour of the card's edge on purpose: the edge is inside a fold, and a
-             list of places has to be read without opening any of them. -->
+        <!-- What is running here right now, how the last deployment went, and one dot. The
+             dot repeats the colour of the card's edge on purpose: the edge is inside a
+             fold, and a list of places has to be read without opening any of them. -->
         <span class="place-trailing">
+          <!-- What is there, before how it got there: the version is the answer to "what
+               is deployed", and the one below it answers a different question. Written
+               from the module's own answer rather than from the history, because the
+               history says what was done and this says what is.
+
+               Drawn as the Images tab draws them — the name as a tag chip, the digest as
+               a badge — because a row that names a version two ways from the table
+               underneath it is two facts to match up before either can be read. -->
+          <span
+            v-if="runningNow(place)"
+            class="small place-running"
+            :title="runningTitle(place)"
+          >
+            running
+            <span
+              v-for="tag in runningTags(place)"
+              :key="tag"
+              class="tag mono"
+            >{{ tag }}</span>
+            <span class="badge badge-neutral place-running-digest mono">{{ runningDigest(place) }}</span>
+          </span>
+          <span v-else-if="current[place.name]?.reason" class="muted small place-running">
+            {{ current[place.name]?.reason }}
+          </span>
           <!-- Said before the last run rather than instead of it: both are true, and the
                order is what keeps them from being read as one. -->
           <span v-if="place.queued" class="muted small place-queued">waiting its turn</span>
@@ -543,7 +716,9 @@ watchEvents({
           :can-manage="props.canManage"
           :place="{ cluster: place.name, namespace: place.namespace }"
           :queued="place.queued"
+          :now-running="nowRunning(place)"
           :show-repository="index === 0"
+          @state="onCardState(place.name, $event)"
           @settings-changed="load"
         />
       </div>
@@ -671,6 +846,24 @@ watchEvents({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* What is running: the word, then the names this image was published under, then the
+   digest. Laid out as the Images tab lays out a row, because that is where the reader
+   has already seen a tag and a digest side by side. */
+.place-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.place-running-digest {
+  font-size: 11px;
+  /* Badges capitalise their text, which is right for a word and wrong for a digest:
+     `Bc9b83f2da0e` is not the name of anything, and a reader who copies it off this
+     row gets an address that does not exist. */
+  text-transform: none;
 }
 
 /*

@@ -138,6 +138,17 @@ func (s *Server) handleProjectDeployPlan(w http.ResponseWriter, r *http.Request)
 	}
 
 	config, err := s.pipelineConfig(r.Context(), s.repos.PathFor(project), project.DefaultBranch)
+
+	// Putting a version back is not a deployment, and a page asking what a deployment
+	// of this project goes through is not asking what a rollback goes through. Asked
+	// for by name, and answered from the list the core keeps for it, so that the page
+	// draws the same three rows whether it learned about this from a run or opened on a
+	// finished one.
+	if r.URL.Query().Get("kind") == "revert" {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"steps": deployStepsForRevert()})
+		return
+	}
+
 	if err != nil || len(config.Deploys) == 0 {
 		s.writeJSON(w, r, http.StatusOK, map[string]any{"steps": []any{}})
 		return
@@ -227,6 +238,54 @@ func (s *Server) handleProjectDeployImages(w http.ResponseWriter, r *http.Reques
 	}
 
 	body, err := s.callDeployModule(r.Context(), module, http.MethodGet, "/images?"+query.Encode(), nil)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.writeRaw(w, r, http.StatusOK, body)
+}
+
+// handleProjectDeployCurrent asks the module what is running in one place, right now.
+//
+// Asked of the module rather than answered from what this core knows, because the
+// question is about the module's own kind of destination: a cluster can be asked which
+// image a workload runs, an archive over SSH can only be asked what was last written to
+// it, and neither answer is the core's to work out. It is also the only one of the two
+// that is true — the core's history says what was done, and what was done is not always
+// what is there.
+//
+// A module that cannot answer the question says so in the answer rather than by
+// failing: "this module cannot tell you what is running" and "the request failed" are
+// different things, and the page draws them differently.
+func (s *Server) handleProjectDeployCurrent(w http.ResponseWriter, r *http.Request) {
+	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	module, err := s.deployModuleFor(r, project)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if module == nil {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{
+			"known": false, "asked": "nothing",
+			"reason": "no deploy module is installed on this instance",
+		})
+		return
+	}
+
+	query := url.Values{}
+	query.Set("project", project.Path)
+	for _, key := range []string{"cluster", "namespace", "workload"} {
+		if value := r.URL.Query().Get(key); value != "" {
+			query.Set(key, value)
+		}
+	}
+
+	body, err := s.callDeployModule(r.Context(), module, http.MethodGet, "/current?"+query.Encode(), nil)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -344,6 +403,18 @@ func (s *Server) handleTestDeployCluster(w http.ResponseWriter, r *http.Request)
 	s.writeRaw(w, r, http.StatusOK, answer)
 }
 
+// revertRequest is what a rollback asks for.
+//
+// DeploymentID names the record to go back to, sent as an id rather than as an image,
+// because the module is the one that knows what a record ran, and a client that could
+// name an arbitrary image could put anything on a cluster.
+type revertRequest struct {
+	Cluster      string `json:"cluster"`
+	Namespace    string `json:"namespace"`
+	Workload     string `json:"workload"`
+	DeploymentID string `json:"deployment_id"`
+}
+
 func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) {
 	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
 	if err != nil {
@@ -368,15 +439,7 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var request struct {
-		Cluster   string `json:"cluster"`
-		Namespace string `json:"namespace"`
-		Workload  string `json:"workload"`
-		// DeploymentID is the record to go back to. Sent as an id rather than as an
-		// image, because the module is the one that knows what a record ran, and a
-		// client that could name an arbitrary image could put anything on a cluster.
-		DeploymentID string `json:"deployment_id"`
-	}
+	var request revertRequest
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -399,7 +462,53 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	answer, err := s.callDeployModuleStream(r.Context(), module, "/revert", body, func(line []byte) {
+	// The plan, before the first line of it.
+	//
+	// Published here rather than with a run because there is no run: somebody in a
+	// browser pressed a button, and the page that pressed it has to be told what that
+	// button's work goes through before the first step happens. Without this the page
+	// keeps whatever list it had — a deployment's, with its build and its push — beside
+	// a log about pods, and every row above the real ones is a step that is never going
+	// to turn.
+	s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployPlan, map[string]any{
+		"steps": deployStepsForRevert(),
+	})
+
+	// Started, and carried out here rather than in the browser's request.
+	//
+	// A revert is a rollout: it takes as long as the pods take, which on a real cluster
+	// is longer than anybody's patience and, on a laptop, longer than the tab that
+	// asked for it. Carried out inside the request, closing the tab — or reloading it,
+	// or losing the network for a moment — cancelled the work halfway: the image was on
+	// the workload and the module's record said "context canceled", so the place showed
+	// a failure over a rollback that had worked. A deployment has never had this
+	// problem, because it is a job of the run's rather than a request somebody's.
+	//
+	// The context outlives the request, and the module's own timeout is the deadline:
+	// nobody waiting on this answer is waiting for the rollout, they are waiting to be
+	// told it has begun.
+	go s.carryOutRevert(context.WithoutCancel(r.Context()), module, project, body, request, user)
+
+	s.log.Info("a version is being put back", "project", project.Path,
+		"cluster", request.Cluster, "deployment", request.DeploymentID, "user", user.Username)
+
+	s.writeJSON(w, r, http.StatusAccepted, map[string]any{
+		"started":  true,
+		"cluster":  request.Cluster,
+		"place":    request.Cluster,
+		"workload": request.Workload,
+	})
+}
+
+// carryOutRevert is the rollback itself, told about rather than waited for.
+//
+// The module narrates as it goes and every line is published, so a page watching the
+// place sees the pods come up rather than nothing for a minute and then a state change.
+// The history is published at the end, which is what makes the row for it appear.
+func (s *Server) carryOutRevert(ctx context.Context, module *models.Integration,
+	project *models.Project, body []byte, request revertRequest, user *models.User) {
+
+	answer, err := s.callDeployModuleStream(ctx, module, "/revert", body, func(line []byte) {
 		// Each line the module sends is relayed as an event, so a page watching the
 		// history sees the pods coming up rather than nothing for two minutes and then
 		// a state change.
@@ -413,7 +522,7 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		if json.Unmarshal(line, &progress) != nil || progress.Message == "" {
 			return
 		}
-		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, map[string]any{
+		s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, map[string]any{
 			"phase": progress.Phase, "message": progress.Message,
 			"ready": progress.Ready, "desired": progress.Desired,
 			// Which place this is about, which is the whole of what the core knows
@@ -430,31 +539,35 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		})
 	})
 	if err != nil {
-		s.writeError(w, r, err)
-		return
+		s.log.Warn("a rollback did not finish", "project", project.Path,
+			"cluster", request.Cluster, "deployment", request.DeploymentID, "error", err)
+		s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, map[string]any{
+			"phase": "apply", "message": err.Error(), "failed": true,
+			"deployment": map[string]any{
+				"cluster": request.Cluster, "namespace": request.Namespace,
+				"workload": request.Workload,
+			},
+		})
 	}
-	s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployHistory, map[string]any{
+
+	s.publishPipeline(ctx, project.ID, nil, models.EventDeployHistory, map[string]any{
 		"project": project.Path,
 	})
 
-	s.log.Info("a version was put back", "project", project.Path,
-		"cluster", request.Cluster, "deployment", request.DeploymentID, "user", user.Username)
+	if err != nil {
+		s.log.Info("a rollback was refused", "project", project.Path,
+			"cluster", request.Cluster, "user", user.Username, "error", err)
+		return
+	}
 
-	// A summary, not the module's stream.
-	//
-	// The module narrates as it goes because a revert is a rollout and somebody is
-	// watching pods come up — but that is between the module and this server. What the
-	// browser gets is one object it asked for and can parse: handing the ndjson
-	// straight through left the page failing to read its own answer.
+	// What it left behind, in the log rather than in the answer: nobody is waiting for
+	// this any more, and the record the module wrote is where the truth is.
 	var last struct {
 		Deployment *struct {
-			ID        string `json:"id"`
-			Image     string `json:"image"`
-			Cluster   string `json:"cluster"`
-			Namespace string `json:"namespace"`
-			Workload  string `json:"workload"`
-			State     string `json:"state"`
-			Reason    string `json:"reason"`
+			ID       string `json:"id"`
+			Image    string `json:"image"`
+			State    string `json:"state"`
+			Workload string `json:"workload"`
 		} `json:"deployment"`
 	}
 	for _, line := range bytes.Split(answer, []byte{byte(10)}) {
@@ -462,8 +575,12 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 			_ = json.Unmarshal(line, &last)
 		}
 	}
-
-	s.writeJSON(w, r, http.StatusOK, map[string]any{"deployment": last.Deployment})
+	if last.Deployment != nil {
+		s.log.Info("a version was put back", "project", project.Path,
+			"cluster", request.Cluster, "deployment", last.Deployment.ID,
+			"image", last.Deployment.Image, "state", last.Deployment.State,
+			"user", user.Username)
+	}
 }
 
 // deployModuleFor is the deploy module this project's deployments are read from.

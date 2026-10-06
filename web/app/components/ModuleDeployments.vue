@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onRewake } from '~/lib/eventSocket'
+import { shortImage as formatShortImage } from '~/utils/format'
 /**
  * What is deploying now, and what has been deployed.
  *
@@ -51,6 +52,14 @@ const props = defineProps<{
    * thing it last did was a different commit, and that this one has not got here yet.
    */
   queued?: boolean
+  /**
+   * What the module says is running in this place, right now.
+   *
+   * From the module's own answer and not from this card's history: the card knows what
+   * it deployed, and the module knows what is there. Asked once for the whole page and
+   * handed down, because the answer is per place and the page already has it.
+   */
+  nowRunning?: { image: string; tags?: string[] } | null
   /**
    * Whether to show what the repository says about where this goes.
    *
@@ -296,12 +305,14 @@ interface KnownImage {
   live: PlacedImage | null
 }
 
-function shortImage(image: string): string {
-  const at = image.indexOf('@')
-  if (at < 0) return image || '—'
-  const digest = image.slice(at + 1).replace(/^sha256:/, '')
-  return `${image.slice(0, at)}@${digest.slice(0, 12)}`
-}
+/**
+ * An image in one line, as `reg/app[bc9b83f2da0e]`.
+ *
+ * Shared, because the card, the place's row and the question in a confirmation all have
+ * to print the same thing: three forms of one address on one page is a reader comparing
+ * them instead of reading them.
+ */
+const shortImage = formatShortImage
 
 /**
  * The image's address: where it is and which one it is.
@@ -504,8 +515,6 @@ const places = computed(() => {
     badge: deployment.state || 'unknown',
   }))
 })
-
-const live = computed(() => new Set(places.value.map((one) => one.deployment.id)))
 
 /**
  * What the operation under way is putting into the cluster.
@@ -724,22 +733,34 @@ const stateBadgeClass = computed(() => verdict.value.cls)
 /**
  * Whether this place is running this image right now.
  *
- * Asked of the operations rather than of the catalogue: the catalogue says where each
- * image has been, and after a rollback the image that is running is an old row of it —
- * the newest row is the one that was just taken away. A list whose top row is always
- * the newest deployment then shows the image being deployed away as though it were the
- * one in the cluster, and the answer to "what is running in production" is the newest
- * row instead of the running one.
+ * Told by the row above, which asked the module — the cluster is the thing that knows,
+ * and the history is a record of what this module last did. They come apart the moment
+ * a rollback is cut short or somebody changes an image by hand, and then the newest row
+ * of the catalogue is not what is running: it is the one that was just taken away, and
+ * marking that row "running now" answers "what is deployed" with the operation that was
+ * most recently undone.
+ *
+ * Without the row's answer — a card drawn for a whole project rather than for a place —
+ * the last operation that finished is the best anybody here can say, and it is marked as
+ * what it is.
  */
 const runningImage = computed(() => {
+  if (props.nowRunning?.image) return props.nowRunning.image
   const settled = deployments.value.find((one) =>
     one.state === 'succeeded' || one.state === 'reverted' || one.state === 'rolled_back')
   return settled?.image ?? ''
 })
 
-/** Whether the catalogue's row is the image this place is on. */
-function isRunning(image: KnownImage): boolean {
-  return Boolean(runningImage.value) && runningImage.value === image.name
+/**
+ * Whether this image is the one this place is on, right now.
+ *
+ * By image and not by record: two operations can have put the same image there, and the
+ * one that did it last is not the one that is running now — after a rollback that is
+ * exactly the difference, since the newest operation is the rollback and the image it
+ * brought back is an older row.
+ */
+function isRunningImage(image: string | undefined): boolean {
+  return Boolean(image) && image === runningImage.value
 }
 
 /** The digest the run is applying, for the title attribute on the rows. */
@@ -978,8 +999,14 @@ async function load() {
     // It arrives as an event when a run starts, which leaves a page opened between two
     // runs with no list at all — or, worse, with the last run's replayed at it. The
     // list belongs to the repository, so it is read from the repository.
+    //
+    // Whose list, though, depends on what this place last did. A page opened over a
+    // place whose last operation was a rollback has to be given the rollback's three
+    // steps: the deployment's seven, drawn beside a log about one image going back on
+    // a workload, is a page claiming a build and a push while somebody watches pods.
+    const wasRevert = answer.deployments?.[0]?.state === 'reverted'
     const stepList = await api.get<{ steps?: { key: string; label: string }[] }>(
-      `/projects/${props.projectId}/deploy-plan`,
+      `/projects/${props.projectId}/deploy-plan${wasRevert ? '?kind=revert' : ''}`,
     )
     if (Array.isArray(stepList.steps) && stepList.steps.length > 0) {
       plan.value = stepList.steps
@@ -1513,7 +1540,13 @@ watch(() => props.module.id, load)
                 <td class="state-cell">
                   <div class="badges">
                     <span class="badge" :class="badgeClass(one.state)">{{ one.state }}</span>
-                    <span v-if="live.has(one.id)" class="badge badge-green">running now</span>
+                    <!-- Whether this operation's image is the one on the place now, and
+                         not whether it is the newest: after a rollback the newest is
+                         the one that undid the last, and marking that as what is
+                         running names the image that was just taken away. -->
+                    <span v-if="isRunningImage(one.image)" class="badge badge-green">
+                      running now
+                    </span>
                   </div>
                 </td>
                 <!-- Its own column, not under the status: a status and a sentence are
@@ -1621,7 +1654,7 @@ watch(() => props.module.id, load)
                   </td>
                   <td class="actions-col">
                     <span
-                      v-if="image.live && (live.has(image.live.id) || isRunning(image))"
+                      v-if="image.live && isRunningImage(image.name)"
                       class="badge badge-green"
                     >
                       running now
@@ -1904,22 +1937,6 @@ th {
 
 .images .tags-cell {
   min-width: 120px;
-}
-
-.tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-}
-
-/* A tag is a name, not a status: no colour is spent on it, because the one thing
- * worth drawing the eye to in this table is which image is live. */
-.tag {
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg);
-  font-size: 11px;
 }
 
 .image {

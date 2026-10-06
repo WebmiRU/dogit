@@ -191,6 +191,14 @@ type History interface {
 	// Images is the catalogue of what this project has put on a place, which is not the
 	// same question as what it did most recently.
 	Images(ctx context.Context, project, cluster, namespace string, limit, offset int) ([]KnownImage, int, error)
+	// TagsOf is every name an image has been published under in one place.
+	//
+	// Asked of the whole history rather than read off the newest record of it, because a
+	// rollback's record names the image it put back and not what that image was called:
+	// it was called that when it was deployed, days ago, by a run that is not the newest
+	// thing in the table. So the page answers "what is running here" with a bare digest
+	// exactly when the answer is a version somebody recognises.
+	TagsOf(ctx context.Context, project, cluster, namespace, image string) ([]string, error)
 	// List is one page of a project's history, newest first, and how many there are.
 	//
 	// A page, and a total, because a project that has been deployed to for a year has

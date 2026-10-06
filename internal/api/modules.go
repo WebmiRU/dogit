@@ -1213,6 +1213,21 @@ func ownEntries(effective, inherited json.RawMessage, identify []string) json.Ra
 		} else if name := nameOf(row); name != "" {
 			kept[rowNameField] = json.RawMessage(strconv.Quote(name))
 		}
+		// The whole identity, always — name and namespace, or whatever else a row is
+		// found by.
+		//
+		// Not as answers and not by this scope's decision: these are how the row is
+		// addressed, and a page that cannot address a row cannot ask about it. With the
+		// namespace missing, a card asked for one place's history was sent the other
+		// one's as well — two places in one cluster, and one page showing both under
+		// one name. Which is what "not inherited values are sent" has to yield to: the
+		// rule is about answers, and a place's own coordinates are not an answer, they
+		// are where it is.
+		for _, field := range identify {
+			if value, ok := row[field]; ok {
+				kept[field] = value
+			}
+		}
 		for field, value := range row {
 			if previous, had := was[field]; !had || !sameJSON(value, previous) {
 				kept[field] = value

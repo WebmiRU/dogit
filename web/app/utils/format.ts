@@ -1,5 +1,34 @@
 /** Formatting helpers shared across views. */
 
+/**
+ * An image as a person reads it: the repository, and the digest in brackets.
+ *
+ * The digest without its `sha256:` and in brackets, because the algorithm is a
+ * convention everybody already knows and brackets are not:
+ * `reg/app[bc9b83f2da0e]` reads as one thing made of a name and a digest, where
+ * `reg/app@sha256:bc9b83f2da0e` reads as a path, a scheme and a value — and spends
+ * seven characters of a row that has other things to say.
+ *
+ * The full address, algorithm and all, is what the title attribute carries: this is for
+ * reading, that one is for copying.
+ */
+export function shortImage(image: string): string {
+  if (!image) return '—'
+  const at = image.indexOf('@')
+  if (at < 0) return image
+  const repository = image.slice(0, at)
+  const digest = image.slice(at + 1).replace(/^[a-z0-9]+:/, '')
+  if (!digest) return repository
+  return `${repository}[${digest.slice(0, 12)}]`
+}
+
+/** Just the digest, short and without its algorithm — for a line naming it beside a tag. */
+export function shortDigest(image: string): string {
+  const at = image.indexOf('@')
+  const digest = (at < 0 ? image : image.slice(at + 1)).replace(/^[a-z0-9]+:/, '')
+  return digest ? `[${digest.slice(0, 12)}]` : ''
+}
+
 /** Relative time such as "3 minutes ago", falling back to an absolute date. */
 export function timeAgo(value: string | Date | undefined | null): string {
   if (!value) return ''

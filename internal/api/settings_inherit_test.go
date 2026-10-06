@@ -141,19 +141,26 @@ func TestANameIsDecidedHereOrItIsNotDecided(t *testing.T) {
 
 	put("scope=instance", `[{"name":"prod","kubeconfig":"K"}]`)
 
-	// The instance named it, so the project is shown what it is called and no field for it.
-	if got := ownOf(scope); strings.Contains(got, `"name"`) {
-		t.Errorf("the project is shown %s, want the inherited name not offered as its own", got)
+	// The instance named it, so the project is shown the name as the row's address and
+	// nothing of it as an answer: the name is how the row is found, not something this
+	// project decided. Clearing the name below is what has to look like no decision —
+	// with the name as an ordinary field, emptying it and saving was indistinguishable
+	// from saving the name again, because the field was always there to be filled in.
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(ownOf(scope)), &rows); err != nil || len(rows) != 1 {
+		t.Fatalf("the project is shown %v, want the one place", err)
+	}
+	if rows[0]["name"] != "prod" {
+		t.Errorf("the project is shown %v, want the place addressed by its name", rows[0])
+	}
+	if _, given := rows[0]["kubeconfig"]; given {
+		t.Errorf("the project is handed a kubeconfig for a place it decided nothing of")
 	}
 
 	// Writing a name of its own is a rename of one row, not a second row of the same
 	// cluster — and it is written down as a field, because this scope decided it. The row
 	// carries the identity the core gave it, which is how the rename is found to be the
 	// row it renames.
-	var rows []map[string]any
-	if err := json.Unmarshal([]byte(ownOf(scope)), &rows); err != nil || len(rows) != 1 {
-		t.Fatalf("the project is shown %v, want the one place", err)
-	}
 	id, _ := rows[0]["dogit_row_id"].(string)
 	put(scope, `[{"dogit_row_id":"`+id+`","name":"prod-eu"}]`)
 	got := ownOf(scope)
@@ -172,11 +179,16 @@ func TestANameIsDecidedHereOrItIsNotDecided(t *testing.T) {
 	}
 
 	// Clearing it is no decision again, and the row goes back to being inherited — with
-	// its switches intact, which is what an empty field must not take with it.
+	// its switches intact, which is what an empty field must not take with it. The name
+	// comes back, because that is the name of the row and not a decision: what this
+	// project no longer says is anything about it.
 	put(scope, `[{"name":"","auto_deploy":false}]`)
 	got = ownOf(scope)
-	if strings.Contains(got, `"name"`) {
-		t.Errorf("the project is shown %s, want its name gone again", got)
+	if !strings.Contains(got, `"name":"prod"`) {
+		t.Errorf("the project is shown %s, want the place back under the name it has", got)
+	}
+	if strings.Contains(got, `"prod-eu"`) {
+		t.Errorf("the project is shown %s, want its own name gone again", got)
 	}
 	if !strings.Contains(got, `"auto_deploy":false`) {
 		t.Errorf("the project is shown %s, want its Autodeploy still off", got)
@@ -319,16 +331,31 @@ func TestASettingsPageIsToldOnlyWhatItsOwnScopeDecided(t *testing.T) {
 		t.Errorf("the second place is %v, want it called stage too", stage)
 	}
 	// A place this project overrode nothing of comes as the core's own word for what it
-	// is called, and the row's identity. The name is how the page says "this place
-	// exists", and it is not one of the fields: a field is an answer this scope gave, and
-	// the answer "the place above is called this" is not one — it is what happens when
-	// nobody has answered. Handing it over as a field is what made clearing the name
-	// look like it had done nothing.
+	// is called, its identity, and the fields that identify it — the name and the
+	// namespace it is addressed by. Those are not answers this scope gave and not
+	// pretending to be: they are where the place is, and a page that cannot say where a
+	// place is cannot ask about it. With the namespace missing, a card drawn for one
+	// place was sent the history of every place of that name — one row, two clusters'
+	// rollouts under it.
+	//
+	// Every other field is still this scope's business alone.
 	for key := range stage {
-		if key != "dogit_row_id" && key != "dogit_row_name" {
+		if key != "dogit_row_id" && key != "dogit_row_name" &&
+			key != "name" && key != "default_namespace" {
 			t.Errorf("the page was handed %s=%v for a place this project overrode nothing of",
 				key, stage[key])
 		}
+	}
+	if stage["name"] != "stage" {
+		t.Errorf("the second place is addressed as %v, want it called stage", stage["name"])
+	}
+	if stage["default_namespace"] != nil {
+		// This module identifies its rows by name alone, so the namespace is an ordinary
+		// field: this project overrode nothing of it and is told nothing about it. The
+		// deploy module on a real instance identifies rows by name and namespace, and
+		// sends both as the row's address.
+		t.Errorf("the page was handed a namespace this project decided nothing of: %v",
+			stage["default_namespace"])
 	}
 	if stage["dogit_row_name"] != "stage" {
 		t.Errorf("the second place is called %v, want it called stage", stage["dogit_row_name"])

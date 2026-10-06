@@ -472,6 +472,9 @@ onBeforeUnmount(() => stopWatching?.())
   border-bottom: 1px solid var(--border);
 }
 
+/* The chip itself is the interface's, so that a tag in this table and a tag beside a
+   place's row are drawn the same way. Only the weight is this table's: these names are
+   the point of the row. */
 .tag {
   font-weight: 600;
 }

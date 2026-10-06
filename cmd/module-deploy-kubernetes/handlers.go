@@ -438,6 +438,104 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 	stream.send(deploy.Progress{Done: true, Message: "finished", Deployment: &record})
 }
 
+// handleCurrent answers what is running in one place, right now.
+//
+// A question about the cluster rather than about this module's bookkeeping, and asked
+// of the cluster because the cluster is the thing that is being asked about: a history
+// says what this module last did, which is not the same as what is running — somebody
+// with kubectl changes the image, a rollout is cut short, a Deployment is recreated
+// with something else in it. Every one of those leaves the record confidently wrong and
+// the page confidently repeating it.
+//
+// The tags come from the record and only when the record's own image is the one that
+// is running. They are the names this module published that exact digest under, and
+// they are a fact about the past: a tag moves, and the name it was published under is
+// the one this place was actually given.
+//
+// A module of another kind answers the same question its own way — an archive over SSH
+// cannot be asked, so it answers from what it wrote down and says so in `asked`. What
+// it must not do is refuse the question: the page asks it because there is one answer
+// it needs, and a module that cannot give it says `known: false` with the reason
+// rather than an error, so the page can say "this module cannot tell you" instead of
+// "the request failed".
+func (c *coreClient) handleCurrent(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	query := r.URL.Query()
+
+	project := query.Get("project")
+	name := strings.TrimSpace(query.Get("cluster"))
+	if project == "" || name == "" {
+		writeError(w, http.StatusBadRequest, "this module is asked what is running by project and cluster")
+		return
+	}
+	if c.history == nil {
+		writeError(w, http.StatusServiceUnavailable, errNoHistory.Error())
+		return
+	}
+
+	_, namespace, client, err := c.clusterFor(ctx, project, name, query.Get("namespace"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Which workload: the one asked about, or the one this module last deployed here.
+	workload := strings.TrimSpace(query.Get("workload"))
+	if workload == "" {
+		last, err := c.history.Current(ctx, project, name, namespace)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if last == nil || strings.TrimSpace(last.Workload) == "" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"known": false,
+				"reason": fmt.Sprintf(
+					"nothing has ever been deployed to %s/%s, so there is nothing there to report",
+					name, namespace),
+				"asked": "this module's own record",
+			})
+			return
+		}
+		workload = last.Workload
+	}
+
+	image, err := client.RunningImage(ctx, namespace, workload)
+	if err != nil {
+		// A cluster that cannot be reached is not "unknown what is running" — it is a
+		// failure to find out, and the page says so rather than drawing an empty answer.
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	answer := map[string]any{
+		"known":     true,
+		"image":     image,
+		"workload":  workload,
+		"namespace": namespace,
+		"cluster":   name,
+		"asked":     "the cluster",
+	}
+	if state, err := client.Rollout(ctx, namespace, workload); err == nil {
+		answer["ready"] = state.Ready
+		answer["desired"] = state.Desired
+		answer["settled"] = state.Done
+	}
+	if tags, err := c.history.TagsOf(ctx, project, name, namespace, image); err == nil && len(tags) > 0 {
+		// From the whole history and not from the newest record, which after a rollback
+		// is the rollback's own: it says which image went back and nothing about what
+		// that image was called. So the one image whose name matters most is the one
+		// that comes back nameless — "running [1f2d70a89dd0]" where the place is
+		// running v88.10, and the person reading it has to look the digest up.
+		answer["tags"] = tags
+	}
+	if last, err := c.history.Current(ctx, project, name, namespace); err == nil &&
+		last != nil && last.Image == image && last.FinishedAt != nil {
+		answer["since"] = last.FinishedAt
+	}
+	writeJSON(w, http.StatusOK, answer)
+}
+
 // mustSettings is the module's settings for a project, or empty.
 func mustSettings(ctx context.Context, c *coreClient, project string) map[string]any {
 	settings, err := c.settings(ctx, project)

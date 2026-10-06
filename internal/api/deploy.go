@@ -624,6 +624,25 @@ func deployStepsFor(built string, manifests, pre, post int) []deployStepName {
 	return steps
 }
 
+// deployStepsForRevert is what putting a version back goes through.
+//
+// Its own list, and not the deployment's with some rows left out by hand, because a
+// rollback is not a deployment with fewer steps: nothing is built, nothing is pushed,
+// there are no manifests to read and no credential to write, and there is no image
+// anywhere in it that is new. Its whole story is one change to a workload and the pods
+// that change brings up.
+//
+// Drawing the deployment's list beside a rollback's log is a page that claims a build
+// happened while somebody is watching the pods of an image that was built days ago, and
+// the rows that never turn are read as steps that failed.
+func deployStepsForRevert() []deployStepName {
+	return []deployStepName{
+		{"apply", "Put the image back on the workload"},
+		{"rollout", "Bring the pods up on it"},
+		{"retire", "Retire the old pods"},
+	}
+}
+
 // buildJob names the job that built the image this run deploys, or nothing.
 func buildJob(ctx context.Context, s *Server, run *store.Pipeline, skipJobID int64) string {
 	_, built := builtImage(ctx, s, run, skipJobID)

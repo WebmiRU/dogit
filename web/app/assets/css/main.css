@@ -244,6 +244,27 @@ label {
   color: #bcd5ff;
 }
 
+/* Tags are names, not statuses: an outline rather than a fill, and no colour spent on
+   them, because what is worth drawing the eye to is which of these is the live one.
+   Global because the same name is drawn in the images table and beside a place's row,
+   and a chip that is framed in one place and frameless in the other is read as two
+   different kinds of thing. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  font-size: 11px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
 /* Badges are solid, square-cornered chips rather than outlines: an outline next
    to the solid buttons and panels elsewhere in the interface reads as belonging
    to something else. Four pixels of radius is the same radius the cards use, so

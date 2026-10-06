@@ -362,6 +362,37 @@ func (h *postgresHistory) Current(ctx context.Context, project, cluster, namespa
 	return &record, nil
 }
 
+// TagsOf is every name an image has been published under in one place.
+//
+// From the whole history, because the newest record of an image is not the one that
+// knows its name: a rollback's record says which image went back and nothing else, and
+// it is the newest thing in the table. Read from there, the one image whose name matters
+// most — the one that was just put back — is the one that comes back nameless.
+func (h *postgresHistory) TagsOf(ctx context.Context, project, cluster, namespace,
+	image string) ([]string, error) {
+
+	if strings.TrimSpace(image) == "" {
+		return nil, nil
+	}
+	var encoded []byte
+	err := h.pool.QueryRow(ctx, `
+		SELECT COALESCE((
+			SELECT jsonb_agg(DISTINCT tag)
+			FROM deployments d, LATERAL jsonb_array_elements_text(
+			  COALESCE(d.tags, '[]'::jsonb)) AS tag
+			WHERE d.project = $1 AND d.image = $4
+			  AND ($2 = '' OR d.cluster = $2) AND ($3 = '' OR d.namespace = $3)
+		), '[]'::jsonb)`, project, cluster, namespace, image).Scan(&encoded)
+	if err != nil {
+		return nil, fmt.Errorf("read the names of an image: %w", err)
+	}
+	var tags []string
+	if len(encoded) > 0 {
+		_ = json.Unmarshal(encoded, &tags)
+	}
+	return tags, nil
+}
+
 // An empty cluster or namespace means "any": the question a project page asks is what
 // it has deployed, not what it deployed to one place it already knows the name of.
 func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace string,

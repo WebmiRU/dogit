@@ -498,6 +498,16 @@ func mergeEntries(specs []models.SettingSpec, key string, inherited, override js
 			for _, existing := range merged {
 				if (id != "" && idOf(existing) == id) || (name != "" && nameOf(existing) == name) {
 					for field, value := range entry {
+						// The identity is the row's, not this scope's edit of it. Two
+						// scopes holding one row are one row: a row that overrode a
+						// switch at project level took the place above's identity with
+						// it, and from then on nothing could tell the two rows apart —
+						// the name is not written down at that level (it is inherited),
+						// so the next read had two rows of one place, one of them with
+						// no name and therefore invisible on the page.
+						if field == RowIDField {
+							continue
+						}
 						existing[field] = value
 					}
 					replaced = true
