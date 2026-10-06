@@ -477,11 +477,24 @@ function settleSetting(spec: SettingSpec) {
 }
 
 /** Whether one row of a list is different from what is stored. */
+/**
+ * Whether one row is different from what is stored — including a row that has gone.
+ *
+ * A row that was removed is the last row's business: nothing else on the page is
+ * different, and comparing only what is on screen with what is stored cannot see a row
+ * that is no longer on screen at all. Without this, Remove removed the row from the form
+ * and left the Save button grey, which is a deletion that silently does nothing.
+ */
 function rowChanged(spec: SettingSpec, index: number): boolean {
-  const row = entriesOf(values.value[spec.key])[index]
-  const was = entriesOf(saved.value[spec.key])[index]
-  if (!row || !was) return true
-  return JSON.stringify(row) !== JSON.stringify(was)
+  const rows = entriesOf(values.value[spec.key])
+  const was = entriesOf(saved.value[spec.key])
+  const row = rows[index]
+  const before = was[index]
+  if (!row || !before) return true
+  if (JSON.stringify(row) !== JSON.stringify(before)) return true
+  // Fewer rows than are stored: something between here and the end has been removed, and
+  // the last row on screen is where that is saved from.
+  return rows.length < was.length && index === rows.length - 1
 }
 
 /** Whether one setting is different from what is stored. */
