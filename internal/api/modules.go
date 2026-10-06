@@ -940,11 +940,19 @@ func (s *Server) handleGetModuleSettings(w http.ResponseWriter, r *http.Request)
 	// The levels above this one, and only those. For the instance there are none, so
 	// an instance form has nothing inherited and every row in it is its own.
 	inheritedGroup, inheritedProject := groupID, projectID
+	noLevelsAbove := false
 	switch scopeType {
 	case store.ScopeGroup:
 		inheritedGroup = nil
 	case store.ScopeProject:
 		inheritedProject = nil
+	}
+	if scopeType == store.ScopeInstance {
+		// Nothing is above the instance. Resolving "the levels above" here would answer
+		// with the instance's own rows, and every row on that page would then read as
+		// somebody else's row that this scope may not delete.
+		inheritedGroup, inheritedProject = nil, nil
+		noLevelsAbove = true
 	}
 	effective, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, groupID, projectID, integration.Capabilities.Settings)
 	if err != nil {
@@ -956,8 +964,13 @@ func (s *Server) handleGetModuleSettings(w http.ResponseWriter, r *http.Request)
 	// It is what lets the form say which of the rows it shows are this scope's own,
 	// and what stops a save from writing down every inherited row as if it had been
 	// decided here.
-	inherited, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID,
-		inheritedGroup, inheritedProject, integration.Capabilities.Settings)
+	var inherited map[string]json.RawMessage
+	if noLevelsAbove {
+		inherited = map[string]json.RawMessage{}
+	} else {
+		inherited, err = s.store.Integrations().SettingsFor(r.Context(), integration.ID,
+			inheritedGroup, inheritedProject, integration.Capabilities.Settings)
+	}
 	if err != nil {
 		s.writeError(w, r, err)
 		return

@@ -18,7 +18,34 @@ const props = withDefaults(
   defineProps<{
     module: ModuleRow
     /** Whose values this is: instance, group or project. */
-    scope?: 'instance' | 'group' | 'project'
+    /**
+   * Fields this page must not show, by key.
+   *
+   * A field is hidden rather than emptied, and the form says why: a cluster's
+   * kubeconfig is a credential, and the project page is open to everybody who may read
+   * the project. What is hidden here is written on the module's own Options page, by
+   * somebody allowed to.
+   */
+  hideFields?: string[]
+  /**
+   * One row of a list setting, by name, rather than all of them.
+   *
+   * Used by a place's own page: a place is one cluster, and a card about that cluster
+   * configures that cluster — with the same fields, in the same form, as the module's own
+   * Settings page. Two forms for one thing would be two places to be wrong in the same
+   * way.
+   */
+  onlyRow?: string
+  /**
+   * Whether this viewer may change anything here.
+   *
+   * A page that is open to everybody who may read a project shows its settings with the
+   * controls still there, and does not: a control that cannot work makes the page look
+   * broken, and the point of this form on a project page is that a developer can see
+   * what they deploy to.
+   */
+  canEdit?: boolean
+  scope?: 'instance' | 'group' | 'project'
     /**
      * Which group or project, when the scope is not the instance.
      *
@@ -50,6 +77,8 @@ const busy = ref(false)
 const error = ref('')
 
 /** The query that says whose settings are being read and written. */
+const mayEdit = computed(() => props.canEdit !== false)
+
 const scopeQuery = computed(() => {
   if (props.scope === 'instance') return 'scope=instance'
   const name = props.scope === 'group' ? 'groupID' : 'projectID'
@@ -520,8 +549,17 @@ const inheritedNote = [
 ].join(' ')
 
 /** The rows of a list setting, for the template to walk. */
+/**
+ * The rows of a list setting, for the template to walk.
+ *
+ * One row when the page was asked about one place by name, and that row is looked up by
+ * the same field the core uses to join inherited rows: by `name`. The other rows are not
+ * hidden here but absent — a card about a place has nothing to do with the other places.
+ */
 function rowsOf(spec: SettingSpec): SettingEntry[] {
-  return entriesOf(values.value[spec.key])
+  const rows = entriesOf(values.value[spec.key])
+  if (!props.onlyRow || !rowName(spec, {})) return rows
+  return rows.filter((row) => rowName(spec, row) === props.onlyRow)
 }
 
 /** What a row is called in the list: its first field, or "entry". */
@@ -612,7 +650,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 v-if="rowIsOwn(spec, row) || !spec.items?.identify?.length"
                 class="link-button row-remove"
                 type="button"
-                :disabled="busy"
+                :disabled="busy || !mayEdit"
                 @click="removeEntry(spec, index)"
               >
                 Remove
@@ -630,7 +668,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               <button
                 class="btn btn-small"
                 type="button"
-                :disabled="busy || !rowChanged(spec, index)"
+                :disabled="busy || !mayEdit || !rowChanged(spec, index)"
                 @click="revertRow(spec, index)"
               >
                 Discard
@@ -638,14 +676,18 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               <button
                 class="btn btn-small btn-primary"
                 type="button"
-                :disabled="busy || !rowChanged(spec, index)"
+                :disabled="busy || !mayEdit || !rowChanged(spec, index)"
                 @click="saveRow(spec, index)"
               >
                 {{ busy ? 'Saving…' : 'Save this row' }}
               </button>
             </div>
 
-            <div v-for="field in spec.items?.fields ?? []" :key="field.key" class="setting-field">
+            <div
+              v-for="field in (spec.items?.fields ?? []).filter((one) => !(props.hideFields ?? []).includes(one.key))"
+              :key="field.key"
+              class="setting-field"
+            >
               <!-- Label and description on separate lines: run together they read as
                    one sentence about a field that has two unrelated things said
                    about it, and the reader cannot tell where the name stops. -->
@@ -669,6 +711,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               </button>
               <select
                 v-else-if="field.type === 'enum'"
+                :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
                 v-model="row[field.key]"
               >
@@ -680,6 +723,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                    loses its newlines and stops being a kubeconfig at all. -->
               <textarea
                 v-else-if="field.type === 'text'"
+                :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
                 v-model="row[field.key]"
                 rows="6"
@@ -688,6 +732,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               />
               <input
                 v-else
+                :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
                 v-model="row[field.key]"
                 :type="field.secret ? 'password' : 'text'"
@@ -696,7 +741,13 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
             </div>
           </div>
 
-          <button class="btn btn-small" type="button" :disabled="busy" @click="addEntry(spec)">
+          <button
+            v-if="!onlyRow && mayEdit"
+            class="btn btn-small"
+            type="button"
+            :disabled="busy"
+            @click="addEntry(spec)"
+          >
             {{ spec.items?.add_label ?? `Add ${spec.label.toLowerCase()}` }}
           </button>
         </div>

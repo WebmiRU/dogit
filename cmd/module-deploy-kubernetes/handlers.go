@@ -106,12 +106,6 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := c.settings(ctx, request.Project)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-
 	substitution := k8s.Substitution{Placeholder: request.Placeholder, Image: request.Image}
 
 	manifests := make([]k8s.Object, 0, len(request.Manifests))
@@ -132,11 +126,14 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	timeout := timeoutFrom(settings, "default_rollout_timeout", 10*time.Minute)
+	// The cluster's own answers first, and the repository's configuration over them: a
+	// project that asks for a shorter wait is describing this particular deployment,
+	// and asking to keep the Jobs is a claim about code that is reviewed with it.
+	timeout := cluster.timeout()
 	if request.TimeoutSeconds > 0 {
 		timeout = time.Duration(request.TimeoutSeconds) * time.Second
 	}
-	keepJobs := request.KeepJobs || boolSetting(settings, "keep_jobs")
+	keepJobs := cluster.keepJobs() || request.KeepJobs
 
 	// The answer is a stream, not a value: a deployment takes minutes, and a caller
 	// that hears nothing until the end is watching a spinner rather than a rollout.
@@ -264,7 +261,10 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, namespace, client, err := c.clusterFor(ctx, request.Project, request.Cluster, request.Namespace)
+	// A revert is a rollout like any other, so it waits as long as this cluster waits:
+	// the slow one is still slow when what is being put back is the version from
+	// yesterday.
+	cluster, namespace, client, err := c.clusterFor(ctx, request.Project, request.Cluster, request.Namespace)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -283,7 +283,7 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 		ID:        id,
 		Workload:  request.Workload,
 		Namespace: namespace,
-		Timeout:   timeoutFrom(mustSettings(ctx, c, request.Project), "default_rollout_timeout", 10*time.Minute),
+		Timeout:   cluster.timeout(),
 	})
 	// A refusal before anything was written is a refusal; anything after is part of the
 	// stream, so that a revert that started and then failed is told rather than

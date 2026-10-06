@@ -136,7 +136,7 @@ const page = ref(1)
  * the width making both of them narrower. Operations are what somebody opens the page
  * for; images are what they open once something went wrong.
  */
-const tab = ref<'now' | 'operations' | 'images'>('now')
+const tab = ref<'now' | 'operations' | 'images' | 'settings'>('now')
 
 /** The image to be shown, when somebody arrived here by clicking one. */
 const wanted = ref('')
@@ -197,13 +197,15 @@ const activeSeen = ref<DeployProgress[]>([])
 /**
  * The place being asked about, if one was named.
  *
- * Not guessed from the module's kind. "deploy:kubernetes" is what the module is, and a
- * cluster is called something else entirely, so asking for a cluster named "kubernetes"
- * is asking about a place that does not exist and getting an empty history in reply.
- * Empty means every place, which is the right question for a page that lists operations
- * across all of them.
+ * The part of the kind after the colon — "deploy:kubernetes" is the module, and
+ * "kubernetes" is the name the core files it under. Not the cluster: a cluster is called
+ * something else entirely, and asking for a cluster named "kubernetes" is asking about a
+ * place that does not exist and getting an empty history in reply.
+ *
+ * It used to be empty, which asked the core for a module of kind "deploy:" — no such
+ * thing is installed, so the whole card answered with a failure rather than with nothing.
  */
-const target = ref('')
+const target = computed(() => props.module.kind.split(':')[1] ?? '')
 
 /** The cluster this block is about, if it was told one. */
 const scopedCluster = computed(() => props.place?.cluster ?? '')
@@ -753,6 +755,7 @@ const LOAD_SETTLE_MS = 250
 async function loadImages() {
   try {
     const query = new URLSearchParams({
+      target: target.value,
       page: String(imagePage.value),
       per_page: String(IMAGE_PAGE),
     })
@@ -840,11 +843,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
+    // Two different things, and they used to be sent as one: which module to ask, and
+    // which place of that module to ask about. Sending the module's name as the cluster
+    // asked about a place called "kubernetes", which exists nowhere, and left the core
+    // with no module to ask at all.
     const query = new URLSearchParams({
-      cluster: target.value || scopedCluster.value,
+      target: target.value,
       page: String(page.value),
       per_page: String(PAGE),
     })
+    if (scopedCluster.value) query.set('cluster', scopedCluster.value)
     const answer = await api.get<DeploymentsPage>(
       `/projects/${props.projectId}/deployments?${query}`,
     )
@@ -1192,6 +1200,19 @@ watch(() => props.module.id, load)
           Images
           <span class="count">{{ imageTotal }}</span>
         </button>
+        <!-- One place, so one place's settings. Shown only when this card was told which
+             place it is about: a card drawn for a whole project has no one row to
+             configure, and a tab that said "Settings" there would be a promise about
+             something on the page that does not exist. -->
+        <button
+          v-if="scopedCluster"
+          class="tab"
+          :class="{ on: tab === 'settings' }"
+          type="button"
+          @click="tab = 'settings'"
+        >
+          Settings
+        </button>
       </nav>
     </template>
 
@@ -1384,6 +1405,20 @@ watch(() => props.module.id, load)
               Older
             </button>
           </div>
+        </section>
+
+        <!-- This place's own settings: the same fields, in the same form, as the
+             module's Settings page — because it is the same thing. One row only, the one
+             this card is about. -->
+        <section v-if="tab === 'settings' && scopedCluster" class="block">
+          <ModuleSettingsForm
+            :module="props.module"
+            scope="project"
+            :scope-id="props.projectId"
+            :only-row="scopedCluster"
+            :can-edit="props.canManage"
+            :note="`These are the settings ${scopedCluster} has for ${props.projectPath}. Anything left alone is inherited from the group or the instance.`"
+          />
         </section>
 
         <section v-show="tab === 'images'" class="block">

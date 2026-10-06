@@ -217,22 +217,30 @@ func manifest() map[string]any {
 								"never creates namespaces: one is somebody's decision, made where they can see " +
 								"what is already in it.",
 						},
+						{
+							// Both of these used to be one setting each for the whole module,
+							// which is the wrong size for either: a cluster that rolls out in
+							// twenty seconds and one that takes four minutes are both normal,
+							// and a single number is either an endless wait on the fast one or a
+							// rollout declared stuck on the slow one.
+							"key":   "rollout_timeout",
+							"label": "Rollout timeout",
+							"type":  "int",
+							"description": "Seconds to wait for this cluster's rollout before a deployment is " +
+								"called stuck. Empty means ten minutes. A project's own configuration may " +
+								"ask for less, and does so for one run.",
+						},
+						{
+							"key":   "keep_jobs",
+							"label": "Keep finished jobs",
+							"type":  "bool",
+							"description": "Leave this cluster's migration and check Jobs in place after they " +
+								"finish. Off by default: a namespace full of finished Jobs is a namespace " +
+								"nobody can read. It does nothing at all where the project declares no " +
+								"pre or post steps, because then no Jobs are made.",
+						},
 					},
 				},
-			},
-			{
-				"key":         "default_rollout_timeout",
-				"label":       "Rollout timeout",
-				"type":        "int",
-				"default":     600,
-				"description": "Seconds to wait for a rollout before a deployment is called stuck. A project's own configuration may ask for less.",
-			},
-			{
-				"key":         "keep_jobs",
-				"label":       "Keep finished jobs",
-				"type":        "bool",
-				"default":     false,
-				"description": "Leave the migration and check Jobs in place after they finish. Off by default: a namespace full of finished Jobs is a namespace nobody can read.",
 			},
 		},
 	}

@@ -78,23 +78,59 @@ func TestAClusterWithNoWayInSaysWhatIsMissing(t *testing.T) {
 	}
 }
 
-// A timeout that is not a number falls back rather than refusing: the module said what
-// it does when nobody says otherwise, and a typo in a settings page should not stop
-// deployments from being configured.
-func TestAnUnreadableTimeoutFallsBack(t *testing.T) {
-	fallback := 10 * time.Minute
-
-	if got := timeoutFrom(map[string]any{}, "default_rollout_timeout", fallback); got != fallback {
-		t.Errorf("an absent timeout became %s", got)
+// A cluster answers for itself: its own timeout, or the module's default when it says
+// nothing. And what it says is read from the cluster's own row, so two clusters of one
+// installation can be waited for differently.
+func TestEachClusterIsWaitedForAsItSaysItShouldBe(t *testing.T) {
+	clusters, err := clustersOf(map[string]any{"clusters": []any{
+		map[string]any{"name": "fast"},
+		map[string]any{"name": "slow", "rollout_timeout": float64(1200)},
+		map[string]any{"name": "nonsense", "rollout_timeout": "soon"},
+		map[string]any{"name": "negative", "rollout_timeout": float64(-5)},
+	}})
+	if err != nil {
+		t.Fatalf("read the clusters: %v", err)
 	}
-	if got := timeoutFrom(map[string]any{"default_rollout_timeout": "soon"}, "default_rollout_timeout", fallback); got != fallback {
+	if len(clusters) != 4 {
+		t.Fatalf("the module sees %d clusters, want all four", len(clusters))
+	}
+
+	if got := clusters[0].timeout(); got != defaultRolloutTimeout {
+		t.Errorf("a cluster that says nothing is waited %s for, want the module's default", got)
+	}
+	if got := clusters[1].timeout(); got != 20*time.Minute {
+		t.Errorf("the slow cluster is waited %s for, want its own twenty minutes", got)
+	}
+	// A value nobody can read is not somebody saying something else. It stands at the
+	// default rather than refusing: a typo in a settings page should not stop a
+	// deployment from being configured.
+	if got := clusters[2].timeout(); got != defaultRolloutTimeout {
 		t.Errorf("a timeout that is not a number became %s", got)
 	}
-	if got := timeoutFrom(map[string]any{"default_rollout_timeout": float64(60)}, "default_rollout_timeout", fallback); got != time.Minute {
-		t.Errorf("a timeout of sixty seconds became %s", got)
-	}
-	if got := timeoutFrom(map[string]any{"default_rollout_timeout": float64(-5)}, "default_rollout_timeout", fallback); got != fallback {
+	if got := clusters[3].timeout(); got != defaultRolloutTimeout {
 		t.Errorf("a negative timeout became %s", got)
+	}
+}
+
+// The finished Jobs are a question about one cluster too: leaving yesterday's migrations
+// in staging to read them is a different want from leaving them in production.
+func TestEachClusterSaysWhetherItKeepsItsJobs(t *testing.T) {
+	clusters, err := clustersOf(map[string]any{"clusters": []any{
+		map[string]any{"name": "ordinary"},
+		map[string]any{"name": "forensics", "keep_jobs": true},
+		map[string]any{"name": "off", "keep_jobs": false},
+	}})
+	if err != nil {
+		t.Fatalf("read the clusters: %v", err)
+	}
+	if clusters[0].keepJobs() {
+		t.Error("a cluster nobody said anything about keeps its jobs")
+	}
+	if !clusters[1].keepJobs() {
+		t.Error("the cluster that asked to keep its jobs does not")
+	}
+	if clusters[2].keepJobs() {
+		t.Error("a cluster that said no keeps its jobs")
 	}
 }
 

@@ -24,8 +24,15 @@ const props = defineProps<{
   canManage: boolean
 }>()
 
-/** Which module's settings are open. One at a time: two forms on a page of a list is a page nobody reads. */
-const editing = ref<string>('')
+/**
+ * How this project may deploy, and what is happening where.
+ *
+ * One row per place and nothing else on this page: a row is a place, and the card under
+ * it carries that place's own settings as well as its log and its history. A separate
+ * page of settings would be settings about places, in one place, which is the thing the
+ * rows stopped being.
+ */
+const view = ref<'places'>('places')
 /** The module whose deployments are shown, or none. */
 
 const modules = ref<ModuleRow[]>([])
@@ -80,18 +87,12 @@ const deployModules = computed(() =>
   modules.value.filter((module) => module.kind.startsWith('deploy:')),
 )
 
-function toggleEdit(module: ModuleRow) {
-  editing.value = editing.value === module.id ? '' : module.id
-}
-
 async function load() {
   loading.value = true
   error.value = ''
   try {
     const answer = await api.get<{ modules: ModuleRow[] }>('/modules')
     modules.value = answer.modules ?? []
-
-
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -125,7 +126,7 @@ onMounted(async () => {
       </p>
     </div>
 
-    <div v-else class="card">
+    <div v-else-if="!loading && !error && deployModules.length" class="card">
       <!-- The head of the card: whether anything is happening. One lamp and one
            sentence. Everything else about the modules is a row of the table below, and
            the switch that decides whether the next push deploys anything is in it. -->
@@ -156,7 +157,6 @@ onMounted(async () => {
                  piece of explanation that is worth reading once and not on every
                  glance. It is in the tooltip now, where nothing is pushed out of
                  shape by it. -->
-            <th class="actions-col">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -174,40 +174,27 @@ onMounted(async () => {
                 <span v-else-if="module.status === 'online'" class="badge badge-green">Online</span>
                 <span v-else class="badge badge-warning">{{ module.status }}</span>
               </td>
-              <td class="actions-col">
-                <button class="btn btn-small" type="button" @click="toggleEdit(module)">
-                  {{ editing === module.id ? 'Done' : 'Edit' }}
-                </button>
-              </td>
             </tr>
 
-            <!-- The row of a module that is open. Nothing about a table goes here:
-                 a cell spanning every column makes the browser redistribute them, and
-                 the buttons slide sideways at the moment somebody is reaching for one. -->
-            <tr v-if="editing === module.id" class="detail-row">
-              <td></td>
-              <td></td>
-              <td></td>
-              <td></td>
-            </tr>
           </template>
         </tbody>
       </table>
 
-      <div
-        v-for="module in deployModules"
-        v-show="editing === module.id"
-        :key="`edit-${module.id}`"
-        class="panel"
-      >
-        <ModuleSettingsForm
-          :module="module"
-          scope="project"
-          :scope-id="props.projectId"
-          :note="`These values are for ${props.projectPath} only. Anything left alone is inherited from the group or the instance.`"
-        />
-      </div>
     </div>
+
+    <!-- Each place, and the card about that place. One row per place: a card drawn for
+         the project as a whole merges two clusters into one, and a rollout on one of
+         them is then shown next to a version of the other that has been running for a
+         month. -->
+    <ProjectPlaces
+      v-for="module in deployModules"
+      :key="`places-${module.id}`"
+      :project-id="props.projectId"
+      :project-path="props.projectPath"
+      :module="module"
+      :can-manage="props.canManage"
+    />
+
   </div>
 </template>
 

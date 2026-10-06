@@ -37,12 +37,11 @@ const tabNames = computed(() => [
   'overview',
   ...(moduleKind.value === 'registry:docker' ? ['images'] : []),
   'settings',
-  // Where the module may act. A notification module's rows are the chats it writes
-  // to, a deployment module's are the clusters it may reach — and the kubeconfig that
-  // says how is one of those rows'"'"'s values, not a setting of the module. Without this
-  // tab a deployment module'"'"'s own places have no page at all: they are rows, and rows
-  // are shown where they can be changed.
-  ...(module.value?.manifest?.target ? ['places'] : []),
+  // Where the module may act. A notification module's rows are the chats it writes to,
+  // and they are rows rather than settings: a Telegram module's settings are the
+  // address of one chat, so asking for two chats means asking for two rows. Each row
+  // is inherited downwards and is changed where it is changed, not on one page.
+  ...(moduleKind.value.startsWith('notify:') ? ['notifications'] : []),
   // The record of what it deployed, kept apart from what it is configured to do: one
   // is settings anybody inherits, the other is what happened to a running system and
   // belongs to whoever may change one.
@@ -54,15 +53,20 @@ const tabTitles: Record<string, string> = {
   overview: 'Overview',
   images: 'Images',
   notifications: 'Notifications',
-  places: 'Places',
   deployments: 'Deployments',
   settings: 'Settings',
   removal: 'Removal',
 }
 
-const tab = computed(() =>
-  (tabNames.value as string[]).includes(String(route.query.tab)) ? String(route.query.tab) : 'overview',
-)
+// Links are not broken by a rename. This tab was called "Options" while it was being
+// argued about, and somebody has that URL in a bookmark: it opens the same page as the
+// name it had, rather than the overview.
+const tabAliases: Record<string, string> = { options: 'settings' }
+
+const tab = computed(() => {
+  const asked = tabAliases[String(route.query.tab)] ?? String(route.query.tab)
+  return (tabNames.value as string[]).includes(asked) ? asked : 'overview'
+})
 
 function setTab(name: string) {
   navigateTo({ path: route.path, query: name === 'overview' ? {} : { tab: name } }, { replace: true })
@@ -266,6 +270,7 @@ const storageFraction = computed(() => {
         </div>
       </section>
 
+      <!-- What this module is configured with, at every scope it is configured at. -->
       <section v-else-if="tab === 'settings'">
         <div v-if="!module.manifest?.settings?.length" class="card empty">
           This module declared no settings.

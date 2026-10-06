@@ -500,6 +500,26 @@ type Cluster struct {
 	Context          string `json:"context"`
 	DefaultNamespace string `json:"default_namespace"`
 
+	// RolloutTimeout is how long to wait for this cluster's rollout, in seconds.
+	// Zero means the module's own default.
+	//
+	// Per cluster rather than one number for the whole module, because the clusters
+	// differ: one rolls out in twenty seconds and one takes four minutes, and both are
+	// normal. A single number is either an endless wait on the fast one or a rollout
+	// declared stuck on the slow one.
+	RolloutTimeout seconds `json:"rollout_timeout"`
+
+	// KeepJobs leaves this cluster's finished phase Jobs in place.
+	//
+	// Per cluster for the same reason, and because the two kinds of cluster want
+	// different things: a staging cluster somebody is debugging wants the Jobs left
+	// where they can be read, a production one does not want yesterday's migrations
+	// sitting in the namespace.
+	//
+	// A pointer so that "nobody said" is not "said no", though for this one the default
+	// and the answer happen to be the same.
+	KeepJobs *bool `json:"keep_jobs"`
+
 	// InUse says whether this cluster is one this project may deploy to. It is a
 	// pointer so that "nobody said" and "said no" are two different things: a cluster
 	// written before this field existed is in use, and a cluster somebody below
@@ -510,6 +530,46 @@ type Cluster struct {
 	// reason this is a switch and not a row's absence.
 	InUse *bool `json:"enabled,omitempty"`
 }
+
+// seconds is a number of seconds that cannot refuse to be read.
+//
+// A value that is not a number, or is not a positive one, reads as zero — which means
+// the module's own default — rather than failing the whole list. One typo in one row of
+// somebody's settings page should not take every other cluster down with it: the core
+// refuses such a value on the way in, so this is about a value written before it did.
+type seconds int
+
+func (s *seconds) UnmarshalJSON(raw []byte) error {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	number, ok := value.(float64)
+	if !ok || number <= 0 {
+		return nil
+	}
+	*s = seconds(number)
+	return nil
+}
+
+// timeout is how long to wait for this cluster's rollout, or the module's own default
+// when this cluster says nothing about it.
+func (c Cluster) timeout() time.Duration {
+	if c.RolloutTimeout > 0 {
+		return time.Duration(c.RolloutTimeout) * time.Second
+	}
+	return defaultRolloutTimeout
+}
+
+// keepJobs reports whether this cluster's finished Jobs are left in place.
+func (c Cluster) keepJobs() bool {
+	return c.KeepJobs != nil && *c.KeepJobs
+}
+
+// defaultRolloutTimeout is what a cluster that says nothing is given: ten minutes,
+// which is long enough for a slow cluster and short enough that somebody is still
+// watching when it runs out.
+const defaultRolloutTimeout = 10 * time.Minute
 
 // use reports whether a cluster is in use, which it is unless somebody said otherwise.
 func (c Cluster) use() bool {

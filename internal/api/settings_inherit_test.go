@@ -152,3 +152,35 @@ func containsAll(haystack string, needles ...string) bool {
 	}
 	return true
 }
+
+// Nothing is above the instance. Its page must therefore say so, or every row on it
+// reads as somebody else's row that this scope may not delete.
+func TestTheInstanceHasNothingInherited(t *testing.T) {
+	f := newModuleFixture(t)
+	module := registerDeployModule(t, f)
+
+	put := func(query, value string) {
+		t.Helper()
+		path := "/modules/" + module.ID.String() + "/settings?key=clusters&" + query
+		if recorder := f.asAdmin(t, http.MethodPut, path, `{"value":`+value+`}`); recorder.Code != http.StatusOK {
+			t.Fatalf("save: %d %s", recorder.Code, recorder.Body.String())
+		}
+	}
+	put("scope=instance", `[{"name":"prod","kubeconfig":"K"}]`)
+
+	recorder := f.asAdmin(t, http.MethodGet,
+		"/modules/"+module.ID.String()+"/settings?scope=instance", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("read: %d %s", recorder.Code, recorder.Body.String())
+	}
+
+	var answer struct {
+		Inherited map[string]any `json:"inherited"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("read the answer: %v", err)
+	}
+	if rows, ok := answer.Inherited["clusters"]; ok && rows != nil {
+		t.Errorf("the instance is shown %v as inherited, want nothing at all", rows)
+	}
+}
