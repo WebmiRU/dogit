@@ -355,6 +355,20 @@ func (cfg config) tags() []string {
 // The order matters: the log goes up as it is produced, so a runner that dies
 // halfway still leaves behind everything it managed to say. Waiting until the end
 // would lose exactly the part worth keeping.
+/**
+ * Says why a job failed, in the job's own log, before its verdict is recorded.
+ *
+ * The verdict is one line on a page and the log is where somebody goes to find out what
+ * actually happened. A job that failed before it printed anything — a checkout that could
+ * not authenticate, an environment that would not start — otherwise leaves a log with
+ * nothing in it at all, which reads as though nobody tried.
+ */
+func failJob(ctx context.Context, core *coreClient, jobID int64, started time.Time, reason error) {
+	core.log(ctx, jobID, "err", fmt.Sprintf("this job did not run: %v\n", reason))
+	core.finish(ctx, jobID, "failed", time.Since(started), reason.Error())
+	log.Printf("module-runner: job %d failed: %v", jobID, reason)
+}
+
 func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg config, answer claim) {
 	job := answer.Job
 	started := time.Now()
@@ -386,14 +400,13 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	// a container that is only allowed to run a script has no business being
 	// allowed to clone.
 	if err := checkout(ctx, cfg, answer, workspace); err != nil {
-		log.Printf("module-runner: cannot check out %s: %v", job.ProjectPath, err)
-		core.finish(ctx, job.ID, "failed", time.Since(started), err.Error())
+		failJob(ctx, core, job.ID, started, fmt.Errorf("cannot check out %s: %w", job.ProjectPath, err))
 		return
 	}
 
 	handle, err := runtime.Prepare(ctx, spec)
 	if err != nil {
-		core.finish(ctx, job.ID, "failed", time.Since(started), err.Error())
+		failJob(ctx, core, job.ID, started, fmt.Errorf("cannot prepare the job's environment: %w", err))
 		return
 	}
 	defer func() {

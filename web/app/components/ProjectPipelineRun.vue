@@ -578,6 +578,17 @@ watch(() => props.runIid, async () => {
                   <pre class="plain">{{ selectedJob.script.join('\n') }}</pre>
                 </details>
 
+                <!-- Why, in the words of whatever ran it, above whatever it managed to
+                     print. A build's last line is a layer digest or an "already exists",
+                     and the one sentence that says what went wrong is somewhere under a
+                     hundred of those. -->
+                <p
+                  v-if="selectedJob.status === 'failed' && selectedJob.error"
+                  class="job-reason"
+                >
+                  {{ selectedJob.error }}
+                </p>
+
                 <div v-if="lines[selectedJob.iid]?.length" class="log">
                   <div
                     v-for="(line, index) in lines[selectedJob.iid]"
@@ -721,9 +732,13 @@ watch(() => props.runIid, async () => {
   background: var(--bg-subtle, rgba(255, 255, 255, 0.04));
 }
 
+/* Which job is on show — and nothing else. The edge is the accent and not the row's
+   own colour, because beside a coloured dot a second coloured edge reads as a second
+   opinion about whether the job passed: a failed job with a green edge on it says
+   two contradictory things at once, and the eye believes the louder one. */
 .outline-job.active {
   background: var(--bg-subtle, rgba(255, 255, 255, 0.07));
-  box-shadow: inset 2px 0 0 currentColor;
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .outline-job-name {
@@ -752,6 +767,19 @@ watch(() => props.runIid, async () => {
 .dot.badge-blue { background: hsl(220 55% 32%); }
 .dot.badge-neutral { background: #6e7681; }
 .dot.badge-private { background: #a371f7; }
+
+/* The job's own sentence about why it failed, where a person reads it: above the log
+   that is empty, and the only thing there is when nothing ran. */
+.job-reason {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #4a2326;
+  border-radius: 6px;
+  background: #2a1a1c;
+  color: #ffb4ae;
+  font-size: 13px;
+  line-height: 1.5;
+}
 
 .detail {
   min-width: 0;

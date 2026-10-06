@@ -86,6 +86,15 @@ export interface PipelineJob {
   created_at: string
   started_at?: string
   finished_at?: string
+  /**
+   * Why it failed, in the words of whatever ran it.
+   *
+   * Kept beside the log rather than inside it because a job that died before printing
+   * anything — a checkout that could not authenticate, a machine that would not start —
+   * has a log with nothing in it, and the two things a reader needs are the verdict
+   * and the reason.
+   */
+  error?: string
 }
 
 /** What a status means, in the terms somebody watching a build cares about. */
@@ -144,6 +153,11 @@ export const statusMark: Record<string, string> = {
  */
 export function formatDuration(ms?: number): string {
   if (ms === undefined || ms < 0) return '—'
+  // A job that died in a quarter of a second is not a job that took no time: it is a
+  // job whose time rounds to nothing, and "00:00" beside it reads as a run that never
+  // happened. The tenth of a second says what was measured, and the next number up is
+  // still a second.
+  if (ms < 1000) return `${(ms / 100).toFixed(1)}s`
   const total = Math.floor(ms / 1000)
   const seconds = total % 60
   const minutes = Math.floor(total / 60) % 60

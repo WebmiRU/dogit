@@ -144,7 +144,7 @@ func TestFinishingTheLastJobClosesThePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if err := st.Pipelines().FinishJob(ctx, first.ID, store.JobSuccess, time.Second); err != nil {
+	if err := st.Pipelines().FinishJob(ctx, first.ID, store.JobSuccess, time.Second, ""); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 
@@ -161,7 +161,7 @@ func TestFinishingTheLastJobClosesThePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim second: %v", err)
 	}
-	if err := st.Pipelines().FinishJob(ctx, second.ID, store.JobFailed, 2*time.Second); err != nil {
+	if err := st.Pipelines().FinishJob(ctx, second.ID, store.JobFailed, 2*time.Second, "the script said no"); err != nil {
 		t.Fatalf("finish second: %v", err)
 	}
 

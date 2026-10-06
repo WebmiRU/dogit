@@ -120,6 +120,14 @@ type Job struct {
 	DurationMS   int64      `json:"duration_ms"`
 	CreatedAt    time.Time  `json:"created_at"`
 
+	// Error is why this job failed, in the words of whatever ran it.
+	//
+	// Kept rather than left in the log because a job that dies before printing
+	// anything — a checkout that could not authenticate, a machine that would not
+	// start — has a log with nothing in it, and a red badge on its own says that
+	// something went wrong without saying what.
+	Error string `json:"error,omitempty"`
+
 	// Build describes an image this job produces, when it produces one. The
 	// definition is the module's own: the core stores it and hands it back, and does
 	// not decide what a Dockerfile is.
@@ -491,44 +499,26 @@ func (r *PipelineRepo) ListPipelinesPage(ctx context.Context, projectID uuid.UUI
 
 // JobByID returns one job with everything a runner needs to run it.
 func (r *PipelineRepo) JobByID(ctx context.Context, id int64) (*Job, error) {
-	var job Job
-	var build []byte
-	var deploy []byte
-	var variables []byte
-
-	err := r.s.pool.QueryRow(ctx, jobColumns+`
+	// Read through the same scan as every other list of jobs. This one used to have its
+	// own, written out again beside it, and a column added to the row is then a query
+	// that returns one field too many for the place it is being put — an error that
+	// surfaces as a runner unable to claim work, a long way from the column.
+	rows, err := r.s.pool.Query(ctx, jobColumns+`
 		FROM jobs j
 		JOIN pipelines p ON p.id = j.pipeline_id
 		JOIN projects pr ON pr.id = p.project_id
-		WHERE j.id = $1`, id).Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage,
-		&job.Status, &job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs,
-		&build, &deploy, &job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
-		&job.ProjectID, &job.ProjectPath, &variables)
-	if errors.Is(err, pgxNoRows) {
-		return nil, ErrNotFound
-	}
+		WHERE j.id = $1`, id)
 	if err != nil {
 		return nil, fmt.Errorf("read job: %w", err)
 	}
-
-	job.Build = map[string]any{}
-	decodeJSONB(build, &job.Build)
-	if len(job.Build) == 0 {
-		job.Build = nil
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("read job: %w", err)
+		}
+		return nil, ErrNotFound
 	}
-
-	job.Variables = map[string]string{}
-	decodeJSONB(variables, &job.Variables)
-	if len(job.Variables) == 0 {
-		job.Variables = nil
-	}
-
-	job.Deploy = map[string]any{}
-	decodeJSONB(deploy, &job.Deploy)
-	if len(job.Deploy) == 0 {
-		job.Deploy = nil
-	}
-	return &job, nil
+	return scanJob(rows)
 }
 
 // JobsOfPipeline returns a pipeline's jobs in the order they were declared.
@@ -557,17 +547,25 @@ func (r *PipelineRepo) JobsOfPipeline(ctx context.Context, pipelineID int64) ([]
 const jobColumns = `
 	SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.runner_id, j.image,
 	       j.script, j.allow_failure, j.needs, j.build, j.deploy, j.started_at, j.finished_at,
-	       j.duration_ms, j.created_at, p.project_id, pr.path, p.variables`
+	       j.duration_ms, j.created_at, j.error, p.project_id, pr.path, p.variables`
 
+// scanJob reads the row the cursor is standing on. It does not step the cursor: the
+// caller is walking a list, and a scan that advanced it would swallow every other row.
 func scanJob(rows pgx.Rows) (*Job, error) {
+	return scanJobRow(rows)
+}
+
+// scanJobRow reads one job out of whatever the pool handed back — a list of rows or a
+// single row, which is the same row as far as anybody reading a job is concerned.
+func scanJobRow(row interface{ Scan(...any) error }) (*Job, error) {
 	var job Job
 	var build []byte
 	var deploy []byte
 	var variables []byte
 
-	if err := rows.Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
+	if err := row.Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
 		&job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs, &build, &deploy,
-		&job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt,
+		&job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt, &job.Error,
 		&job.ProjectID, &job.ProjectPath, &variables); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
@@ -640,10 +638,34 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 		return nil, fmt.Errorf("mark the pipeline running: %w", err)
 	}
 
+	// The job is read inside the transaction that took it, and the answer goes back only
+	// once both have happened.
+	//
+	// Committing first and reading afterwards leaves a job marked as being worked on by
+	// a machine that was never told about it: the claim is recorded, the response fails,
+	// and the job sits at "running" for ever with nothing running it — a queue that waits
+	// on work nobody is doing, and a page that says a build is in progress when the
+	// build has not started.
+	job, err := r.jobByIDTx(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("claim job: %w", err)
 	}
-	return r.JobByID(ctx, id)
+	return job, nil
+}
+
+// jobByIDTx reads one job through a transaction, so that a job taken inside it can be
+// read before it is given away.
+func (r *PipelineRepo) jobByIDTx(ctx context.Context, tx pgx.Tx, id int64) (*Job, error) {
+	row := tx.QueryRow(ctx, jobColumns+`
+		FROM jobs j
+		JOIN pipelines p ON p.id = j.pipeline_id
+		JOIN projects pr ON pr.id = p.project_id
+		WHERE j.id = $1`, id)
+	return scanJobRow(row)
 }
 
 // ClaimDeployJob marks a deployment as this process's to carry out.
@@ -682,10 +704,10 @@ func (r *PipelineRepo) ClaimDeployJob(ctx context.Context, id int64) (bool, erro
 // The status is taken from the runner rather than deduced: a job that let the
 // script fail but was allowed to fail is a success, and only the runner knows
 // which jobs those are.
-func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, duration time.Duration) error {
+func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, duration time.Duration, reason string) error {
 	_, err := r.s.pool.Exec(ctx, `
-		UPDATE jobs SET status = $2, finished_at = now(), duration_ms = $3
-		WHERE id = $1`, id, status, duration.Milliseconds())
+		UPDATE jobs SET status = $2, finished_at = now(), duration_ms = $3, error = $4
+		WHERE id = $1`, id, status, duration.Milliseconds(), strings.TrimSpace(reason))
 	if err != nil {
 		return fmt.Errorf("finish job: %w", err)
 	}
@@ -820,7 +842,8 @@ func (r *PipelineRepo) ReleaseJob(ctx context.Context, id int64) error {
 func (r *PipelineRepo) RetryJob(ctx context.Context, id int64) error {
 	_, err := r.s.pool.Exec(ctx, `
 		UPDATE jobs
-		SET status = $2, runner_id = NULL, started_at = NULL, finished_at = NULL, duration_ms = 0
+		SET status = $2, runner_id = NULL, started_at = NULL, finished_at = NULL, duration_ms = 0,
+		    error = '' 
 		WHERE id = $1`, id, JobPending)
 	if err != nil {
 		return fmt.Errorf("retry job: %w", err)
@@ -843,11 +866,11 @@ func (r *PipelineRepo) JobByIID(ctx context.Context, pipelineID int64, iid int) 
 
 	err := r.s.pool.QueryRow(ctx, `
 		SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.image, j.script,
-		       j.allow_failure, j.started_at, j.finished_at, j.duration_ms, j.created_at
+		       j.allow_failure, j.started_at, j.finished_at, j.duration_ms, j.created_at, j.error
 		FROM jobs j WHERE j.pipeline_id = $1 AND j.iid = $2`, pipelineID, iid,
 	).Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
 		&job.Image, &job.Script, &job.AllowFailure, &job.StartedAt, &job.FinishedAt,
-		&job.DurationMS, &job.CreatedAt)
+		&job.DurationMS, &job.CreatedAt, &job.Error)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}
@@ -932,7 +955,7 @@ func StageStatus(jobs []Job) string {
 		return JobPending
 	}
 
-	failed, pending, running := 0, 0, 0
+	failed, pending, running, passed, skipped := 0, 0, 0, 0, 0
 	for _, job := range jobs {
 		switch job.Status {
 		case JobFailed:
@@ -940,10 +963,13 @@ func StageStatus(jobs []Job) string {
 				failed++
 			}
 		case JobSkipped:
+			skipped++
 		case JobRunning:
 			running++
 		case JobPending:
 			pending++
+		case JobSuccess:
+			passed++
 		}
 	}
 
@@ -954,6 +980,11 @@ func StageStatus(jobs []Job) string {
 		return JobRunning
 	case pending > 0:
 		return JobPending
+	case passed == 0 && skipped > 0:
+		// Nothing in this stage ran: an earlier one failed, and these were never
+		// reached. Drawing it as passed puts a green tick on work that did not
+		// happen, which is the one thing a colour on a page must never do.
+		return JobSkipped
 	default:
 		return JobSuccess
 	}

@@ -316,7 +316,6 @@ func (s *Server) startRunForRef(ctx context.Context, project *models.Project,
 		return nil
 	}
 
-
 	source := models.PipelineSourceTag
 	if !isTag {
 		source = models.PipelineSourcePush
@@ -1028,7 +1027,11 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	duration := time.Duration(req.DurationMS) * time.Millisecond
-	if err := s.store.Pipelines().FinishJob(r.Context(), jobID, status, duration); err != nil {
+	// The reason is kept as well as the verdict: a job that died before printing
+	// anything has a log with nothing in it, and a page that can say only "failed"
+	// sends the reader somewhere else to find out why.
+	reason := strings.TrimSpace(req.Error)
+	if err := s.store.Pipelines().FinishJob(r.Context(), jobID, status, duration, reason); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -1493,6 +1496,11 @@ func jobView(r *http.Request, job *store.Job) map[string]any {
 	}
 	if job.FinishedAt != nil {
 		view["finished_at"] = job.FinishedAt
+	}
+	// Why it failed, when it did. Sent only then: an empty reason on a job that passed
+	// is a field nobody reads and everybody has to look at.
+	if job.Error != "" {
+		view["error"] = job.Error
 	}
 	return view
 }

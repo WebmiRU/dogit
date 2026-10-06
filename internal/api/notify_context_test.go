@@ -143,7 +143,7 @@ func TestARunIsFinishedOnlyWhenNothingIsLeftWaiting(t *testing.T) {
 		t.Fatalf("a fresh run has %d unfinished jobs, want 1", remaining)
 	}
 
-	if err := f.store.Pipelines().FinishJob(t.Context(), f.job.ID, store.JobSuccess, 0); err != nil {
+	if err := f.store.Pipelines().FinishJob(t.Context(), f.job.ID, store.JobSuccess, 0, ""); err != nil {
 		t.Fatalf("finish the job: %v", err)
 	}
 

@@ -95,7 +95,7 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 
 	finish := func(status string, reason string) {
 		elapsed := time.Since(started)
-		if err := s.store.Pipelines().FinishJob(ctx, job.ID, status, elapsed); err != nil {
+		if err := s.store.Pipelines().FinishJob(ctx, job.ID, status, elapsed, reason); err != nil {
 			s.log.Error("finish the deployment", "job_id", job.ID, "error", err)
 			return
 		}
@@ -112,7 +112,6 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 		finish(store.JobFailed, err.Error())
 		return
 	}
-
 
 	repoDir := s.repos.PathFor(project)
 	err = s.runDeployJob(ctx, job, run, project, repoDir, config)
