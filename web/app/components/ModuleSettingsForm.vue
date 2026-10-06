@@ -170,10 +170,17 @@ function listSettable(spec: SettingSpec, raw: unknown): unknown {
     )
     const own: SettingEntry = {}
     let kept = 0
-    for (const field of spec.items?.fields ?? []) {
-      if (!(field.key in row)) continue
-      if (above && sameValue(above[field.key], row[field.key])) continue
-      own[field.key] = row[field.key]
+    // The module's own fields, and then the two the core keeps in such a list: a
+    // switch is not a field anybody declared, and without carrying it here a switched
+    // row would be saved as nothing at all.
+    const carry = [
+      ...(spec.items?.fields ?? []).map((field) => field.key),
+      ...coreRowFields(spec),
+    ]
+    for (const key of carry) {
+      if (!(key in row)) continue
+      if (above && sameValue(above[key], row[key])) continue
+      own[key] = row[key]
       kept++
     }
     // A row whose name is what makes it a row at all: without it nothing above could
@@ -213,7 +220,19 @@ function coerceRow(spec: SettingSpec, row: SettingEntry): SettingEntry {
     if (key in out || !(key in row)) continue
     out[key] = row[key]
   }
+  // The core's own row fields are not fields the module declared, so they are carried
+  // by hand: without this, switching an inherited row off would save a row with
+  // nothing in it and the switch would come undone on the next load.
+  for (const key of coreRowFields(spec)) {
+    if (!(key in row)) continue
+    out[key] = row[key] === true
+  }
   return out
+}
+
+/** The two fields the core keeps in a list whose entries have names. */
+function coreRowFields(spec: SettingSpec): string[] {
+  return spec.items?.identify?.length ? ['enabled', 'auto_deploy'] : []
 }
 
 /** Two field values, compared as values rather than as strings. */
@@ -247,18 +266,6 @@ async function load() {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   }
 }
-
-const changed = computed(() => {
-  const dirty: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(values.value)) {
-    // Compared as JSON, because a list is a value rather than a reference: two arrays
-    // with the same rows are the same setting, and an identity comparison would say
-    // every list was edited the moment it was loaded.
-    if (JSON.stringify(saved.value[key]) !== JSON.stringify(value)) dirty[key] = value
-  }
-  return dirty
-})
-const changedCount = computed(() => Object.keys(changed.value).length)
 
 /** Coerces what the form holds back into what the setting expects. */
 function settingValue(spec: SettingSpec, raw: unknown): unknown {
@@ -314,32 +321,42 @@ function fieldValue(field: SettingSpec, value: unknown): unknown {
 }
 
 /**
- * Saves every change in one request.
+ * Saves one row, and only that row.
  *
- * One button for the whole form, and the whole form or nothing: a settings page
- * that saves one field at a time can leave half of somebody's configuration behind,
- * and the half that did save is the half they were not looking at.
+ * A row is saved by itself because a row is what somebody decided: two clusters in one
+ * list are two clusters with two kubeconfigs, and a Save that took both would make
+ * changing one's namespace a chance to rewrite the other's credential. It also means an
+ * edit nobody finished stays on the screen instead of being either saved or lost with
+ * somebody else's change.
+ *
+ * What is sent is what this scope decides about that row — see listSettable — so
+ * saving one row never touches the rows above it or the rows beside it.
  */
-async function save() {
-  const dirty = changed.value
-  if (changedCount.value === 0) return
+async function saveRow(spec: SettingSpec, index: number) {
+  if (isList(spec)) {
+    const row = entriesOf(values.value[spec.key])[index]
+    if (!row) return
 
-  const payload: Record<string, unknown> = {}
-  for (const spec of props.module.manifest?.settings ?? []) {
-    if (!(spec.key in dirty)) continue
-    const value = listSettable(spec, dirty[spec.key])
-    if (value === undefined) continue
-    payload[spec.key] = value
+    const value = listSettable(spec, [row])
+    await saveOne(spec.key, value === undefined ? [] : value)
+    await settleRow(spec, index)
+    return
   }
+  const value = settingValue(spec, values.value[spec.key])
+  if (value === undefined) return
+  await saveOne(spec.key, value)
+  settleSetting(spec)
+}
 
+/** One setting at one scope. */
+async function saveOne(key: string, value: unknown) {
   busy.value = true
   error.value = ''
   try {
     await api.put(`/modules/${props.module.id}/settings/bulk?${scopeQuery.value}`, {
-      values: payload,
+      values: { [key]: value },
     })
-    await load()
-    notify(`Settings saved for ${props.module.name}`, { type: 'success' })
+    notify(`Saved ${key} for ${props.module.name}`, { type: 'success' })
   } catch (caught) {
     const message = caught instanceof ApiError ? caught.message : 'the request failed'
     error.value = message
@@ -347,6 +364,67 @@ async function save() {
   } finally {
     busy.value = false
   }
+}
+
+/**
+ * What a row looks like now that it has been saved.
+ *
+ * Read back rather than assumed: what is stored here is only what this scope decided,
+ * and the row on screen is that merged with everything above it. The merge is done by
+ * the core, so the row that comes back is the one to believe.
+ *
+ * Only this row is settled. Reloading the whole form would throw away the edits
+ * somebody has half-made in the rows beside it.
+ */
+async function settleRow(spec: SettingSpec, index: number) {
+  try {
+    const answer = await api.get<{ effective?: Record<string, unknown> }>(
+      `/modules/${props.module.id}/settings?${scopeQuery.value}`,
+    )
+    const row = entriesOf(answer.effective?.[spec.key])[index]
+    const current = entriesOf(values.value[spec.key])
+    if (!row || !current[index]) return
+    current[index] = { ...row }
+    values.value = { ...values.value, [spec.key]: current }
+    const baseline = entriesOf(saved.value[spec.key])
+    if (baseline[index]) baseline[index] = structuredClone(row)
+    saved.value = { ...saved.value, [spec.key]: baseline }
+  } catch {
+    // A row that could not be read back is left dirty rather than marked saved: it is
+    // better to offer a save twice than to say it landed when nobody has said so.
+  }
+}
+
+/** The same for a setting that is not a list. */
+function settleSetting(spec: SettingSpec) {
+  saved.value = { ...saved.value, [spec.key]: structuredClone(values.value[spec.key]) }
+}
+
+/** Whether one row of a list is different from what is stored. */
+function rowChanged(spec: SettingSpec, index: number): boolean {
+  const row = entriesOf(values.value[spec.key])[index]
+  const was = entriesOf(saved.value[spec.key])[index]
+  if (!row || !was) return true
+  return JSON.stringify(row) !== JSON.stringify(was)
+}
+
+/** Whether one setting is different from what is stored. */
+function settingChanged(spec: SettingSpec): boolean {
+  return JSON.stringify(values.value[spec.key]) !== JSON.stringify(saved.value[spec.key])
+}
+
+/** Puts one row back to what is stored, leaving the others as they are. */
+function revertRow(spec: SettingSpec, index: number) {
+  const current = entriesOf(values.value[spec.key])
+  const was = entriesOf(saved.value[spec.key])[index]
+  if (!was) return
+  current[index] = structuredClone(was)
+  values.value = { ...values.value, [spec.key]: current }
+}
+
+/** Puts one setting back to what is stored. */
+function revertSetting(spec: SettingSpec) {
+  values.value = { ...values.value, [spec.key]: structuredClone(saved.value[spec.key]) }
 }
 
 /** Puts this scope back to inheriting, which is not the same as a default. */
@@ -363,10 +441,6 @@ async function reset(spec: SettingSpec) {
   } finally {
     busy.value = false
   }
-}
-
-function revert() {
-  values.value = { ...saved.value }
 }
 
 /** What the core sends back for a secret it holds rather than returns. */
@@ -397,12 +471,53 @@ function addEntry(spec: SettingSpec) {
  * On the last row, rather than leaving one behind as a blank: a settings page that
  * always has one empty row is a page where the empty row looks like a value, and
  * somebody reads an entry that was never filled in.
+ *
+ * A row that is not this scope's is not removable, and the caller does not offer it.
+ * It was written by somebody else — the instance, or a group — and a Remove button on
+ * it would either silently do nothing (a row left out of this scope's list is simply
+ * inherited again) or, worse, delete somebody else's cluster by saving a shorter list.
+ * The only thing a scope below the writer's may say about such a row is that it is not
+ * in use here, and that is a switch rather than a deletion: the row stays written down
+ * with its kubeconfig, and switching it back on brings it back.
  */
 function removeEntry(spec: SettingSpec, index: number) {
   const rows = entriesOf(values.value[spec.key])
   rows.splice(index, 1)
   values.value[spec.key] = rows
 }
+
+/** Whether a row is one this scope wrote, and may therefore delete. */
+function rowIsOwn(spec: SettingSpec, row: SettingEntry): boolean {
+  if (!spec.items?.identify?.length) return true
+  const name = rowName(spec, row)
+  if (!name) return true
+  return !entriesOf(inherited.value[spec.key]).some((one) => rowName(spec, one) === name)
+}
+
+/** Whether a row is in use here. A row nobody said anything about is in use. */
+function rowInUse(row: SettingEntry): boolean {
+  return row.enabled !== false
+}
+
+/**
+ * Whether a push may deploy to this row by itself. A row nobody said anything about
+ * deploys by itself: the switch exists for somebody who wants a place to stop moving on
+ * its own, and a row nobody has touched has never been asked to.
+ */
+function rowAutoDeploy(row: SettingEntry): boolean {
+  return row.auto_deploy !== false
+}
+
+/**
+ * What these two switches mean, in a tooltip, because two switches with two letters are
+ * not enough to tell them apart and guessing is worse than reading.
+ */
+const inheritedNote = [
+  'Autodeploy: whether a push or a tag may deploy to this place by itself.',
+  'Off means the run still happens and the image is still built — only the',
+  'deployment to this place waits for somebody to start it by hand.',
+  'In use: whether this project may deploy here at all.',
+].join(' ')
 
 /** The rows of a list setting, for the template to walk. */
 function rowsOf(spec: SettingSpec): SettingEntry[] {
@@ -430,7 +545,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
       This module declared no settings.
     </div>
 
-    <form v-else @submit.prevent="save">
+    <div v-else>
       <p v-if="note" class="muted small">{{ note }}</p>
 
       <div v-for="spec in module.manifest.settings" :key="spec.key" class="setting-row">
@@ -456,13 +571,77 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               >
                 {{ rowIsOurs(spec, row) ? 'changed here' : 'inherited' }}
               </span>
+              <!-- Two switches, and both are answers about this row alone.
+                   "In use" asks whether this project may deploy here at all; "Autodeploy"
+                   asks whether a push may do it by itself. They are different questions:
+                   the first takes the place away, the second leaves it here for somebody
+                   to deploy to on purpose. -->
+              <label
+                v-if="spec.items?.identify?.length"
+                class="row-switch"
+                :title="inheritedNote"
+              >
+                <span class="row-switch-name">Autodeploy</span>
+                <button
+                  class="switch"
+                  :class="{ on: rowAutoDeploy(row) }"
+                  type="button"
+                  role="switch"
+                  :aria-checked="rowAutoDeploy(row)"
+                  :disabled="busy"
+                  @click="row.auto_deploy = !rowAutoDeploy(row)"
+                >
+                  <span class="knob" />
+                </button>
+              </label>
+              <label v-if="spec.items?.identify?.length" class="row-switch">
+                <span class="row-switch-name">In use</span>
+                <button
+                  class="switch"
+                  :class="{ on: rowInUse(row) }"
+                  type="button"
+                  role="switch"
+                  :aria-checked="rowInUse(row)"
+                  :disabled="busy"
+                  @click="row.enabled = !rowInUse(row)"
+                >
+                  <span class="knob" />
+                </button>
+              </label>
               <button
-                class="link-button"
+                v-if="rowIsOwn(spec, row) || !spec.items?.identify?.length"
+                class="link-button row-remove"
                 type="button"
                 :disabled="busy"
                 @click="removeEntry(spec, index)"
               >
                 Remove
+              </button>
+              <span v-else class="row-inherited-note">
+                written above — edit it there, or switch it off here
+              </span>
+            </div>
+
+            <!-- This row's own Save, below its own fields: a row is saved by itself,
+                 so changing one's namespace is never also a chance to rewrite the
+                 other's kubeconfig. -->
+            <div class="setting-entry-actions">
+              <span v-if="rowChanged(spec, index)" class="muted small">not saved yet</span>
+              <button
+                class="btn btn-small"
+                type="button"
+                :disabled="busy || !rowChanged(spec, index)"
+                @click="revertRow(spec, index)"
+              >
+                Discard
+              </button>
+              <button
+                class="btn btn-small btn-primary"
+                type="button"
+                :disabled="busy || !rowChanged(spec, index)"
+                @click="saveRow(spec, index)"
+              >
+                {{ busy ? 'Saving…' : 'Save this row' }}
               </button>
             </div>
 
@@ -572,18 +751,30 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
             {{ scope === 'instance' ? 'Reset to the default' : 'Use the inherited value' }}
           </button>
         </p>
+
+        <!-- The same bargain as a row of a list: this setting saves itself. -->
+        <div v-if="spec.type !== 'list'" class="setting-entry-actions">
+          <span v-if="settingChanged(spec)" class="muted small">not saved yet</span>
+          <button
+            class="btn btn-small"
+            type="button"
+            :disabled="busy || !settingChanged(spec)"
+            @click="revertSetting(spec)"
+          >
+            Discard
+          </button>
+          <button
+            class="btn btn-small btn-primary"
+            type="button"
+            :disabled="busy || !settingChanged(spec)"
+            @click="saveRow(spec, -1)"
+          >
+            {{ busy ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
       </div>
 
-      <div class="form-actions">
-        <button class="btn btn-primary" type="submit" :disabled="busy || changedCount === 0">
-          {{ busy ? 'Saving…' : 'Save changes' }}
-        </button>
-        <button class="btn" type="button" :disabled="busy || changedCount === 0" @click="revert">
-          Discard
-        </button>
-        <span v-if="changedCount > 0" class="muted small">{{ changedCount }} changed</span>
-      </div>
-    </form>
+    </div>
   </div>
 </template>
 
@@ -676,7 +867,6 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
  * has not touched, and a row marked as changed here is this scope's own.
  */
 .setting-entry-origin {
-  margin-left: auto;
   padding: 1px 8px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -689,6 +879,50 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
 .setting-entry-origin.ours {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* A row's own fates: remove it if this scope wrote it, switch it off if not. */
+.row-switch,
+.row-remove {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  cursor: pointer;
+}
+
+.row-switch + .row-switch,
+.row-switch + .row-remove,
+.row-remove {
+  margin-left: 0;
+}
+
+.row-switch-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+/* Why an inherited row has no Remove button, said once where it is seen. */
+.row-inherited-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* A row's own Save, under its own fields. */
+.setting-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.setting-entry-actions .muted {
+  margin-right: auto;
 }
 
 .setting-field {

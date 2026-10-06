@@ -28,15 +28,6 @@ const props = defineProps<{
 const editing = ref<string>('')
 /** The module whose deployments are shown, or none. */
 
-/**
- * Whether a push or a tag may start a run by itself.
- *
- * A brake, not a policy. Which branch reaches which place is written in the repository,
- * because that is a claim about code and is reviewed with it. This is the other thing:
- * what somebody reaches for when the thing that is deploying has to stop now, and a
- * commit is not something anyone can safely push while it is happening.
- */
-
 const modules = ref<ModuleRow[]>([])
 const loading = ref(true)
 const error = ref('')
@@ -59,16 +50,6 @@ const headState = computed<'working' | 'bad' | 'ok'>(() => {
   return 'ok'
 })
 
-/**
- * What the autodeploy switch actually does, for the tooltip.
- *
- * The column header says on or off and the cell says on or off, which is enough to read
- * the setting and not enough to know what it changes — "autodeploy: off" could mean
- * that pushes build nothing, or that they build but do not deploy, or that the next
- * deploy waits for a button. Those are three different installations. The answer
- * belongs in a tooltip rather than in the column, because a sentence in every row of
- * the table is worse than no sentence at all.
- */
 const headStateText = computed(() => {
   if (!modules.value.some((one) => one.kind.startsWith('deploy:'))) return 'no deploy module'
   if (deployBusy.value) return 'a deployment is under way'
@@ -95,38 +76,6 @@ const stopState = watchEvents({
 
 onBeforeUnmount(() => stopState())
 
-const autoPaused = ref(false)
-const savingPause = ref(false)
-
-/** Pulls the brake, or lets it out again. */
-async function setAutoPaused(paused: boolean) {
-  savingPause.value = true
-  try {
-    await api.patch(`/projects/${props.projectId}`, { auto_deploy_paused: paused })
-    autoPaused.value = paused
-  } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
-  } finally {
-    savingPause.value = false
-  }
-}
-
-/**
- * What the autodeploy switch does, in one sentence.
- *
- * One switch for the whole project, and that is the honest size of it: a cluster is a
- * setting of the module, configured once and shared, so there is nothing per place to
- * hang a second switch on. What this answers is whether a push starts anything here at
- * all.
- */
-const autodeployHint = computed(() =>
-  autoPaused.value
-    ? 'Off. A push builds the image and nothing more: the run waits for somebody to '
-      + 'start it by hand.'
-    : 'On. A push to a branch or a tag this repository deploys starts the deployment '
-      + 'itself, without anybody pressing anything.',
-)
-
 const deployModules = computed(() =>
   modules.value.filter((module) => module.kind.startsWith('deploy:')),
 )
@@ -142,10 +91,6 @@ async function load() {
     const answer = await api.get<{ modules: ModuleRow[] }>('/modules')
     modules.value = answer.modules ?? []
 
-    const project = await api.get<{ project: { auto_deploy_paused?: boolean } }>(
-      `/projects/${props.projectId}`,
-    )
-    autoPaused.value = project.project?.auto_deploy_paused ?? false
 
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
@@ -211,7 +156,6 @@ onMounted(async () => {
                  piece of explanation that is worth reading once and not on every
                  glance. It is in the tooltip now, where nothing is pushed out of
                  shape by it. -->
-            <th class="brake-col" :title="autodeployHint">Autodeploy</th>
             <th class="actions-col">Actions</th>
           </tr>
         </thead>
@@ -229,24 +173,6 @@ onMounted(async () => {
                 <span v-if="!module.enabled" class="badge badge-neutral">Forbidden</span>
                 <span v-else-if="module.status === 'online'" class="badge badge-green">Online</span>
                 <span v-else class="badge badge-warning">{{ module.status }}</span>
-              </td>
-              <!-- The brake, as a switch in the table rather than a paragraph above
-                   it: whether runs start by themselves is a standing fact about this
-                   project, and it belongs beside the module it governs. -->
-              <td class="brake-col">
-                <label class="brake" :title="autodeployHint">
-                  <button
-                    class="switch"
-                    :class="{ on: !autoPaused }"
-                    type="button"
-                    :disabled="savingPause || !props.canManage"
-                    :aria-pressed="!autoPaused"
-                    @click="setAutoPaused(!autoPaused)"
-                  >
-                    <span class="knob" />
-                  </button>
-                  <span class="brake-label">{{ autoPaused ? 'OFF' : 'ON' }}</span>
-                </label>
               </td>
               <td class="actions-col">
                 <button class="btn btn-small" type="button" @click="toggleEdit(module)">
@@ -387,35 +313,6 @@ th {
 /* The clusters, as a block of their own between the two tables it would otherwise
    be mistaken for a part of. It is a different kind of thing: the table above is which
    modules exist, this is where one of them may put something. */
-/* The brake's column and its pair, kept as narrow as the switch and two letters. */
-.brake-col {
-  width: 1%;
-  white-space: nowrap;
-}
-
-.brake-col th {
-  font-weight: 500;
-}
-
-.brake {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.brake-label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-
-
-
-
-
-
 /* Folded away by default. */
 .places-fold {
   padding: 0 12px;

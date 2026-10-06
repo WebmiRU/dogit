@@ -435,6 +435,26 @@ func scanDeployment(rows scanner) (deploy.Deployment, error) {
 // values that belong together, each of which may or may not be one the rest of the
 // system needs to understand.
 func clustersOf(settings map[string]any) ([]Cluster, error) {
+	all, err := allClusters(settings)
+	if err != nil {
+		return nil, err
+	}
+
+	// A cluster that is switched off is not one this project may deploy to, and is
+	// dropped here rather than refused at every call site: the same list is read to
+	// list what is available, to find one by name and to validate a job.
+	kept := all[:0]
+	for _, one := range all {
+		if !one.use() {
+			continue
+		}
+		kept = append(kept, one)
+	}
+	return kept, nil
+}
+
+// allClusters is every cluster in the settings, switched off or not.
+func allClusters(settings map[string]any) ([]Cluster, error) {
 	raw, ok := settings["clusters"]
 	if !ok {
 		return nil, nil
@@ -453,14 +473,14 @@ func clustersOf(settings map[string]any) ([]Cluster, error) {
 	// Only a cluster with a name is a cluster. One without is a row somebody started
 	// filling in, and using it would mean applying a deployment to a place with no
 	// address.
-	kept := clusters[:0]
+	named := clusters[:0]
 	for _, one := range clusters {
 		if strings.TrimSpace(one.Name) == "" {
 			continue
 		}
-		kept = append(kept, one)
+		named = append(named, one)
 	}
-	return kept, nil
+	return named, nil
 }
 
 // Cluster is one place this module may deploy to.
@@ -479,6 +499,21 @@ type Cluster struct {
 	Kubeconfig       string `json:"kubeconfig"`
 	Context          string `json:"context"`
 	DefaultNamespace string `json:"default_namespace"`
+
+	// InUse says whether this cluster is one this project may deploy to. It is a
+	// pointer so that "nobody said" and "said no" are two different things: a cluster
+	// written before this field existed is in use, and a cluster somebody below
+	// switched off is not.
+	//
+	// Off is not deleted. The cluster is still configured and still written down, and
+	// switching it back on brings it back with its kubeconfig — which is the whole
+	// reason this is a switch and not a row's absence.
+	InUse *bool `json:"enabled,omitempty"`
+}
+
+// use reports whether a cluster is in use, which it is unless somebody said otherwise.
+func (c Cluster) use() bool {
+	return c.InUse == nil || *c.InUse
 }
 
 // Connect builds a client for a cluster, or says why it cannot.

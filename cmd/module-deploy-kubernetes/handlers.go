@@ -212,7 +212,7 @@ func (c *coreClient) clusterFor(ctx context.Context, project, name, namespace st
 
 	cluster, found := find(clusters, name)
 	if !found {
-		return Cluster{}, "", nil, errClusterNotFound(name)
+		return Cluster{}, "", nil, clusterGone(settings, name)
 	}
 
 	if strings.TrimSpace(namespace) == "" {
@@ -509,7 +509,7 @@ func (c *coreClient) handleTestCluster(w http.ResponseWriter, r *http.Request) {
 
 	cluster, found := find(clusters, request.Cluster)
 	if !found {
-		writeError(w, http.StatusNotFound, errClusterNotFound(request.Cluster).Error())
+		writeError(w, http.StatusNotFound, clusterGone(settings, request.Cluster).Error())
 		return
 	}
 
@@ -612,6 +612,31 @@ func boolSetting(settings map[string]any, key string) bool {
 // errClusterNotFound is asked for by name, and the answer lists what there is.
 func errClusterNotFound(name string) error {
 	return clusterNotFoundError{name: name}
+}
+
+// errClusterOff says a cluster exists and is not in use here, which is a different
+// thing from not existing and needs a different answer: somebody reading this needs to
+// know they can switch it back on, not that they have mistyped a name.
+func errClusterOff(name string) error {
+	return clusterOffError{name: name}
+}
+
+type clusterOffError struct{ name string }
+
+func (e clusterOffError) Error() string {
+	return "the cluster " + e.name + " is switched off for this project"
+}
+
+// clusterGone says why a cluster is not one this project may deploy to: not written
+// down at all, or written down and switched off. It reads the unfiltered list so that
+// the two can be told apart — clustersOf has already dropped the switched-off ones.
+func clusterGone(settings map[string]any, name string) error {
+	if all, err := allClusters(settings); err == nil {
+		if _, there := find(all, name); there {
+			return errClusterOff(name)
+		}
+	}
+	return errClusterNotFound(name)
 }
 
 type clusterNotFoundError struct{ name string }

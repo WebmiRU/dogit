@@ -168,3 +168,47 @@ func (f *settingsFixture) set(t *testing.T, scope string, scopeID *uuid.UUID, ke
 		t.Fatalf("set %s at %s: %v", key, scope, err)
 	}
 }
+
+// Switching a cluster off below the level that wrote it takes it out of what applies
+// there, and only there. Off is not deleted: the row is still written down, and the
+// level above still has it.
+func TestASwitchedOffRowAppliesOnlyWhereItWasSwitchedOff(t *testing.T) {
+	f := setupSettings(t)
+
+	spec := []models.SettingSpec{{
+		Key:   "clusters",
+		Type:  "list",
+		Items: &models.SettingItems{Identify: []string{"name"}},
+	}}
+
+	f.set(t, store.ScopeInstance, nil, "clusters", `[
+		{"name":"prod","kubeconfig":"K"},
+		{"name":"stage","kubeconfig":"S"}
+	]`)
+	f.set(t, store.ScopeProject, &f.proj, "clusters", `[{"name":"stage","enabled":false}]`)
+
+	effective, err := f.store.Integrations().SettingsFor(t.Context(), f.module, nil, &f.proj, spec)
+	if err != nil {
+		t.Fatalf("resolve for the project: %v", err)
+	}
+	rows := entries(t, effective["clusters"])
+	if len(rows) != 2 {
+		t.Fatalf("the project sees %d clusters, want both, one of them switched off", len(rows))
+	}
+	if rows[1]["enabled"] != false {
+		t.Errorf("the second cluster is %v, want it switched off here", rows[1])
+	}
+
+	// Another project is unaffected: the switch was written down at this project's
+	// scope and belongs to it alone.
+	other := dbtest.NewProject(t, f.store, "other", nil)
+	above, err := f.store.Integrations().SettingsFor(t.Context(), f.module, nil, &other.ID, spec)
+	if err != nil {
+		t.Fatalf("resolve for another project: %v", err)
+	}
+	for _, row := range entries(t, above["clusters"]) {
+		if _, said := row["enabled"]; said {
+			t.Errorf("another project sees %v, which was decided by somebody else", row)
+		}
+	}
+}

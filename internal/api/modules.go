@@ -844,6 +844,14 @@ func checkSettingType(spec models.SettingSpec, value json.RawMessage) error {
 	}
 }
 
+// switchField is the entry field that says whether a row is in use. See where it is
+// allowed in checkListSetting: it is the core's word, not the module's, and it is the
+// only way a scope below the writer's says "not here" without rewriting the row.
+const (
+	switchField     = "enabled"
+	autoDeployField = "auto_deploy"
+)
+
 // checkListSetting refuses a list that is not a list of the fields the module
 // declared.
 //
@@ -868,6 +876,21 @@ func checkListSetting(spec models.SettingSpec, value json.RawMessage) error {
 	byKey := map[string]models.SettingSpec{}
 	for _, field := range spec.Items.Fields {
 		byKey[field.Key] = field
+	}
+
+	// "enabled" and "auto_deploy" are the core's, not the module's: they say whether a row
+	// is in use here and whether a push may act on it by itself, which are the two things
+	// a scope below the one that wrote the row may say about it without rewriting it.
+	// A row that is switched off is not removed — it is still there, still configured,
+	// and can be switched back on — which is why these are fields and not deletions.
+	//
+	// Only for a list whose entries have names: a row of a list nobody can identify
+	// cannot be switched off by name, and a switch nobody could find would be worse
+	// than none.
+	if len(spec.Items.Identify) > 0 {
+		byKey[switchField] = models.SettingSpec{Key: switchField, Label: "In use", Type: "bool"}
+		byKey[autoDeployField] = models.SettingSpec{
+			Key: autoDeployField, Label: "Autodeploy", Type: "bool"}
 	}
 
 	for index, row := range rows {

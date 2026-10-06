@@ -105,10 +105,6 @@ type Project struct {
 	DefaultBranch string     `json:"default_branch"`
 
 	AllowPipelineTrigger bool `json:"allow_pipeline_trigger"`
-	// AutoDeployPaused stops a push or a tag from starting a run by itself. Manual runs
-	// are left alone, because the moment somebody needs this is the moment they still
-	// have to be able to deploy something on purpose.
-	AutoDeployPaused     bool   `json:"auto_deploy_paused"`
 	AllowMerge           bool   `json:"allow_merge"`
 	MergeMethod          string `json:"merge_method"` // merge | ff | squash
 	RemoveSourceBranch   bool   `json:"remove_source_branch"`
