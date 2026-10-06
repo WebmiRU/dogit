@@ -161,10 +161,35 @@ function rowName(spec: SettingSpec, row: SettingEntry): string {
  * scope's own. A list whose entries have no names cannot be told apart row by row, so
  * what is on screen is what is saved — as before.
  */
-function rowIsOurs(spec: SettingSpec, row: SettingEntry): boolean {
+function rowIsOurs(spec: SettingSpec, row: SettingEntry, index?: number): boolean {
   if (!(spec.items?.identify?.length)) return true
   if (!rowName(spec, row)) return false
-  return decidedFields(spec, row).length > 0
+  if (decidedFields(spec, row).length > 0) return true
+  // Renaming a row is how a project gives a place a name of its own, so a row whose
+  // name no longer matches the one it was loaded with is this scope's own row — even
+  // though it has decided nothing else yet.
+  return index === undefined ? false : renamed(spec, row, index)
+}
+
+/** Whether a row's name is no longer the name it arrived with. */
+function renamed(spec: SettingSpec, row: SettingEntry, index: number): boolean {
+  const was = entriesOf(saved.value[spec.key])[index]
+  if (!was) return false
+  return rowName(spec, was) !== rowName(spec, row)
+}
+
+/**
+ * Whether a field is this scope's to change.
+ *
+ * A row that is entirely inherited belongs to the level above, and its name with it:
+ * renaming somebody else's row would leave two rows of the same cluster, one of them
+ * still theirs. A row this scope has decided anything about can be renamed, because from
+ * that moment it is its own row.
+ */
+function fieldLocked(spec: SettingSpec, row: SettingEntry, index: number, key: string): boolean {
+  if (!mayEdit.value) return true
+  if (!(spec.items?.identify ?? []).includes(key)) return inheritedNow(spec, row, key)
+  return !rowIsOurs(spec, row, index)
 }
 
 /**
@@ -746,7 +771,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               </button>
               <select
                 v-else-if="field.type === 'enum'"
-                :disabled="!mayEdit"
+                :disabled="fieldLocked(spec, row, index, field.key)"
                 :id="`${spec.key}-${index}-${field.key}`"
                 :value="shownValue(spec, row, field.key)"
                 @change="setField(spec, row, field.key, $event)"
@@ -759,7 +784,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                    loses its newlines and stops being a kubeconfig at all. -->
               <textarea
                 v-else-if="field.type === 'text'"
-                :disabled="!mayEdit"
+                :disabled="fieldLocked(spec, row, index, field.key)"
                 :id="`${spec.key}-${index}-${field.key}`"
                 :value="shownValue(spec, row, field.key)"
                 @input="setField(spec, row, field.key, $event)"
@@ -769,7 +794,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               />
               <input
                 v-else
-                :disabled="!mayEdit"
+                :disabled="fieldLocked(spec, row, index, field.key)"
                 :id="`${spec.key}-${index}-${field.key}`"
                 :value="shownValue(spec, row, field.key)"
                 @input="setField(spec, row, field.key, $event)"
