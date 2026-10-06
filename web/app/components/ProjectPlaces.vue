@@ -47,6 +47,9 @@ const loading = ref(true)
 const saving = ref('')
 const error = ref('')
 
+/** What each row's two switches said when it was loaded, so a row knows whether it has changed. */
+const loaded = ref<Record<string, { inUse: boolean; autodeploy: boolean }>>({})
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -74,11 +77,58 @@ async function load() {
       })
     }
     places.value = seen
+
+    const baseline: Record<string, { inUse: boolean; autodeploy: boolean }> = {}
+    for (const one of seen) baseline[one.name] = { inUse: one.inUse, autodeploy: one.autodeploy }
+    loaded.value = baseline
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
     loading.value = false
   }
+}
+
+/** Whether a place's two switches are different from what is stored. */
+function changed(place: Place): boolean {
+  const was = loaded.value[place.name]
+  if (!was) return false
+  return was.inUse !== place.inUse || was.autodeploy !== place.autodeploy
+}
+
+/** What this project has decided about this place, and nothing else: a row that says the
+ *  same as the level above is not a decision, and a copy stops following that level
+ *  without anybody deciding that. */
+function own(place: Place): Record<string, unknown> {
+  const was = loaded.value[place.name]
+  const row: Record<string, unknown> = { name: place.name }
+  if (was && was.inUse !== place.inUse) row.enabled = place.inUse
+  if (was && was.autodeploy !== place.autodeploy) row.auto_deploy = place.autodeploy
+  return row
+}
+
+/** Saves one place, and only that place. */
+async function saveRow(place: Place) {
+  saving.value = place.name
+  error.value = ''
+  try {
+    await api.put(
+      `/modules/${props.module.id}/settings/bulk?scope=project&projectID=${encodeURIComponent(props.projectId)}`,
+      { values: { clusters: [own(place)] } },
+    )
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
+  } finally {
+    saving.value = ''
+  }
+}
+
+/** Puts one place's switches back to what is stored. */
+function discard(place: Place) {
+  const was = loaded.value[place.name]
+  if (!was) return
+  place.inUse = was.inUse
+  place.autodeploy = was.autodeploy
 }
 
 onMounted(load)
@@ -102,26 +152,90 @@ watch(() => props.module.id, load)
       written down.
     </p>
 
-    <article v-for="(place, index) in places" :key="place.name" class="place">
-      <header class="place-head">
-        <div class="place-name">
-          <span class="mono">{{ place.name }}</span>
-          <span v-if="place.namespace" class="muted small">· {{ place.namespace }}</span>
+    <!-- One place, folded away. The name is the whole of what is shown until somebody
+         asks for it, the same way the repository's own configuration folds: a page of
+         places that is a page of open cards is a page where nothing stands out. -->
+    <details v-for="(place, index) in places" :key="place.name" class="place">
+      <summary class="place-head">
+        <span class="place-name mono">{{ place.name }}</span>
+        <span v-if="place.namespace" class="muted small">{{ place.namespace }}</span>
+        <span class="place-note">
+          {{ !place.inUse ? 'not in use here' : place.autodeploy ? 'a push deploys here' : 'only by hand' }}
+        </span>
+      </summary>
+
+      <div class="place-body">
+        <!-- What this project may say about this place, and nothing else: whether a push
+             may deploy here by itself, and whether this project may deploy here at all.
+             Where the cluster is and how it is reached is on the module's own page. -->
+        <div class="place-actions">
+          <label
+            class="switch-pair"
+            title="Autodeploy: whether a push or a tag may deploy here by itself. Off means the run still happens and the image is still built — only the deployment here waits for somebody to start it by hand."
+          >
+            <span class="switch-name">Autodeploy</span>
+            <button
+              class="switch"
+              :class="{ on: place.autodeploy }"
+              type="button"
+              role="switch"
+              :aria-checked="place.autodeploy"
+              :disabled="saving === place.name || !props.canManage || !place.inUse"
+              @click="place.autodeploy = !place.autodeploy"
+            >
+              <span class="knob" />
+            </button>
+          </label>
+
+          <label
+            class="switch-pair"
+            title="In use: whether this project may deploy here at all. Off leaves the place configured on the module's own page and untouched here — switched off for this project, not deleted."
+          >
+            <span class="switch-name">In use</span>
+            <button
+              class="switch"
+              :class="{ on: place.inUse }"
+              type="button"
+              role="switch"
+              :aria-checked="place.inUse"
+              :disabled="saving === place.name || !props.canManage"
+              @click="place.inUse = !place.inUse"
+            >
+              <span class="knob" />
+            </button>
+          </label>
+
+          <span v-if="changed(place)" class="muted small not-saved">not saved yet</span>
+          <button
+            class="btn btn-small"
+            type="button"
+            :disabled="saving === place.name || !changed(place)"
+            @click="discard(place)"
+          >
+            Discard
+          </button>
+          <button
+            class="btn btn-small btn-primary"
+            type="button"
+            :disabled="saving === place.name || !changed(place)"
+            @click="saveRow(place)"
+          >
+            {{ saving === place.name ? 'Saving…' : 'Save this row' }}
+          </button>
         </div>
 
-      </header>
-
-      <!-- The card about this place and no other. -->
-      <ModuleDeployments
-        :project-id="props.projectId"
-        :project-path="props.projectPath"
-        :module="module"
-        :can-manage="props.canManage"
-        :place="{ cluster: place.name, namespace: place.namespace }"
-        :show-repository="index === 0"
-        @settings-changed="load"
-      />
-    </article>
+        <!-- The card about this place and no other. -->
+        <ModuleDeployments
+          :project-id="props.projectId"
+          :project-path="props.projectPath"
+          :module="module"
+          :can-manage="props.canManage"
+          :place="{ cluster: place.name, namespace: place.namespace }"
+          :show-repository="index === 0"
+          @settings-changed="load"
+        />
+      </div>
+    </details>
   </section>
 </template>
 
@@ -137,13 +251,44 @@ watch(() => props.module.id, load)
 }
 
 .place {
-  margin-top: 16px;
-  padding: 14px;
+  margin-top: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
 
+/* The row that is always visible: the name, and one word about what happens here by
+   itself. Everything else is inside, and comes out when the name is clicked. */
 .place-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.place-head::-webkit-details-marker {
+  display: none;
+}
+
+.place-name {
+  font-weight: 600;
+  margin-right: auto;
+}
+
+.place-note {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.place-body {
+  padding: 0 14px 14px;
+}
+
+.place-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -151,11 +296,6 @@ watch(() => props.module.id, load)
   padding-bottom: 10px;
   margin-bottom: 10px;
   border-bottom: 1px solid var(--border);
-}
-
-.place-name {
-  font-weight: 600;
-  margin-right: auto;
 }
 
 .switch-pair {
