@@ -34,6 +34,8 @@ const props = defineProps<{
 interface Place {
   name: string
   namespace: string
+  /** The core's own identity of this row, carried on save so that a row keeps the row it is. */
+  id?: string
   /** Whether this project may deploy here at all. Nobody having said means yes. */
   inUse: boolean
   /** Whether a push may do it by itself. Nobody having said means yes. */
@@ -43,6 +45,8 @@ interface Place {
 const places = ref<Place[]>([])
 /** The same rows as they are stored at the levels above, keyed by name. */
 const inherited = ref<Record<string, Record<string, unknown>>>({})
+const { add: notify } = useNotifyPool()
+
 const loading = ref(true)
 const saving = ref('')
 const error = ref('')
@@ -71,6 +75,7 @@ async function load() {
       if (!name) continue
       seen.push({
         name,
+        id: typeof row.dogit_row_id === 'string' ? row.dogit_row_id : undefined,
         namespace: typeof row.default_namespace === 'string' ? row.default_namespace : '',
         inUse: row.enabled !== false,
         autodeploy: row.auto_deploy !== false,
@@ -88,26 +93,22 @@ async function load() {
   }
 }
 
-/** Whether a place's two switches are different from what is stored. */
-function changed(place: Place): boolean {
+/**
+ * Flips one switch and saves it there and then.
+ *
+ * No Save button and no pending state: a switch is a thing you do, not a thing you fill
+ * in and confirm, and a switch that has to be saved is a switch somebody leaves in the
+ * wrong position because they assumed it had taken. The row's text fields, which do have
+ * to be typed and checked, are saved from the row's own Save on the Settings tab.
+ *
+ * The word beside the switch is the state, so the answer to "did that work" is on the
+ * page and not only in a notification that has already gone.
+ */
+async function flip(place: Place, key: 'inUse' | 'autodeploy') {
   const was = loaded.value[place.name]
-  if (!was) return false
-  return was.inUse !== place.inUse || was.autodeploy !== place.autodeploy
-}
-
-/** What this project has decided about this place, and nothing else: a row that says the
- *  same as the level above is not a decision, and a copy stops following that level
- *  without anybody deciding that. */
-function own(place: Place): Record<string, unknown> {
-  const was = loaded.value[place.name]
-  const row: Record<string, unknown> = { name: place.name }
-  if (was && was.inUse !== place.inUse) row.enabled = place.inUse
-  if (was && was.autodeploy !== place.autodeploy) row.auto_deploy = place.autodeploy
-  return row
-}
-
-/** Saves one place, and only that place. */
-async function saveRow(place: Place) {
+  if (!was) return
+  const before = { inUse: place.inUse, autodeploy: place.autodeploy }
+  place[key] = !place[key]
   saving.value = place.name
   error.value = ''
   try {
@@ -116,19 +117,31 @@ async function saveRow(place: Place) {
       { values: { clusters: [own(place)] } },
     )
     await load()
+    const now = place[key]
+    const what = key === 'inUse'
+      ? `${place.name} is now ${now ? 'in use' : 'not in use'}`
+      : `${place.name} is now deployed ${now ? 'by a push' : 'only by hand'}`
+    notify(what, { type: 'success', timer: 5000 })
   } catch (caught) {
+    place.inUse = before.inUse
+    place.autodeploy = before.autodeploy
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
+    notify(error.value, { type: 'error', timer: 0 })
   } finally {
     saving.value = ''
   }
 }
 
-/** Puts one place's switches back to what is stored. */
-function discard(place: Place) {
+/** What this project has decided about this place, and nothing else. */
+function own(place: Place): Record<string, unknown> {
   const was = loaded.value[place.name]
-  if (!was) return
-  place.inUse = was.inUse
-  place.autodeploy = was.autodeploy
+  const row: Record<string, unknown> = { name: place.name }
+  // The identity goes back with the row: without it the core gives a new one on every
+  // save, and a row whose identity changes each time is a row nothing can be recognised as.
+  if (place.id) row.dogit_row_id = place.id
+  if (was && was.inUse !== place.inUse) row.enabled = place.inUse
+  if (was && was.autodeploy !== place.autodeploy) row.auto_deploy = place.autodeploy
+  return row
 }
 
 onMounted(load)
@@ -159,71 +172,56 @@ watch(() => props.module.id, load)
       <summary class="place-head">
         <span class="place-name mono">{{ place.name }}</span>
         <span v-if="place.namespace" class="muted small">{{ place.namespace }}</span>
-        <span class="place-note">
-          {{ !place.inUse ? 'not in use here' : place.autodeploy ? 'a push deploys here' : 'only by hand' }}
-        </span>
+
+        <!-- The two answers this project has about this place, in the row that names it,
+             so that a list of places can be read without opening any of them. Clicking
+             one saves it at once; clicking the row itself only opens or closes. -->
+        <label
+          class="switch-pair"
+          @click.stop
+          title="Autodeploy: whether a push or a tag may deploy to this place by itself. Off means the run still happens and the image is still built — only the deployment here waits for somebody to start it by hand."
+        >
+          <span class="switch-name">Autodeploy</span>
+          <button
+            class="switch"
+            :class="{ on: place.autodeploy }"
+            type="button"
+            role="switch"
+            :aria-checked="place.autodeploy"
+            :disabled="saving === place.name || !props.canManage || !place.inUse"
+            @click.stop="flip(place, 'autodeploy')"
+          >
+            <span class="knob" />
+          </button>
+          <span class="switch-state">{{ place.autodeploy ? 'ON' : 'OFF' }}</span>
+        </label>
+
+        <!-- No name on this one: the switch and its state are the whole of it. The
+             question it answers — may this project deploy here at all — is in its
+             tooltip, and a second short word beside a switch that already says ON or OFF
+             is a word that has to be read to be understood. -->
+        <label
+          class="switch-pair"
+          @click.stop
+          title="In use: whether this project may deploy here at all. Off leaves the place configured on the module's own page and untouched here — switched off for this project, not deleted."
+        >
+          <button
+            class="switch"
+            :class="{ on: place.inUse }"
+            type="button"
+            role="switch"
+            aria-label="In use here"
+            :aria-checked="place.inUse"
+            :disabled="saving === place.name || !props.canManage"
+            @click.stop="flip(place, 'inUse')"
+          >
+            <span class="knob" />
+          </button>
+          <span class="switch-state">{{ place.inUse ? 'ON' : 'OFF' }}</span>
+        </label>
       </summary>
 
       <div class="place-body">
-        <!-- What this project may say about this place, and nothing else: whether a push
-             may deploy here by itself, and whether this project may deploy here at all.
-             Where the cluster is and how it is reached is on the module's own page. -->
-        <div class="place-actions">
-          <label
-            class="switch-pair"
-            title="Autodeploy: whether a push or a tag may deploy here by itself. Off means the run still happens and the image is still built — only the deployment here waits for somebody to start it by hand."
-          >
-            <span class="switch-name">Autodeploy</span>
-            <button
-              class="switch"
-              :class="{ on: place.autodeploy }"
-              type="button"
-              role="switch"
-              :aria-checked="place.autodeploy"
-              :disabled="saving === place.name || !props.canManage || !place.inUse"
-              @click="place.autodeploy = !place.autodeploy"
-            >
-              <span class="knob" />
-            </button>
-          </label>
-
-          <label
-            class="switch-pair"
-            title="In use: whether this project may deploy here at all. Off leaves the place configured on the module's own page and untouched here — switched off for this project, not deleted."
-          >
-            <span class="switch-name">In use</span>
-            <button
-              class="switch"
-              :class="{ on: place.inUse }"
-              type="button"
-              role="switch"
-              :aria-checked="place.inUse"
-              :disabled="saving === place.name || !props.canManage"
-              @click="place.inUse = !place.inUse"
-            >
-              <span class="knob" />
-            </button>
-          </label>
-
-          <span v-if="changed(place)" class="muted small not-saved">not saved yet</span>
-          <button
-            class="btn btn-small"
-            type="button"
-            :disabled="saving === place.name || !changed(place)"
-            @click="discard(place)"
-          >
-            Discard
-          </button>
-          <button
-            class="btn btn-small btn-primary"
-            type="button"
-            :disabled="saving === place.name || !changed(place)"
-            @click="saveRow(place)"
-          >
-            {{ saving === place.name ? 'Saving…' : 'Save this row' }}
-          </button>
-        </div>
-
         <!-- The card about this place and no other. -->
         <ModuleDeployments
           :project-id="props.projectId"
@@ -306,6 +304,18 @@ watch(() => props.module.id, load)
 }
 
 .switch-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  /* The width of the longest of these words: a switch changing its word must not
+     narrow the row it is in and push everything after it sideways. */
+  min-width: 68px;
+}
+
+/* The state, spelled out. Fixed width, so that ON and OFF take the same room. */
+.switch-state {
+  min-width: 26px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;

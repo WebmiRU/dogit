@@ -217,7 +217,11 @@ function fieldLocked(spec: SettingSpec, row: SettingEntry, index: number, key: s
  */
 function decidedFields(spec: SettingSpec, row: SettingEntry): string[] {
   const identify = new Set(spec.items?.identify ?? [])
-  return Object.keys(row).filter((key) => !identify.has(key))
+  // A row's identity is not a decision: the core writes it, the page never shows it, and
+  // counting it would make every inherited row look like this scope's own — which is how
+  // an inherited row ended up with a Remove button.
+  const core = new Set([...coreRowFields(spec), 'dogit_row_id'])
+  return Object.keys(row).filter((key) => !identify.has(key) && !core.has(key))
 }
 
 
@@ -645,7 +649,13 @@ function removeEntry(spec: SettingSpec, index: number) {
  */
 function rowIsOwn(spec: SettingSpec, row: SettingEntry): boolean {
   if (!spec.items?.identify?.length) return true
-  return rowIsOurs(spec, row)
+  const index = entriesOf(values.value[spec.key]).indexOf(row)
+  if (index < 0) return false
+  // Only a row that was added here can be deleted here. A row that came from the level
+  // above is not this scope's to remove, whatever this scope has decided about it: what
+  // this scope may say about somebody else's cluster is whether it is in use, and a Remove
+  // on it is a deletion that either silently does nothing or takes away somebody else's.
+  return !entriesOf(saved.value[spec.key])[index]
 }
 
 /** Whether a row is in use here. A row nobody said anything about is in use. */
