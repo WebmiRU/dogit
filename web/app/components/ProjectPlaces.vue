@@ -127,6 +127,7 @@ watch(() => props.module.id, load)
         :can-manage="props.canManage"
         :place="{ cluster: place.name, namespace: place.namespace }"
         :show-repository="index === 0"
+        @settings-changed="load"
       />
     </article>
   </section>

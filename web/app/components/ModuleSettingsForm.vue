@@ -79,6 +79,19 @@ const error = ref('')
 /** The query that says whose settings are being read and written. */
 const mayEdit = computed(() => props.canEdit !== false)
 
+/**
+ * A copy, all the way down, that works on what Vue is holding.
+ *
+ * structuredClone refuses a reactive proxy — and everything in `values` and `saved` is
+ * one — which is why Discard threw a DataCloneError and did nothing at all: the one
+ * button whose whole job is to put a row back could not put it back. Going through JSON
+ * is what these values are made of: a setting is JSON, so there is nothing in one that
+ * JSON cannot carry.
+ */
+function clone<T>(value: T): T {
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T)
+}
+
 const scopeQuery = computed(() => {
   if (props.scope === 'instance') return 'scope=instance'
   const name = props.scope === 'group' ? 'groupID' : 'projectID'
@@ -125,7 +138,7 @@ function fill(answer: {
   // left the Save button grey, because from the form's point of view nothing had
   // changed. Structural cloning is what makes "what it was" and "what it is now" two
   // separate things, which is the only way telling them apart means anything.
-  saved.value = structuredClone(next)
+  saved.value = clone(next)
 }
 
 function isList(spec: SettingSpec): boolean {
@@ -369,6 +382,7 @@ async function saveRow(spec: SettingSpec, index: number) {
     const value = listSettable(spec, [row])
     await saveOne(spec.key, value === undefined ? [] : value)
     await settleRow(spec, index)
+    emit('saved')
     return
   }
   const value = settingValue(spec, values.value[spec.key])
@@ -416,7 +430,7 @@ async function settleRow(spec: SettingSpec, index: number) {
     current[index] = { ...row }
     values.value = { ...values.value, [spec.key]: current }
     const baseline = entriesOf(saved.value[spec.key])
-    if (baseline[index]) baseline[index] = structuredClone(row)
+    if (baseline[index]) baseline[index] = clone(row)
     saved.value = { ...saved.value, [spec.key]: baseline }
   } catch {
     // A row that could not be read back is left dirty rather than marked saved: it is
@@ -426,7 +440,7 @@ async function settleRow(spec: SettingSpec, index: number) {
 
 /** The same for a setting that is not a list. */
 function settleSetting(spec: SettingSpec) {
-  saved.value = { ...saved.value, [spec.key]: structuredClone(values.value[spec.key]) }
+  saved.value = { ...saved.value, [spec.key]: clone(values.value[spec.key]) }
 }
 
 /** Whether one row of a list is different from what is stored. */
@@ -447,13 +461,13 @@ function revertRow(spec: SettingSpec, index: number) {
   const current = entriesOf(values.value[spec.key])
   const was = entriesOf(saved.value[spec.key])[index]
   if (!was) return
-  current[index] = structuredClone(was)
+  current[index] = clone(was)
   values.value = { ...values.value, [spec.key]: current }
 }
 
 /** Puts one setting back to what is stored. */
 function revertSetting(spec: SettingSpec) {
-  values.value = { ...values.value, [spec.key]: structuredClone(saved.value[spec.key]) }
+  values.value = { ...values.value, [spec.key]: clone(saved.value[spec.key]) }
 }
 
 /** Puts this scope back to inheriting, which is not the same as a default. */
@@ -489,10 +503,22 @@ function newEntry(spec: SettingSpec): SettingEntry {
   return row
 }
 
+/**
+ * Adds a row.
+ *
+ * Allowed on a place's own Settings tab as well as on the module's: a project may name a
+ * cluster the instance has not got one for, and refusing to let it write one here would
+ * mean the only place to add a place is the module's page — which is the arrangement the
+ * rows were meant to end. A new row is this scope's own, so it is the one row on a
+ * place's tab that can be deleted again.
+ */
 function addEntry(spec: SettingSpec) {
   const rows = entriesOf(values.value[spec.key])
   values.value[spec.key] = [...rows, newEntry(spec)]
 }
+
+/** Said when a row is saved, so the page above can put a new place on screen. */
+const emit = defineEmits<{ saved: [] }>()
 
 /**
  * Removes a row.
@@ -556,6 +582,53 @@ const inheritedNote = [
  * the same field the core uses to join inherited rows: by `name`. The other rows are not
  * hidden here but absent — a card about a place has nothing to do with the other places.
  */
+/**
+ * The fields of a row this page shows.
+ *
+ * A place's own tab shows what this project decided about that place and nothing else.
+ * A field still saying what the level above says is not this project's setting, and a
+ * page of somebody else's configuration under this project's name is a page somebody
+ * edits by accident — and then copies.
+ */
+function fieldsOf(spec: SettingSpec, row: SettingEntry): SettingSpec[] {
+  const declared = spec.items?.fields ?? []
+  if (!props.onlyRow) return declared
+  const above = entriesOf(inherited.value[spec.key]).find(
+    (one) => rowName(spec, one) === rowName(spec, row),
+  )
+  // A row of this project's own has nothing above it to be a copy of, so it shows
+  // everything: it was written here, all of it, and there is nothing to hide.
+  if (!above) return declared
+  return declared.filter((field) => {
+    // The page shows what applies, so an inherited field arrives here carrying the value
+    // the level above wrote. "Set here" therefore cannot mean "has a value": it means
+    // differs from what is above, which is the only way to tell this project's answer
+    // from a copy of somebody else's.
+    if (sameValue(above[field.key], row[field.key])) return false
+    return true
+  })
+}
+
+/**
+ * The fields of a row that are not shown, so that one can be brought back.
+ *
+ * A page that shows only what this scope decided is empty until something is decided —
+ * and an empty row with no way to start is a form that cannot be used. The fields that
+ * are not shown are therefore offered, one small button each, rather than laid out as
+ * empty boxes that look like values somebody forgot.
+ */
+function hiddenFieldsOf(spec: SettingSpec, row: SettingEntry): SettingSpec[] {
+  const shown = new Set(fieldsOf(spec, row).map((one) => one.key))
+  return (spec.items?.fields ?? []).filter(
+    (field) => !shown.has(field.key) && !(props.hideFields ?? []).includes(field.key),
+  )
+}
+
+/** Brings one field back into the row, empty, so that it can be filled in here. */
+function declareField(spec: SettingSpec, row: SettingEntry, field: SettingSpec) {
+  row[field.key] = field.type === 'bool' ? false : ''
+}
+
 function rowsOf(spec: SettingSpec): SettingEntry[] {
   const rows = entriesOf(values.value[spec.key])
   if (!props.onlyRow || !rowName(spec, {})) return rows
@@ -565,10 +638,13 @@ function rowsOf(spec: SettingSpec): SettingEntry[] {
 /** What a row is called in the list: its first field, or "entry". */
 function entryTitle(spec: SettingSpec, row: SettingEntry): string {
   for (const field of spec.items?.fields ?? []) {
+    // A switch is not a name: a row nobody has named yet would otherwise be titled
+    // "false", which is a thing a reader has to stop and think about.
+    if (field.type === 'bool') continue
     const text = asString(row[field.key]).trim()
     if (text) return text
   }
-  return 'entry'
+  return 'a new row'
 }
 
 onMounted(load)
@@ -663,8 +739,29 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
             <!-- This row's own Save, below its own fields: a row is saved by itself,
                  so changing one's namespace is never also a chance to rewrite the
                  other's kubeconfig. -->
+            <!-- What this project has not decided yet, as one small button each. -->
+            <div v-if="mayEdit && hiddenFieldsOf(spec, row).length" class="setting-entry-more">
+              <span class="muted small">also:</span>
+              <button
+                v-for="field in hiddenFieldsOf(spec, row)"
+                :key="field.key"
+                class="link-button"
+                type="button"
+                :disabled="busy"
+                @click="declareField(spec, row, field)"
+              >
+                {{ field.label }}
+              </button>
+            </div>
+
             <div class="setting-entry-actions">
-              <span v-if="rowChanged(spec, index)" class="muted small">not saved yet</span>
+              <!-- The hint takes its room whether or not it has anything to say, and the
+                   buttons keep their width while they are disabled: a row that changes
+                   shape when a switch is flicked makes the switch feel like it moved
+                   something. -->
+              <span class="muted small pending" :class="{ show: rowChanged(spec, index) }">
+                not saved yet
+              </span>
               <button
                 class="btn btn-small"
                 type="button"
@@ -684,7 +781,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
             </div>
 
             <div
-              v-for="field in (spec.items?.fields ?? []).filter((one) => !(props.hideFields ?? []).includes(one.key))"
+              v-for="field in fieldsOf(spec, row).filter((one) => !(props.hideFields ?? []).includes(one.key))"
               :key="field.key"
               class="setting-field"
             >
@@ -741,8 +838,12 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
             </div>
           </div>
 
+          <!-- Adding is allowed on a place's tab too: a project may name a cluster the
+               instance has none of, and the only place to add a place should be the page
+               that is about places. The row it adds is this project's own, and is the one
+               row on this tab that can be deleted again. -->
           <button
-            v-if="!onlyRow && mayEdit"
+            v-if="mayEdit"
             class="btn btn-small"
             type="button"
             :disabled="busy"
@@ -953,6 +1054,9 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
   font-weight: 600;
   letter-spacing: 0.06em;
   color: var(--text-muted);
+  /* The width of the longest of these words, so that switching one on and off does not
+     narrow the row it is in. */
+  min-width: 74px;
 }
 
 /* Why an inherited row has no Remove button, said once where it is seen. */
@@ -963,17 +1067,34 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
 }
 
 /* A row's own Save, under its own fields. */
+.setting-entry-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-top: 10px;
+}
+
 .setting-entry-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Buttons keep their width when disabled, so a row does not jump as it is saved. */
+  min-height: 30px;
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
 
-.setting-entry-actions .muted {
+.setting-entry-actions .pending {
   margin-right: auto;
+  /* Hidden rather than removed: a row's buttons sit still while a switch is flicked,
+     instead of sliding one button-width to the left and back. */
+  visibility: hidden;
+}
+
+.setting-entry-actions .pending.show {
+  visibility: visible;
 }
 
 .setting-field {

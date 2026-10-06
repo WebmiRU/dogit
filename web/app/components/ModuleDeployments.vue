@@ -52,6 +52,9 @@ const props = defineProps<{
   showRepository?: boolean
 }>()
 
+/** Said when this place's settings were written, so a list of places can redraw. */
+const emit = defineEmits<{ settingsChanged: [] }>()
+
 /** One page of the history, and what is left of it. */
 interface DeploymentsPage {
   reason?: string
@@ -1417,6 +1420,7 @@ watch(() => props.module.id, load)
             :scope-id="props.projectId"
             :only-row="scopedCluster"
             :can-edit="props.canManage"
+            @saved="emit('settingsChanged')"
             :note="`These are the settings ${scopedCluster} has for ${props.projectPath}. Anything left alone is inherited from the group or the instance.`"
           />
         </section>
