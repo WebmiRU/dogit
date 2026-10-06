@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -522,7 +523,15 @@ func (s *Server) handleSetModuleSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.store.Integrations().SetSetting(r.Context(), integration.ID, scopeType, scopeID, key, req.Value); err != nil {
+	// A value that is nothing means this scope has stopped saying it, rather than
+	// saying it is nothing. See withoutEmpties.
+	value, err := withoutEmpties(integration, key, req.Value)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	if err := s.store.Integrations().SetSetting(r.Context(), integration.ID, scopeType, scopeID, key, value); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -646,6 +655,11 @@ func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Requ
 		// the masked fields are put back to what is already stored.
 		value, err := s.restoreMaskedSecrets(r.Context(), integration.ID, scopeType, scopeID,
 			key, value)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		value, err = withoutEmpties(integration, key, value)
 		if err != nil {
 			s.writeError(w, r, err)
 			return
@@ -986,19 +1000,189 @@ func (s *Server) handleGetModuleSettings(w http.ResponseWriter, r *http.Request)
 		specs[spec.Key] = spec
 	}
 
+	// What this scope decided, and nothing that it inherited.
+	//
+	// The values a level above holds are not sent to a page at all. Not masked, not
+	// blanked afterwards: not sent. A browser that has a group's settings in it has
+	// them whatever the page does with them, and there is no level at which somebody
+	// who may read a project should be holding a credential the instance wrote for
+	// somebody else.
+	//
+	// A row's name still comes, because a row has to be nameable to be shown as
+	// inherited — that is what says "this exists, and it is not yours to change". Every
+	// other field of an inherited row is left out, and the page shows it empty.
+	own := s.ownSettings(effective, inherited, integration.Capabilities.Settings)
+
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"scope":    scopeType,
 		"settings": at,
-		"inherited": redactSettings(inherited, declared, func(key string) (models.SettingSpec, bool) {
-			spec, ok := specs[key]
-			return spec, ok
-		}),
-		"effective": redactSettings(effective, declared, func(key string) (models.SettingSpec, bool) {
+		"own": redactSettings(own, declared, func(key string) (models.SettingSpec, bool) {
 			spec, ok := specs[key]
 			return spec, ok
 		}),
 		"schema": integration.Capabilities.Settings,
 	})
+}
+
+// ownSettings is what one scope decided: the effective values minus the ones that are
+// exactly what the level above says.
+//
+// A field is left out rather than blanked when the two agree, because a page cannot tell
+// a field it was given from a field it was sent, and one that looks written but is not
+// is a value somebody will save back unchanged.
+func (s *Server) ownSettings(effective, inherited map[string]json.RawMessage,
+	specs []models.SettingSpec) map[string]json.RawMessage {
+
+	out := map[string]json.RawMessage{}
+	for key, value := range effective {
+		above, hasAbove := inherited[key]
+		if !hasAbove {
+			out[key] = value
+			continue
+		}
+
+		var spec *models.SettingSpec
+		for i := range specs {
+			if specs[i].Key == key {
+				spec = &specs[i]
+				break
+			}
+		}
+		if spec == nil || spec.Items == nil || len(spec.Items.Identify) == 0 {
+			// A plain value: this scope's answer or nobody's.
+			if !sameJSON(value, above) {
+				out[key] = value
+			}
+			continue
+		}
+
+		own := ownEntries(value, above, spec.Items.Identify)
+		if len(own) > 0 {
+			out[key] = own
+		}
+	}
+	return out
+}
+
+// ownEntries is a list of rows reduced to what this scope decided about each of them.
+//
+// A row with no counterpart above is this scope's own and comes whole. A row that is
+// somebody else's keeps its name — that is how the page says "this row exists and is
+// inherited" — and nothing else.
+func ownEntries(effective, inherited json.RawMessage, identify []string) json.RawMessage {
+	var applied, above []map[string]json.RawMessage
+	if err := json.Unmarshal(effective, &applied); err != nil {
+		return effective
+	}
+	_ = json.Unmarshal(inherited, &above)
+
+	nameOf := func(row map[string]json.RawMessage) string {
+		parts := make([]string, 0, len(identify))
+		for _, field := range identify {
+			raw, ok := row[field]
+			if !ok {
+				return ""
+			}
+			parts = append(parts, strings.Trim(string(raw), `"`))
+		}
+		return strings.Join(parts, " ")
+	}
+
+	rows := make([]map[string]json.RawMessage, 0, len(applied))
+	for _, row := range applied {
+		name := nameOf(row)
+		var was map[string]json.RawMessage
+		for _, one := range above {
+			if name != "" && nameOf(one) == name {
+				was = one
+				break
+			}
+		}
+		if was == nil {
+			rows = append(rows, row)
+			continue
+		}
+		kept := map[string]json.RawMessage{}
+		for _, field := range identify {
+			if value, ok := row[field]; ok {
+				kept[field] = value
+			}
+		}
+		for field, value := range row {
+			if previous, had := was[field]; !had || !sameJSON(value, previous) {
+				kept[field] = value
+			}
+		}
+		// The name comes even when this scope overrode nothing: it is how the page says
+		// "this place exists, and it is not yours to change". Nothing else does.
+		rows = append(rows, kept)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(rows)
+	if err != nil {
+		return effective
+	}
+	return encoded
+}
+
+/**
+ * A value with everything empty taken out of it.
+ *
+ * An emptied field is a decision to stop overriding, not a decision to override with
+ * nothing: what it goes back to is the level above's value, which only the core holds.
+ * Writing "" instead would keep the override alive with nothing in it, and a deployment
+ * would be told the namespace is the empty string.
+ *
+ * Only strings and numbers are emptied this way. A boolean is not: off is an answer,
+ * not an absence, and a row whose Autodeploy is off must stay written down rather than
+ * quietly becoming "whatever the level above says".
+ */
+func withoutEmpties(integration *models.Integration, key string, value json.RawMessage) (json.RawMessage, error) {
+	var spec *models.SettingSpec
+	for i := range integration.Capabilities.Settings {
+		if integration.Capabilities.Settings[i].Key == key {
+			spec = &integration.Capabilities.Settings[i]
+			break
+		}
+	}
+	if spec == nil || spec.Type != "list" || spec.Items == nil {
+		return value, nil
+	}
+
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(value, &rows); err != nil {
+		return value, nil
+	}
+	emptied := false
+	kept := make([]map[string]json.RawMessage, 0, len(rows))
+	for _, row := range rows {
+		trimmed := make(map[string]json.RawMessage, len(row))
+		for field, raw := range row {
+			var text string
+			if err := json.Unmarshal(raw, &text); err == nil && text == "" {
+				emptied = true
+				continue
+			}
+			trimmed[field] = raw
+		}
+		if len(trimmed) > 0 {
+			kept = append(kept, trimmed)
+		}
+	}
+	if !emptied {
+		return value, nil
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return value, nil
+	}
+	return encoded, nil
+}
+
+func sameJSON(one, other json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(one), bytes.TrimSpace(other))
 }
 
 // mintTokenRequest asks for a token a user may present to a module.

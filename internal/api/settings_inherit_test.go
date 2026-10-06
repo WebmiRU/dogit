@@ -43,16 +43,16 @@ func deleteIntegration(t *testing.T, f *moduleFixture, id uuid.UUID) {
 	_, _ = f.store.Pool().Exec(t.Context(), `DELETE FROM integrations WHERE id = $1`, id)
 }
 
-// A project's settings page has to be able to tell its own rows from the ones it
-// inherits, because otherwise saving it writes down somebody else's clusters as if this
-// project had decided them.
+// A settings page is told what its own scope decided and nothing else.
 //
-// The page is given three things: what is stored here, what applies, and what would
-// apply without this scope. Without the third there is no telling the difference.
-func TestASettingsPageSeesWhatThisScopeDecidedAndWhatItInherited(t *testing.T) {
+// A value the level above holds is not sent at all — not masked, not blanked: a browser
+// holding it is holding it whatever the page does with it. A row arrives as its name and
+// the fields this scope overrode, so that a project can be shown a place it uses without
+// being handed the instance's credential for it.
+func TestASettingsPageIsToldOnlyWhatItsOwnScopeDecided(t *testing.T) {
 	f := newModuleFixture(t)
 	module := registerDeployModule(t, f)
-	project := dbtest.NewProject(t, f.store, "inheriting", nil)
+	project := dbtest.NewProject(t, f.store, "deciding", nil)
 
 	put := func(scope, query, value string) {
 		t.Helper()
@@ -61,9 +61,10 @@ func TestASettingsPageSeesWhatThisScopeDecidedAndWhatItInherited(t *testing.T) {
 			t.Fatalf("save at %s: %d %s", scope, recorder.Code, recorder.Body.String())
 		}
 	}
-
-	put("the instance", "scope=instance",
-		`[{"name":"prod","kubeconfig":"K","default_namespace":"apps"},{"name":"stage","kubeconfig":"S"}]`)
+	put("the instance", "scope=instance", `[
+		{"name":"prod","kubeconfig":"INSTANCE-KUBECONFIG","default_namespace":"apps"},
+		{"name":"stage","kubeconfig":"STAGE-KUBECONFIG","default_namespace":"apps"}
+	]`)
 	put("the project", "scope=project&projectID="+project.ID.String(),
 		`[{"name":"prod","default_namespace":"dogit"}]`)
 
@@ -74,9 +75,8 @@ func TestASettingsPageSeesWhatThisScopeDecidedAndWhatItInherited(t *testing.T) {
 	}
 
 	var answer struct {
-		Effective  map[string]any `json:"effective"`
-		Inherited  map[string]any `json:"inherited"`
-		SettingsAt []struct {
+		Own      map[string]any `json:"own"`
+		Settings []struct {
 			Value json.RawMessage `json:"value"`
 		} `json:"settings"`
 	}
@@ -84,26 +84,84 @@ func TestASettingsPageSeesWhatThisScopeDecidedAndWhatItInherited(t *testing.T) {
 		t.Fatalf("read the answer: %v", err)
 	}
 
-	effective, ok := answer.Effective["clusters"].([]any)
-	if !ok || len(effective) != 2 {
-		t.Fatalf("what applies here is %v, want both clusters", answer.Effective["clusters"])
-	}
-	prod := effective[0].(map[string]any)
-	if prod["default_namespace"] != "dogit" || prod["kubeconfig"] != "K" {
-		t.Errorf("the first cluster is %v, want this project's namespace and the inherited kubeconfig", prod)
+	rows, ok := answer.Own["clusters"].([]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("the project is shown %v, want both of its places", answer.Own["clusters"])
 	}
 
-	inherited, ok := answer.Inherited["clusters"].([]any)
-	if !ok || len(inherited) != 2 {
-		t.Fatalf("what this scope inherited is %v, want both clusters", answer.Inherited["clusters"])
+	// The name is how the page says "this place exists"; everything else is this
+	// project's own business.
+	prod := rows[0].(map[string]any)
+	if prod["name"] != "prod" {
+		t.Errorf("the first place is %v, want it named", prod)
 	}
-	if inherited[0].(map[string]any)["default_namespace"] != "apps" {
-		t.Errorf("the inherited namespace is %v, want the instance's", inherited[0])
+	if prod["default_namespace"] != "dogit" {
+		t.Errorf("the namespace it overrode is %v, want its own", prod["default_namespace"])
+	}
+	if _, given := prod["kubeconfig"]; given {
+		t.Errorf("the page was handed a kubeconfig: %v", prod)
+	}
+	stage := rows[1].(map[string]any)
+	if stage["name"] != "stage" {
+		t.Errorf("the second place is %v, want it named too", stage)
+	}
+	for key, value := range stage {
+		if key == "name" {
+			continue
+		}
+		t.Errorf("the page was handed %s=%v for a place this project overrode nothing of", key, value)
 	}
 
-	// And what is stored here is one row, not the two it ends up with.
-	if len(answer.SettingsAt) != 1 {
-		t.Errorf("this scope has %d rows stored, want the one it decided", len(answer.SettingsAt))
+	// And nothing anywhere in the answer is the instance's: not in "own", not in the
+	// raw rows, and not under a key this build does not even read.
+	body := recorder.Body.String()
+	for _, secret := range []string{"INSTANCE-KUBECONFIG", "STAGE-KUBECONFIG", "inherited"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("the answer carries %q: %s", secret, body)
+		}
+	}
+	if strings.Contains(body, `"effective"`) {
+		t.Errorf("the answer still carries the effective values: %s", body)
+	}
+}
+
+// An emptied field is a decision to stop overriding: what it goes back to is the level
+// above's, which the core knows.
+func TestClearingAFieldLeavesNothingBehindForIt(t *testing.T) {
+	f := newModuleFixture(t)
+	module := registerDeployModule(t, f)
+	project := dbtest.NewProject(t, f.store, "clearing", nil)
+
+	put := func(query, value string) {
+		t.Helper()
+		path := "/modules/" + module.ID.String() + "/settings?key=clusters&" + query
+		if recorder := f.asAdmin(t, http.MethodPut, path, `{"value":`+value+`}`); recorder.Code != http.StatusOK {
+			t.Fatalf("save: %d %s", recorder.Code, recorder.Body.String())
+		}
+	}
+	put("scope=instance", `[{"name":"prod","default_namespace":"apps"}]`)
+	put("scope=project&projectID="+project.ID.String(), `[{"name":"prod","default_namespace":""}]`)
+
+	stored, err := f.store.Integrations().SettingsAt(t.Context(), module.ID, "project", &project.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if len(stored) != 1 {
+		t.Fatalf("the project has %d rows stored, want one", len(stored))
+	}
+	if strings.Contains(string(stored[0].Value), "default_namespace") {
+		t.Errorf("the cleared field is still written down: %s", stored[0].Value)
+	}
+
+	// And what applies is the instance's again, because nothing here overrode it.
+	effective, err := f.store.Integrations().SettingsFor(t.Context(), module.ID, nil,
+		&project.ID, module.Capabilities.Settings)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !strings.Contains(string(effective["clusters"]), `"apps"`) {
+		t.Errorf("after the override was lifted the project has %s, want the instance's namespace",
+			effective["clusters"])
 	}
 }
 

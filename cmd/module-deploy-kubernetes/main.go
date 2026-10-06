@@ -195,6 +195,12 @@ func manifest() map[string]any {
 						{
 							"key":   "kubeconfig",
 							"label": "Kubeconfig",
+							// A kubeconfig is a credential and is treated as one: the core
+							// masks it on every path it leaves by, at every scope. It used to be
+							// shown, because the page showing it was an administrator's page — and
+							// then the same form appeared on a project's page, open to everybody
+							// who may read the project.
+							"secret": true,
 							// A multi-line field rather than a password box: a kubeconfig is a
 							// document, and pasting one into a single-line input would trim it.
 							"type": "text",

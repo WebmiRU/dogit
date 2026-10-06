@@ -51,23 +51,15 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const answer = await api.get<{
-      effective?: Record<string, unknown>
-      inherited?: Record<string, unknown>
-    }>(`/modules/${props.module.id}/settings?scope=project&projectID=${encodeURIComponent(props.projectId)}`)
-
-    const rows = Array.isArray(answer.effective?.clusters)
-      ? (answer.effective!.clusters as Record<string, unknown>[])
+    // "own" and not "effective": the values this instance wrote for the cluster are not
+    // sent to a page, so this project sees the name of its place and what it has decided
+    // about it, and nothing else.
+    const answer = await api.get<{ own?: Record<string, unknown> }>(
+      `/modules/${props.module.id}/settings?scope=project&projectID=${encodeURIComponent(props.projectId)}`,
+    )
+    const rows = Array.isArray(answer.own?.clusters)
+      ? (answer.own!.clusters as Record<string, unknown>[])
       : []
-    const above = Array.isArray(answer.inherited?.clusters)
-      ? (answer.inherited!.clusters as Record<string, unknown>[])
-      : []
-
-    const inheritedByName: Record<string, Record<string, unknown>> = {}
-    for (const row of above) {
-      if (typeof row?.name === 'string') inheritedByName[row.name] = row
-    }
-    inherited.value = inheritedByName
 
     // A row with no name is a row somebody started filling in, and it is not a place.
     const seen: Place[] = []

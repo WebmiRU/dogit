@@ -69,11 +69,6 @@ const { add: notify } = useNotifyPool()
 // and having nothing to render before the first keystroke.
 const values = ref<Record<string, unknown>>({})
 const saved = ref<Record<string, unknown>>({})
-// The rows the levels above this scope decide, keyed by setting. Kept because a list
-// that inherits entry by entry must not be written down whole at every level below:
-// that would freeze somebody else's cluster in this project's settings the first time
-// anybody opened this page and pressed Save.
-const inherited = ref<Record<string, unknown>>({})
 const busy = ref(false)
 const error = ref('')
 
@@ -105,30 +100,24 @@ function asString(value: unknown): string {
 }
 
 /**
- * Fills the form from what the core says applies here.
+ * Fills the form from what this scope has decided.
  *
- * Read from "effective" rather than from "settings": the latter is a list of the rows
- * stored at this scope, each with its value wrapped in an object, which is not
- * something a form can read a value out of by key. Effective is what a job would
- * actually run with, which is also what should be shown.
+ * Read from "own": the values a level above holds are not sent to a page at all, so what
+ * arrives is a row's name and the fields this scope overrode. A field that is missing is
+ * therefore not an empty value — it is one somebody else decided, and the field says so
+ * in its placeholder rather than pretending to be blank.
  */
-function fill(answer: {
-  effective?: Record<string, unknown>
-  inherited?: Record<string, unknown>
-}) {
+function fill(answer: { own?: Record<string, unknown> }) {
   const next: Record<string, unknown> = {}
-  const above: Record<string, unknown> = {}
   for (const spec of props.module.manifest?.settings ?? []) {
-    const stored = answer.effective?.[spec.key]
+    const stored = answer.own?.[spec.key]
     next[spec.key] = isList(spec)
       ? entriesOf(stored)
-      : asString(stored ?? spec.default ?? '')
-    if (isList(spec)) above[spec.key] = entriesOf(answer.inherited?.[spec.key])
+      : Object.prototype.hasOwnProperty.call(answer.own ?? {}, spec.key)
+        ? asString(stored)
+        : ''
   }
   values.value = next
-  // What the levels above this one decide, kept so that saving here does not write
-  // their rows down again as if this scope had decided them.
-  inherited.value = above
   // A copy that goes all the way down, not one level.
   //
   // `{ ...next }` copies the keys and hands over the values themselves, which is
@@ -164,29 +153,32 @@ function rowName(spec: SettingSpec, row: SettingEntry): string {
   return parts.join(' ')
 }
 
-/** Whether one row is worth writing at this scope at all. */
+/**
+ * Whether one row is worth writing at this scope at all.
+ *
+ * A row arrives carrying its name and whatever this scope decided; a row that decided
+ * nothing here is somebody else's row, and writing it down would say that it is this
+ * scope's own. A list whose entries have no names cannot be told apart row by row, so
+ * what is on screen is what is saved — as before.
+ */
 function rowIsOurs(spec: SettingSpec, row: SettingEntry): boolean {
-  const above = entriesOf(inherited.value[spec.key])
-  const name = rowName(spec, row)
-  // A list the module does not name entries of cannot be told apart row by row, so
-  // what is saved is what is on screen, as before.
-  if (!name) return true
-  const was = above.find((one) => rowName(spec, one) === name)
-  if (!was) return true
-  return JSON.stringify(orderFields(spec, was)) !== JSON.stringify(orderFields(spec, row))
+  if (!(spec.items?.identify?.length)) return true
+  if (!rowName(spec, row)) return false
+  return decidedFields(spec, row).length > 0
 }
 
-/** A row with its fields in the module's own order, so two rows compare honestly. */
-function orderFields(spec: SettingSpec, row: SettingEntry): SettingEntry {
-  const out: SettingEntry = {}
-  for (const field of spec.items?.fields ?? []) {
-    if (field.key in row) out[field.key] = row[field.key]
-  }
-  for (const [key, value] of Object.entries(row)) {
-    if (!(key in out)) out[key] = value
-  }
-  return out
+/**
+ * The fields of a row this scope decided.
+ *
+ * A row comes from the core carrying only what is its own: the values a level above
+ * holds are not sent to a page at all. So "has a value" and "decided it here" are one
+ * question, which is what lets one form be the same form at every scope.
+ */
+function decidedFields(spec: SettingSpec, row: SettingEntry): string[] {
+  const identify = new Set(spec.items?.identify ?? [])
+  return Object.keys(row).filter((key) => !identify.has(key))
 }
+
 
 /**
  * A list as it is written at this scope: only what this scope decided.
@@ -202,37 +194,26 @@ function orderFields(spec: SettingSpec, row: SettingEntry): SettingEntry {
  * What the core sends back is the effective list, so the row that comes back still
  * shows every field. Nothing is lost; what is stored is only what was decided here.
  */
+/**
+ * A list as it is written at this scope.
+ *
+ * A field that has been emptied is left out rather than written as an empty value: a
+ * cleared override is a decision to stop overriding, and what it goes back to is the
+ * level above's — which the core knows and this page has never seen. Writing "" instead
+ * would keep the override alive with nothing in it, and a deployment would then be told
+ * the namespace is the empty string.
+ */
 function listSettable(spec: SettingSpec, raw: unknown): unknown {
   if (!isList(spec)) return settingValue(spec, raw)
-
   const rows: SettingEntry[] = []
   for (const row of entriesOf(raw)) {
     if (!rowIsOurs(spec, row)) continue
-    const above = entriesOf(inherited.value[spec.key]).find(
-      (one) => rowName(spec, one) === rowName(spec, row),
-    )
-    const own: SettingEntry = {}
-    let kept = 0
-    // The module's own fields, and then the two the core keeps in such a list: a
-    // switch is not a field anybody declared, and without carrying it here a switched
-    // row would be saved as nothing at all.
-    const carry = [
-      ...(spec.items?.fields ?? []).map((field) => field.key),
-      ...coreRowFields(spec),
-    ]
-    for (const key of carry) {
-      if (!(key in row)) continue
-      if (above && sameValue(above[key], row[key])) continue
-      own[key] = row[key]
-      kept++
+    const kept: SettingEntry = {}
+    for (const [key, value] of Object.entries(row)) {
+      if (value === '' || value === undefined || value === null) continue
+      kept[key] = value
     }
-    // A row whose name is what makes it a row at all: without it nothing above could
-    // ever be matched to it.
-    for (const key of spec.items?.identify ?? []) {
-      own[key] = row[key]
-      kept++
-    }
-    if (kept) rows.push(coerceRow(spec, own))
+    if (Object.keys(kept).length) rows.push(coerceRow(spec, kept))
   }
   if (!rows.length) return undefined
   return rows
@@ -301,7 +282,7 @@ function entriesOf(value: unknown): SettingEntry[] {
 async function load() {
   error.value = ''
   try {
-    const answer = await api.get<{ effective?: Record<string, unknown> }>(
+    const answer = await api.get<{ own?: Record<string, unknown> }>(
       `/modules/${props.module.id}/settings?${scopeQuery.value}`,
     )
     fill(answer)
@@ -422,10 +403,10 @@ async function saveOne(key: string, value: unknown) {
  */
 async function settleRow(spec: SettingSpec, index: number) {
   try {
-    const answer = await api.get<{ effective?: Record<string, unknown> }>(
+    const answer = await api.get<{ own?: Record<string, unknown> }>(
       `/modules/${props.module.id}/settings?${scopeQuery.value}`,
     )
-    const row = entriesOf(answer.effective?.[spec.key])[index]
+    const row = entriesOf(answer.own?.[spec.key])[index]
     const current = entriesOf(values.value[spec.key])
     if (!row || !current[index]) return
     current[index] = { ...row }
@@ -487,6 +468,41 @@ async function reset(spec: SettingSpec) {
   }
 }
 
+/**
+ * What a field shows.
+ *
+ * The field that says which row this is is never blanked: an unnamed row cannot be
+ * saved, and a row whose name has to be retyped in order to be saved at all grows a
+ * second entry with the same name the moment somebody tries to change one of its values.
+ * A name is not a value to override — it is what a value is attached to.
+ *
+ * Everything else is whatever this row holds, and a field the row does not hold is one
+ * the levels above are holding: empty, with the placeholder saying so.
+ */
+function shownValue(spec: SettingSpec, row: SettingEntry, key: string): string {
+  if ((spec.items?.identify ?? []).includes(key)) return asString(row[key])
+  return asString(row[key])
+}
+
+/**
+ * Whether a field of this row is not this scope's to say.
+ *
+ * On the field itself, from the row and the key, so every control asks the same question
+ * the same way. A field the row does not carry is one nobody here has decided.
+ */
+function inheritedNow(spec: SettingSpec, row: SettingEntry, key: string): boolean {
+  if ((spec.items?.identify ?? []).includes(key)) return false
+  // Nothing is above the instance, so a field the instance has not set is simply unset
+  // there — and saying "inherited" on the top of the chain would point at nothing.
+  if (props.scope === 'instance') return false
+  return !(key in row)
+}
+
+function setField(spec: SettingSpec, row: SettingEntry, key: string, event: Event) {
+  const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+  row[key] = target.value
+}
+
 /** What the core sends back for a secret it holds rather than returns. */
 const secretMask = '********'
 
@@ -542,12 +558,15 @@ function removeEntry(spec: SettingSpec, index: number) {
   values.value[spec.key] = rows
 }
 
-/** Whether a row is one this scope wrote, and may therefore delete. */
+/**
+ * Whether a row is one this scope wrote, and may therefore delete.
+ *
+ * A row that came from above has nothing here to delete: what this scope has to say
+ * about it is whether it is in use, and everything else belongs to whoever wrote it.
+ */
 function rowIsOwn(spec: SettingSpec, row: SettingEntry): boolean {
   if (!spec.items?.identify?.length) return true
-  const name = rowName(spec, row)
-  if (!name) return true
-  return !entriesOf(inherited.value[spec.key]).some((one) => rowName(spec, one) === name)
+  return rowIsOurs(spec, row)
 }
 
 /** Whether a row is in use here. A row nobody said anything about is in use. */
@@ -575,47 +594,14 @@ const inheritedNote = [
   'In use: whether this project may deploy here at all.',
 ].join(' ')
 
-/** The rows of a list setting, for the template to walk. */
 /**
  * The rows of a list setting, for the template to walk.
  *
  * One row when the page was asked about one place by name, and that row is looked up by
- * the same field the core uses to join inherited rows: by `name`. The other rows are not
- * hidden here but absent — a card about a place has nothing to do with the other places.
+ * the same field the core uses to join a row to the one it was inherited from. The other
+ * rows are not hidden here but absent: a card about a place has nothing to do with the
+ * other places.
  */
-/**
- * Whether this field's value is the one the level above wrote down.
- *
- * On the field itself, from the row and the key, so that every control asks the same
- * question the same way.
- */
-function inheritedNow(spec: SettingSpec, row: SettingEntry, key: string): boolean {
-  const above = entriesOf(inherited.value[spec.key]).find(
-    (one) => rowName(spec, one) === rowName(spec, row),
-  )
-  if (!above) return false
-  return sameValue(above[key], row[key])
-}
-
-/**
- * What a field shows.
- *
- * Nothing, where the value is inherited: the field is empty and says so in its
- * placeholder, because a value copied into the box would be read as this project's own
- * and saved as one — and would then stop following the level above without anybody
- * deciding that. Typing into it is what decides it here.
- */
-function shownValue(spec: SettingSpec, row: SettingEntry, key: string): string {
-  if (inheritedNow(spec, row, key)) return ''
-  return asString(row[key])
-}
-
-function setField(row: SettingEntry, key: string, event: Event) {
-  const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
-  row[key] = target.value
-}
-
-
 function rowsOf(spec: SettingSpec): SettingEntry[] {
   const rows = entriesOf(values.value[spec.key])
   if (!props.onlyRow || !rowName(spec, {})) return rows
@@ -763,7 +749,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
                 :value="shownValue(spec, row, field.key)"
-                @change="setField(row, field.key, $event)"
+                @change="setField(spec, row, field.key, $event)"
               >
                 <option v-for="option in field.options ?? []" :key="option" :value="option">
                   {{ option }}
@@ -776,7 +762,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
                 :value="shownValue(spec, row, field.key)"
-                @input="setField(row, field.key, $event)"
+                @input="setField(spec, row, field.key, $event)"
                 rows="6"
                 spellcheck="false"
                 :placeholder="inheritedNow(spec, row, field.key) ? 'inherited' : `Paste the file's contents here`"
@@ -786,7 +772,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 :disabled="!mayEdit"
                 :id="`${spec.key}-${index}-${field.key}`"
                 :value="shownValue(spec, row, field.key)"
-                @input="setField(row, field.key, $event)"
+                @input="setField(spec, row, field.key, $event)"
                 :type="field.secret ? 'password' : 'text'"
                 :placeholder="inheritedNow(spec, row, field.key)
                   ? 'inherited'
