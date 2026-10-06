@@ -270,7 +270,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 
 	if response.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-		message := strings.TrimSpace(string(raw))
+		message := refusalOf(raw, response.Status)
 		log("The %s module refused: %s\n", spec.Module, message)
 		return fmt.Errorf("the %s module refused: %s", spec.Module, message)
 	}
@@ -647,6 +647,27 @@ func deployStepsFor(built string, manifests, pre, post int) []deployStepName {
 	}
 
 	return steps
+}
+
+// refusalOf is what a module said in refusing, in words.
+//
+// A module's refusal is an object with the reason inside it, the same shape its
+// successes arrive in; printed as it comes, a refusal read "refused: {\"error\":{\"message\":\"another
+// deployment is under way\"}}", which is the one line of a run somebody will read
+// twice. Taken out of the envelope here, once, for every caller.
+func refusalOf(raw []byte, status string) string {
+	var refused struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &refused) == nil && refused.Error.Message != "" {
+		return refused.Error.Message
+	}
+	if text := strings.TrimSpace(string(raw)); text != "" {
+		return text
+	}
+	return status
 }
 
 // deployStepsForRevert is what putting a version back goes through.

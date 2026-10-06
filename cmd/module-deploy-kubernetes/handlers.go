@@ -107,6 +107,32 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One deployment per place at a time, asked while a refusal can still be a refusal.
+	//
+	// The same question the rollback asks before it begins, and for the same reason: the
+	// busy case is discovered when the record is written, which is after the answer has
+	// already started, so the reason has nowhere to go — the caller is told the module
+	// said nothing at all, over a deployment that was refused for a reason everybody
+	// could have acted on. Asked first, this is a 409 with a sentence in it and nothing
+	// has happened yet.
+	for _, place := range places {
+		namespace := strings.TrimSpace(request.Namespace)
+		if namespace == "" {
+			namespace = place.DefaultNamespace
+		}
+		running, err := c.history.Current(ctx, request.Project, place.Name, namespace)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if running != nil && running.State == deploy.StateRunning {
+			writeError(w, http.StatusConflict, fmt.Sprintf(
+				"another deployment is under way in %s/%s (%s), so nothing was deployed here",
+				place.Name, namespace, describeImage(running.Image)))
+			return
+		}
+	}
+
 	// The answer is a stream, not a value: a deployment takes minutes, and a caller
 	// that hears nothing until the end is watching a spinner rather than a rollout.
 	//

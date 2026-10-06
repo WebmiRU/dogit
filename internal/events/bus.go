@@ -25,12 +25,78 @@ type Bus struct {
 	store  *store.Store
 	log    *slog.Logger
 	mu     sync.RWMutex
-	subs   map[int]chan models.Event
+	subs   map[int]*subscriber
 	nextID int
 }
 
 func New(st *store.Store, log *slog.Logger) *Bus {
-	return &Bus{store: st, log: log, subs: map[int]chan models.Event{}}
+	return &Bus{store: st, log: log, subs: map[int]*subscriber{}}
+}
+
+// subscriber is one consumer's delivery: a channel to read, and a queue behind it that
+// grows instead of overflowing.
+//
+// The queue is the whole point. A fixed channel drops what does not fit, and the claim
+// that made that acceptable — "it will catch up via the durable log" — is false for the
+// reader of the log itself: RunTail's cursor has already moved past those rows, and
+// nothing ever asks for them again. So a replay that outran its subscriber dropped the
+// pushes it had not reached yet, silently, and the first pushes after a restart were
+// the ones that went missing.
+//
+// A queue that grows costs nothing when nobody is behind — which is the ordinary case —
+// and the alternative is a lost push.
+type subscriber struct {
+	ch chan models.Event
+
+	mu     sync.Mutex
+	queue  []models.Event
+	closed bool
+	// wake says there is something to move; quiet says stop.
+	wake  chan struct{}
+	quiet chan struct{}
+	done  chan struct{}
+}
+
+// offer hands an event over, blocking only for as long as the queue is locked.
+func (s *subscriber) offer(ev models.Event) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.queue = append(s.queue, ev)
+	s.mu.Unlock()
+}
+
+// pump moves the queue into the channel, one event at a time, until told to stop.
+func (s *subscriber) pump() {
+	defer close(s.done)
+	for {
+		s.mu.Lock()
+		if s.closed && len(s.queue) == 0 {
+			s.mu.Unlock()
+			return
+		}
+		if len(s.queue) == 0 {
+			s.mu.Unlock()
+			// Idle, rather than spinning: an empty queue is the ordinary state.
+			select {
+			case <-s.wake:
+			case <-s.quiet:
+				return
+			}
+			continue
+		}
+		ev := s.queue[0]
+		s.queue = s.queue[1:]
+		s.mu.Unlock()
+
+		select {
+		case s.ch <- ev:
+		case <-s.quiet:
+			return
+		}
+	}
 }
 
 // Publish appends an event to the durable log.
@@ -51,32 +117,53 @@ func (b *Bus) Publish(ctx context.Context, kind models.EventKind, projectID, act
 // function that unsubscribes. The channel is buffered; a slow consumer is
 // dropped rather than allowed to block publishers.
 func (b *Bus) Subscribe(buffer int) (<-chan models.Event, func()) {
-	ch := make(chan models.Event, buffer)
+	if buffer <= 0 {
+		buffer = 1
+	}
+	sub := &subscriber{
+		ch:    make(chan models.Event, buffer),
+		wake:  make(chan struct{}, 1),
+		quiet: make(chan struct{}),
+		done:  make(chan struct{}),
+	}
+	go sub.pump()
 
 	b.mu.Lock()
 	id := b.nextID
 	b.nextID++
-	b.subs[id] = ch
+	b.subs[id] = sub
 	b.mu.Unlock()
 
-	return ch, func() {
+	return sub.ch, func() {
 		b.mu.Lock()
-		if c, ok := b.subs[id]; ok {
-			delete(b.subs, id)
-			close(c)
-		}
+		delete(b.subs, id)
 		b.mu.Unlock()
+
+		sub.mu.Lock()
+		if sub.closed {
+			sub.mu.Unlock()
+			return
+		}
+		sub.closed = true
+		sub.mu.Unlock()
+		close(sub.quiet)
+		<-sub.done
 	}
 }
 
 func (b *Bus) broadcast(ev models.Event) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-	for _, ch := range b.subs {
+	subs := make([]*subscriber, 0, len(b.subs))
+	for _, sub := range b.subs {
+		subs = append(subs, sub)
+	}
+	b.mu.RUnlock()
+
+	for _, sub := range subs {
+		sub.offer(ev)
 		select {
-		case ch <- ev:
+		case sub.wake <- struct{}{}:
 		default:
-			// Consumer is behind; it will catch up via the durable log.
 		}
 	}
 }
