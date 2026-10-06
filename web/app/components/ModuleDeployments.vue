@@ -855,7 +855,11 @@ async function load() {
       page: String(page.value),
       per_page: String(PAGE),
     })
+    // The namespace as well as the cluster: one row is one place, and a place is both.
+    // Scoped by the cluster alone, a project that deploys to two namespaces of one
+    // cluster is shown the other one's rollouts as if they were this row's own.
     if (scopedCluster.value) query.set('cluster', scopedCluster.value)
+    if (scopedNamespace.value) query.set('namespace', scopedNamespace.value)
     const answer = await api.get<DeploymentsPage>(
       `/projects/${props.projectId}/deployments?${query}`,
     )

@@ -118,6 +118,11 @@ func TestAnAbandonedDeploymentDoesNotHoldThePlace(t *testing.T) {
 	next := stale
 	next.ID = uuid.New()
 	next.Image = "reg/app@sha256:ddd"
+	// It starts now, which is the whole point: it is a deployment begun after the one
+	// that was abandoned, so it is the current one. Inheriting the abandoned row's start
+	// would leave two rows with the same age and a "which is current" question the
+	// database answers by whichever row it happens to read first.
+	next.StartedAt = time.Now()
 
 	if _, err := history.Begin(ctx, next); err != nil {
 		t.Fatalf("an abandoned deployment held the place: %v", err)

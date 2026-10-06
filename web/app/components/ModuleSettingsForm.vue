@@ -159,7 +159,12 @@ function rowName(spec: SettingSpec, row: SettingEntry): string {
   const parts: string[] = []
   for (const field of identify) {
     const text = asString(row[field]).trim()
-    if (!text) return ''
+    if (!text) {
+      // A name this scope has not decided is not a name it holds — but the row is still
+      // called something, and this is what it is called. Matching a row by that is how a
+      // form about one place finds it when the place is somebody else's.
+      return asString(row.dogit_row_name).trim()
+    }
     parts.push(text)
   }
   return parts.join(' ')
@@ -175,7 +180,11 @@ function rowName(spec: SettingSpec, row: SettingEntry): string {
  */
 function rowIsOurs(spec: SettingSpec, row: SettingEntry, index?: number): boolean {
   if (!(spec.items?.identify?.length)) return true
-  if (!rowName(spec, row)) return false
+  // A row that cannot be recognised at all is not a row: there is nothing to write it onto
+  // and nothing to say it is anybody's. A row the core gave an identity to is a row,
+  // named or not — the name may well be the level above's, and that is not a reason to
+  // pretend this scope has decided nothing about it.
+  if (!row.dogit_row_id && !rowName(spec, row)) return false
   if (decidedFields(spec, row).length > 0) return true
   if (index === undefined) return false
   // A row that was not here when the page was loaded is this scope's own: it is the one
@@ -219,8 +228,10 @@ function decidedFields(spec: SettingSpec, row: SettingEntry): string[] {
   const identify = new Set(spec.items?.identify ?? [])
   // A row's identity is not a decision: the core writes it, the page never shows it, and
   // counting it would make every inherited row look like this scope's own — which is how
-  // an inherited row ended up with a Remove button.
-  const core = new Set([...coreRowFields(spec), 'dogit_row_id'])
+  // an inherited row ended up with a Remove button. Neither is the core's word for
+  // whose row a row is: it is bookkeeping, and a page that decided it could not be
+  // believed if it did.
+  const core = new Set([...coreRowFields(spec), ...coreBookkeeping])
   return Object.keys(row).filter((key) => !identify.has(key) && !core.has(key))
 }
 
@@ -302,6 +313,17 @@ function coerceRow(spec: SettingSpec, row: SettingEntry): SettingEntry {
   if (typeof row.dogit_row_id === 'string') out.dogit_row_id = row.dogit_row_id
   return out
 }
+
+/**
+ * The core's own bookkeeping on a row, written by the core and never sent back.
+ *
+ * `dogit_row_id` is how a row is recognised as itself after its name has changed,
+ * `dogit_row_own` is the core's answer to "was this row written here" — the only thing
+ * that decides whether the row may be deleted on this page — and `dogit_row_name` is what
+ * the row is called where it was written, said so that a row with no name of its own here
+ * can still be titled and found.
+ */
+const coreBookkeeping = ['dogit_row_id', 'dogit_row_own', 'dogit_row_name']
 
 /** The two fields the core keeps in a list whose entries have names. */
 function coreRowFields(spec: SettingSpec): string[] {
@@ -405,7 +427,7 @@ function fieldValue(field: SettingSpec, value: unknown): unknown {
  * What is sent is what this scope decides about that row — see listSettable — so
  * saving one row never touches the rows above it or the rows beside it.
  */
-async function saveRow(spec: SettingSpec, index: number) {
+async function saveRow(spec: SettingSpec, row: SettingEntry) {
   if (isList(spec)) {
     // The whole list, every row this scope has an answer about, and not just the row
     // under the hand.
@@ -413,12 +435,13 @@ async function saveRow(spec: SettingSpec, index: number) {
     // One scope stores one list, so saving a list replaces it. Sending only the row that
     // was edited would drop every other row this scope has decided — which is how "save
     // one cluster" quietly deleted the cluster beside it. Each row still saves itself:
-    // what is sent for a row is only what this scope decided about that row.
-    if (!entriesOf(values.value[spec.key])[index]) return
+    // what is sent for a row is only what this scope decided about that row, and a card
+    // about one place has the rest of the list already loaded to send with it.
+    if (whereIs(spec, row) < 0) return
 
     const value = listSettable(spec, values.value[spec.key])
     await saveOne(spec.key, value === undefined ? [] : value)
-    await settleRow(spec, index)
+    await settleRow(spec, row)
     emit('saved')
     return
   }
@@ -426,6 +449,12 @@ async function saveRow(spec: SettingSpec, index: number) {
   if (value === undefined) return
   await saveOne(spec.key, value)
   settleSetting(spec)
+}
+
+/** The same for a setting that is one value rather than a list of rows. */
+async function saveSetting(spec: SettingSpec) {
+  if (isList(spec)) return
+  await saveRow(spec, values.value[spec.key] as SettingEntry)
 }
 
 /** One setting at one scope. */
@@ -456,18 +485,20 @@ async function saveOne(key: string, value: unknown) {
  * Only this row is settled. Reloading the whole form would throw away the edits
  * somebody has half-made in the rows beside it.
  */
-async function settleRow(spec: SettingSpec, index: number) {
+async function settleRow(spec: SettingSpec, row: SettingEntry) {
+  const index = whereIs(spec, row)
+  if (index < 0) return
   try {
     const answer = await api.get<{ own?: Record<string, unknown> }>(
       `/modules/${props.module.id}/settings?${scopeQuery.value}`,
     )
-    const row = entriesOf(answer.own?.[spec.key])[index]
+    const arrived = entriesOf(answer.own?.[spec.key])[index]
     const current = entriesOf(values.value[spec.key])
-    if (!row || !current[index]) return
-    current[index] = { ...row }
+    if (!arrived || !current[index]) return
+    current[index] = { ...arrived }
     values.value = { ...values.value, [spec.key]: current }
     const baseline = entriesOf(saved.value[spec.key])
-    if (baseline[index]) baseline[index] = clone(row)
+    if (baseline[index]) baseline[index] = clone(arrived)
     saved.value = { ...saved.value, [spec.key]: baseline }
   } catch {
     // A row that could not be read back is left dirty rather than marked saved: it is
@@ -489,16 +520,12 @@ function settleSetting(spec: SettingSpec) {
  * that is no longer on screen at all. Without this, Remove removed the row from the form
  * and left the Save button grey, which is a deletion that silently does nothing.
  */
-function rowChanged(spec: SettingSpec, index: number): boolean {
-  const rows = entriesOf(values.value[spec.key])
-  const was = entriesOf(saved.value[spec.key])
-  const row = rows[index]
-  const before = was[index]
-  if (!row || !before) return true
-  if (JSON.stringify(row) !== JSON.stringify(before)) return true
-  // Fewer rows than are stored: something between here and the end has been removed, and
-  // the last row on screen is where that is saved from.
-  return rows.length < was.length && index === rows.length - 1
+function rowChanged(spec: SettingSpec, row: SettingEntry): boolean {
+  const index = whereIs(spec, row)
+  if (index < 0) return false
+  const before = entriesOf(saved.value[spec.key])[index]
+  if (!before) return true
+  return JSON.stringify(row) !== JSON.stringify(before)
 }
 
 /** Whether one setting is different from what is stored. */
@@ -507,12 +534,26 @@ function settingChanged(spec: SettingSpec): boolean {
 }
 
 /** Puts one row back to what is stored, leaving the others as they are. */
-function revertRow(spec: SettingSpec, index: number) {
+function revertRow(spec: SettingSpec, row: SettingEntry) {
+  const index = whereIs(spec, row)
+  if (index < 0) return
   const current = entriesOf(values.value[spec.key])
   const was = entriesOf(saved.value[spec.key])[index]
   if (!was) return
   current[index] = clone(was)
   values.value = { ...values.value, [spec.key]: current }
+}
+
+/**
+ * Where a row is in the whole list, asked of the row itself.
+ *
+ * The page may be showing one row of many — a card about one place shows that place's row
+ * and no other — and a number taken from the loop over what is on screen is the number of
+ * that place in a list it is not part of. Everything that reads or writes a row asks
+ * where the row is, rather than being told.
+ */
+function whereIs(spec: SettingSpec, row: SettingEntry): number {
+  return entriesOf(values.value[spec.key]).indexOf(row)
 }
 
 /** Puts one setting back to what is stored. */
@@ -539,16 +580,13 @@ async function reset(spec: SettingSpec) {
 /**
  * What a field shows.
  *
- * The field that says which row this is is never blanked: an unnamed row cannot be
- * saved, and a row whose name has to be retyped in order to be saved at all grows a
- * second entry with the same name the moment somebody tries to change one of its values.
- * A name is not a value to override — it is what a value is attached to.
- *
- * Everything else is whatever this row holds, and a field the row does not hold is one
- * the levels above are holding: empty, with the placeholder saying so.
+ * Whatever this row holds, and a field the row does not hold is empty. The name of a
+ * place is no exception: a name this scope has not decided is not written into the field,
+ * so an empty field means the same thing here as anywhere else — the value comes from the
+ * level above — and what the row is called is said once, in the row's own heading, where
+ * it can be read without being saved back.
  */
 function shownValue(spec: SettingSpec, row: SettingEntry, key: string): string {
-  if ((spec.items?.identify ?? []).includes(key)) return asString(row[key])
   return asString(row[key])
 }
 
@@ -556,10 +594,11 @@ function shownValue(spec: SettingSpec, row: SettingEntry, key: string): string {
  * Whether a field of this row is not this scope's to say.
  *
  * On the field itself, from the row and the key, so every control asks the same question
- * the same way. A field the row does not carry is one nobody here has decided.
+ * the same way. A field the row does not carry is one nobody here has decided — the name
+ * of a place included, which is why clearing it says "no name of my own" rather than
+ * "a place called nothing", and the field above says so where it can be read.
  */
 function inheritedNow(spec: SettingSpec, row: SettingEntry, key: string): boolean {
-  if ((spec.items?.identify ?? []).includes(key)) return false
   // Nothing is above the instance, so a field the instance has not set is simply unset
   // there — and saying "inherited" on the top of the chain would point at nothing.
   if (props.scope === 'instance') return false
@@ -635,10 +674,37 @@ const emit = defineEmits<{ saved: [] }>()
  * in use here, and that is a switch rather than a deletion: the row stays written down
  * with its kubeconfig, and switching it back on brings it back.
  */
-function removeEntry(spec: SettingSpec, index: number) {
+async function removeEntry(spec: SettingSpec, row: SettingEntry) {
   const rows = entriesOf(values.value[spec.key])
-  rows.splice(index, 1)
-  values.value[spec.key] = rows
+  const at = rows.indexOf(row)
+  if (at < 0 || busy.value) return
+  const title = entryTitle(spec, row)
+
+  // Removed first on the page, and written down at once.
+  //
+  // A Remove that waits for a Save is a button that deletes a row from the form and
+  // leaves the stored row where it is, and the Save it is waiting for is on the row that
+  // was just deleted — so the deletion could never be saved from here at all. Same bargain
+  // as the switches: a thing you do, not a thing you fill in and confirm.
+  const before = rows.slice()
+  rows.splice(at, 1)
+  values.value = { ...values.value, [spec.key]: rows }
+  busy.value = true
+  error.value = ''
+  try {
+    const value = listSettable(spec, rows)
+    await saveOne(spec.key, value === undefined ? [] : value)
+    await load()
+    notify(`${title} is no longer a row of this form`, { type: 'success', timer: 5 })
+    emit('saved')
+  } catch (caught) {
+    values.value = { ...values.value, [spec.key]: before }
+    const message = caught instanceof ApiError ? caught.message : 'the request failed'
+    error.value = message
+    notify(message, { type: 'error', timer: 0 })
+  } finally {
+    busy.value = false
+  }
 }
 
 /**
@@ -649,12 +715,16 @@ function removeEntry(spec: SettingSpec, index: number) {
  */
 function rowIsOwn(spec: SettingSpec, row: SettingEntry): boolean {
   if (!spec.items?.identify?.length) return true
+  // The core says which rows were written here, and it is the only thing that knows: a
+  // row that decided nothing at this level — a cluster the instance configured, or a group
+  // — arrives carrying nothing but its name, exactly like a row somebody added and left
+  // alone. Guessing from the fields a row happens to carry is what put a Remove on an
+  // inherited row and took it off an administrator's own cluster.
+  if (row.dogit_row_own === true) return true
   const index = entriesOf(values.value[spec.key]).indexOf(row)
   if (index < 0) return false
-  // Only a row that was added here can be deleted here. A row that came from the level
-  // above is not this scope's to remove, whatever this scope has decided about it: what
-  // this scope may say about somebody else's cluster is whether it is in use, and a Remove
-  // on it is a deletion that either silently does nothing or takes away somebody else's.
+  // And a row that was not on the page when it loaded is this scope's own: it is the one
+  // somebody added just now.
   return !entriesOf(saved.value[spec.key])[index]
 }
 
@@ -693,7 +763,9 @@ const inheritedNote = [
  */
 function rowsOf(spec: SettingSpec): SettingEntry[] {
   const rows = entriesOf(values.value[spec.key])
-  if (!props.onlyRow || !rowName(spec, {})) return rows
+  // Nothing to look a row up by: a list whose entries have no names is one list, and the
+  // first row of it is as good a match as any.
+  if (!props.onlyRow || !(spec.items?.identify?.length)) return rows
   // The row this page is about is remembered by where it was, not by what it is called.
   //
   // A name is what the page was asked about, so it is also the one thing that changes:
@@ -701,7 +773,8 @@ function rowsOf(spec: SettingSpec): SettingEntry[] {
   // row up by name would show nothing at all — the row would disappear the moment it
   // was saved, which reads as a save that did nothing.
   const at = rows.findIndex((row) => rowName(spec, row) === props.onlyRow)
-  return at >= 0 ? [rows[at]] : rows.slice(0, 1)
+  const row = at >= 0 ? rows[at] : rows[0]
+  return row ? [row] : []
 }
 
 /** What a row is called in the list: its first field, or "entry". */
@@ -713,11 +786,15 @@ function entryTitle(spec: SettingSpec, row: SettingEntry): string {
     const text = asString(row[field.key]).trim()
     if (text) return text
   }
+  // Nothing here has a name of its own, so the row is titled by what the core says it is
+  // called — the name it has where it was written, which is not a value to save here.
+  const label = asString(row.dogit_row_name).trim()
+  if (label) return label
   return 'a new row'
 }
 
 onMounted(load)
-watch(() => [props.module.id, props.scope, props.scopeID], load)
+watch(() => [props.module.id, props.scope, props.scopeId], load)
 </script>
 
 <template>
@@ -740,9 +817,12 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
         <!-- A list is its own block rather than a control in the two-column row:
              one row of a list is already a group of values, and putting that inside a
              260px column would be unreadable. -->
-        <div v-if="spec.type === 'list'" class="setting-list">
+        <div v-if="spec.type === 'list'" class="setting-list" :class="{ bare: onlyRow }">
           <div v-for="(row, index) in rowsOf(spec)" :key="index" class="setting-entry">
-            <div class="setting-entry-head">
+            <!-- No heading of its own on a place's tab: the row that names the place is
+                 the one with the switches, a screen's width above this, and a second
+                 heading saying the same name is the same fact twice. -->
+            <div v-if="!onlyRow" class="setting-entry-head">
               <span class="setting-entry-name">{{ entryTitle(spec, row) }}</span>
               <!-- Which of these rows are this scope's own. Without it a page of
                    inherited rows looks like a page of things decided here, and the
@@ -764,10 +844,11 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 class="row-switches"
                 :title="inheritedNote"
               >
-              <label
-                class="row-switch"
-              >
-                <span class="row-switch-name">Autodeploy</span>
+              <!-- The name sits after the switch, as it does everywhere else on the
+                   page: a switch with a name on its left and one with a name on its
+                   right are two rows that read as one, and a name is found in the same
+                   place on every switch or in none. -->
+              <label class="row-switch">
                 <button
                   class="switch"
                   :class="{ on: rowAutoDeploy(row) }"
@@ -779,9 +860,9 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 >
                   <span class="knob" />
                 </button>
+                <span class="row-switch-name">Autodeploy</span>
               </label>
               <label class="row-switch">
-                <span class="row-switch-name">In use</span>
                 <button
                   class="switch"
                   :class="{ on: rowInUse(row) }"
@@ -793,6 +874,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 >
                   <span class="knob" />
                 </button>
+                <span class="row-switch-name">In use</span>
               </label>
               </div>
               <button
@@ -800,7 +882,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 class="link-button row-remove"
                 type="button"
                 :disabled="busy || !mayEdit"
-                @click="removeEntry(spec, index)"
+                @click="removeEntry(spec, row)"
               >
                 Remove
               </button>
@@ -884,34 +966,45 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                    buttons keep their width while they are disabled: a row that changes
                    shape when a switch is flicked makes the switch feel like it moved
                    something. -->
-              <span class="muted small pending" :class="{ show: rowChanged(spec, index) }">
+              <span class="muted small pending" :class="{ show: rowChanged(spec, row) }">
                 not saved yet
               </span>
+              <!-- Where a row this scope wrote is removed from, when the row's heading
+                   — which is where it is removed from everywhere else — is the place's
+                   own heading above. -->
+              <button
+                v-if="onlyRow && (rowIsOwn(spec, row) || !spec.items?.identify?.length)"
+                class="link-button row-remove"
+                type="button"
+                :disabled="busy || !mayEdit"
+                @click="removeEntry(spec, row)"
+              >
+                Remove this place
+              </button>
               <button
                 class="btn btn-small"
                 type="button"
-                :disabled="busy || !mayEdit || !rowChanged(spec, index)"
-                @click="revertRow(spec, index)"
+                :disabled="busy || !mayEdit || !rowChanged(spec, row)"
+                @click="revertRow(spec, row)"
               >
                 Discard
               </button>
               <button
                 class="btn btn-small btn-primary"
                 type="button"
-                :disabled="busy || !mayEdit || !rowChanged(spec, index)"
-                @click="saveRow(spec, index)"
+                :disabled="busy || !mayEdit || !rowChanged(spec, row)"
+                @click="saveRow(spec, row)"
               >
-                {{ busy ? 'Saving…' : 'Save this row' }}
+                {{ busy ? 'Saving…' : 'Save' }}
               </button>
             </div>
           </div>
 
-          <!-- Adding is allowed on a place's tab too: a project may name a cluster the
-               instance has none of, and the only place to add a place should be the page
-               that is about places. The row it adds is this project's own, and is the one
-               row on this tab that can be deleted again. -->
+          <!-- Adding is not here: on a place's tab the rows are that one place, and the
+               button that adds a place belongs below the list of places, where the list
+               it adds to is. -->
           <button
-            v-if="mayEdit"
+            v-if="mayEdit && !onlyRow"
             class="btn btn-small"
             type="button"
             :disabled="busy"
@@ -987,7 +1080,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
             class="btn btn-small btn-primary"
             type="button"
             :disabled="busy || !settingChanged(spec)"
-            @click="saveRow(spec, -1)"
+            @click="saveSetting(spec)"
           >
             {{ busy ? 'Saving…' : 'Save' }}
           </button>
@@ -1066,6 +1159,22 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
   background: var(--bg-inset);
 }
 
+/* On a place's tab the fields are that place's own settings, one level up from here and
+   already inside the place's block: a second box inside a box draws a line round a thing
+   that is one thing, and the row above it already says which thing. */
+.setting-list.bare .setting-entry {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+.setting-list.bare .setting-entry-actions {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 12px;
+}
+
 .setting-entry-head {
   display: flex;
   flex-wrap: wrap;
@@ -1118,6 +1227,9 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
   align-items: center;
   gap: 6px;
   cursor: pointer;
+  /* Labels carry a bottom margin from the page's form styles; a switch's label is not a
+     form control's margin, and six pixels of it lifts the switch off its own row. */
+  margin-bottom: 0;
 }
 
 .row-switch-name {

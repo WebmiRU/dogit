@@ -45,6 +45,219 @@ func deleteIntegration(t *testing.T, f *moduleFixture, id uuid.UUID) {
 
 // A settings page is told what its own scope decided and nothing else.
 //
+// Changing one switch must not change the other.
+//
+// A save replaces a level's whole list of rows, so a page sends the row it has — which
+// carries this scope's other decisions too. They survive only if the core compares the
+// row against the level above and not against what this level said last time: an
+// Autodeploy that is off is not a copy of anything above it, and dropping it as one
+// turns a switch off by hand back on by itself.
+func TestChangingOneSwitchLeavesTheOtherAlone(t *testing.T) {
+	f := newModuleFixture(t)
+	module := registerDeployModule(t, f)
+	project := dbtest.NewProject(t, f.store, "two-switches", nil)
+	scope := "scope=project&projectID=" + project.ID.String()
+
+	put := func(query, value string) {
+		t.Helper()
+		path := "/modules/" + module.ID.String() + "/settings?key=clusters&" + query
+		if recorder := f.asAdmin(t, http.MethodPut, path, `{"value":`+value+`}`); recorder.Code != http.StatusOK {
+			t.Fatalf("save at %s: %d %s", query, recorder.Code, recorder.Body.String())
+		}
+	}
+	read := func() string {
+		t.Helper()
+		recorder := f.asAdmin(t, http.MethodGet,
+			"/modules/"+module.ID.String()+"/settings?"+scope, "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("read: %d %s", recorder.Code, recorder.Body.String())
+		}
+		var answer struct {
+			Own map[string]json.RawMessage `json:"own"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+			t.Fatalf("read the answer: %v", err)
+		}
+		return string(answer.Own["clusters"])
+	}
+
+	put("scope=instance", `[{"name":"prod","kubeconfig":"K"}]`)
+	put(scope, `[{"name":"prod","auto_deploy":false}]`)
+	// Then somebody switches In use off, and the row the page sends still carries the
+	// Autodeploy it was sent.
+	put(scope, `[{"name":"prod","enabled":false,"auto_deploy":false}]`)
+
+	if got := read(); !strings.Contains(got, `"auto_deploy":false`) {
+		t.Errorf("the project has %s, want its Autodeploy off still", got)
+	}
+
+	// And it stays off when the page is not even the one saving: what applies is what
+	// the switches say.
+	effective, err := f.store.Integrations().SettingsFor(t.Context(), module.ID, nil,
+		&project.ID, module.Capabilities.Settings)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got := string(effective["clusters"]); !strings.Contains(got, `"auto_deploy":false`) {
+		t.Errorf("what applies is %s, want Autodeploy off", got)
+	}
+}
+
+// A name is a decision like any other field, and an empty one is no decision.
+//
+// The core used to send the inherited name as though this scope had written it, so a
+// page that cleared the name and saved was handed the same name back — which reads as
+// "clearing a field does nothing" and teaches that about every field on the page. The
+// name comes as itself, and a name of this scope's own comes as a field like any other:
+// a rename, and one field overridden rather than a second row.
+func TestANameIsDecidedHereOrItIsNotDecided(t *testing.T) {
+	f := newModuleFixture(t)
+	module := registerDeployModule(t, f)
+	project := dbtest.NewProject(t, f.store, "names", nil)
+	scope := "scope=project&projectID=" + project.ID.String()
+
+	put := func(query, value string) {
+		t.Helper()
+		path := "/modules/" + module.ID.String() + "/settings?key=clusters&" + query
+		if recorder := f.asAdmin(t, http.MethodPut, path, `{"value":`+value+`}`); recorder.Code != http.StatusOK {
+			t.Fatalf("save at %s: %d %s", query, recorder.Code, recorder.Body.String())
+		}
+	}
+	ownOf := func(query string) string {
+		t.Helper()
+		recorder := f.asAdmin(t, http.MethodGet,
+			"/modules/"+module.ID.String()+"/settings?"+query, "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("read %s: %d %s", query, recorder.Code, recorder.Body.String())
+		}
+		var answer struct {
+			Own map[string]json.RawMessage `json:"own"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+			t.Fatalf("read the answer: %v", err)
+		}
+		return string(answer.Own["clusters"])
+	}
+
+	put("scope=instance", `[{"name":"prod","kubeconfig":"K"}]`)
+
+	// The instance named it, so the project is shown what it is called and no field for it.
+	if got := ownOf(scope); strings.Contains(got, `"name"`) {
+		t.Errorf("the project is shown %s, want the inherited name not offered as its own", got)
+	}
+
+	// Writing a name of its own is a rename of one row, not a second row of the same
+	// cluster — and it is written down as a field, because this scope decided it. The row
+	// carries the identity the core gave it, which is how the rename is found to be the
+	// row it renames.
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(ownOf(scope)), &rows); err != nil || len(rows) != 1 {
+		t.Fatalf("the project is shown %v, want the one place", err)
+	}
+	id, _ := rows[0]["dogit_row_id"].(string)
+	put(scope, `[{"dogit_row_id":"`+id+`","name":"prod-eu"}]`)
+	got := ownOf(scope)
+	if !strings.Contains(got, `"name":"prod-eu"`) {
+		t.Errorf("the project is shown %s, want its own name", got)
+	}
+
+	// And what applies is one cluster still, under the name this project gave it.
+	effective, err := f.store.Integrations().SettingsFor(t.Context(), module.ID, nil,
+		&project.ID, module.Capabilities.Settings)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rows := string(effective["clusters"]); strings.Count(rows, "dogit_row_id") != 1 {
+		t.Errorf("what applies is %s, want one row", rows)
+	}
+
+	// Clearing it is no decision again, and the row goes back to being inherited — with
+	// its switches intact, which is what an empty field must not take with it.
+	put(scope, `[{"name":"","auto_deploy":false}]`)
+	got = ownOf(scope)
+	if strings.Contains(got, `"name"`) {
+		t.Errorf("the project is shown %s, want its name gone again", got)
+	}
+	if !strings.Contains(got, `"auto_deploy":false`) {
+		t.Errorf("the project is shown %s, want its Autodeploy still off", got)
+	}
+}
+
+// A row says whether it was written here, because only the core can know.
+//
+// A row comes to a page stripped down to what this scope decided, so a cluster the
+// instance configured arrives as a name and nothing else — indistinguishable from a row
+// somebody added here and left alone. Which decides two things a page must not get
+// wrong: whether the row may be deleted here, and whether saving a shorter list is a
+// deletion or a no-op.
+func TestARowSaysWhetherThisScopeWroteIt(t *testing.T) {
+	f := newModuleFixture(t)
+	module := registerDeployModule(t, f)
+	project := dbtest.NewProject(t, f.store, "own-rows", nil)
+
+	put := func(query, value string) {
+		t.Helper()
+		path := "/modules/" + module.ID.String() + "/settings?key=clusters&" + query
+		if recorder := f.asAdmin(t, http.MethodPut, path, `{"value":`+value+`}`); recorder.Code != http.StatusOK {
+			t.Fatalf("save at %s: %d %s", query, recorder.Code, recorder.Body.String())
+		}
+	}
+	ownOf := func(query string) []map[string]any {
+		t.Helper()
+		recorder := f.asAdmin(t, http.MethodGet,
+			"/modules/"+module.ID.String()+"/settings?"+query, "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("read %s: %d %s", query, recorder.Code, recorder.Body.String())
+		}
+		var answer struct {
+			Own map[string]any `json:"own"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+			t.Fatalf("read the answer: %v", err)
+		}
+		rows, _ := answer.Own["clusters"].([]any)
+		out := make([]map[string]any, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, row.(map[string]any))
+		}
+		return out
+	}
+
+	put("scope=instance", `[{"name":"prod","kubeconfig":"K"}]`)
+
+	// Nothing is above the instance, so everything on its page was written here.
+	instanceRows := ownOf("scope=instance")
+	if len(instanceRows) != 1 || instanceRows[0]["dogit_row_own"] != true {
+		t.Errorf("the instance is shown %v, want its row said to be its own", instanceRows)
+	}
+
+	// The project's page: the instance's cluster is not its own, and a cluster it writes
+	// down itself is.
+	scope := "scope=project&projectID=" + project.ID.String()
+	put(scope, `[{"name":"spare","kubeconfig":"K2"}]`)
+
+	projectRows := ownOf(scope)
+	if len(projectRows) != 2 {
+		t.Fatalf("the project is shown %v, want both places", projectRows)
+	}
+	for _, row := range projectRows {
+		wrote := row["dogit_row_own"] == true
+		if row["name"] == "prod" && wrote {
+			t.Errorf("a place written at the instance is claimed as the project's own: %v", row)
+		}
+		if row["name"] == "spare" && !wrote {
+			t.Errorf("a place the project wrote is not said to be its own: %v", row)
+		}
+	}
+
+	// And a page cannot claim one: ownership is the core's answer, so a row that says so
+	// is not stored with it, and the next read tells the truth again.
+	put(scope, `[{"name":"prod","dogit_row_own":true,"auto_deploy":false}]`)
+	if rows := ownOf(scope); len(rows) == 0 || rows[0]["dogit_row_own"] == true {
+		t.Errorf("the project is shown %v, want its row not claimed", rows)
+	}
+}
+
 // A value the level above holds is not sent at all — not masked, not blanked: a browser
 // holding it is holding it whatever the page does with it. A row arrives as its name and
 // the fields this scope overrode, so that a project can be shown a place it uses without
@@ -92,8 +305,8 @@ func TestASettingsPageIsToldOnlyWhatItsOwnScopeDecided(t *testing.T) {
 	// The name is how the page says "this place exists"; everything else is this
 	// project's own business.
 	prod := rows[0].(map[string]any)
-	if prod["name"] != "prod" {
-		t.Errorf("the first place is %v, want it named", prod)
+	if prod["dogit_row_name"] != "prod" {
+		t.Errorf("the first place is %v, want it called prod", prod)
 	}
 	if prod["default_namespace"] != "dogit" {
 		t.Errorf("the namespace it overrode is %v, want its own", prod["default_namespace"])
@@ -102,17 +315,23 @@ func TestASettingsPageIsToldOnlyWhatItsOwnScopeDecided(t *testing.T) {
 		t.Errorf("the page was handed a kubeconfig: %v", prod)
 	}
 	stage := rows[1].(map[string]any)
-	if stage["name"] != "stage" {
-		t.Errorf("the second place is %v, want it named too", stage)
+	if stage["dogit_row_name"] != "stage" {
+		t.Errorf("the second place is %v, want it called stage too", stage)
 	}
-	// A place this project overrode nothing of comes as a name and its identity: the
-	// name is how the page says "this place exists", and the identity is the core's own
-	// bookkeeping, which is how the row is recognised after its name is changed here.
+	// A place this project overrode nothing of comes as the core's own word for what it
+	// is called, and the row's identity. The name is how the page says "this place
+	// exists", and it is not one of the fields: a field is an answer this scope gave, and
+	// the answer "the place above is called this" is not one — it is what happens when
+	// nobody has answered. Handing it over as a field is what made clearing the name
+	// look like it had done nothing.
 	for key := range stage {
-		if key != "name" && key != "dogit_row_id" {
+		if key != "dogit_row_id" && key != "dogit_row_name" {
 			t.Errorf("the page was handed %s=%v for a place this project overrode nothing of",
 				key, stage[key])
 		}
+	}
+	if stage["dogit_row_name"] != "stage" {
+		t.Errorf("the second place is called %v, want it called stage", stage["dogit_row_name"])
 	}
 
 	// And nothing anywhere in the answer is the instance's: not in "own", not in the

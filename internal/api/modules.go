@@ -895,6 +895,25 @@ const (
 	// The core's own field, written and never shown: a page does not decide which row
 	// is which, and a row's identity is not something anybody reads.
 	rowIDField = "dogit_row_id"
+	// rowOwnField says a row was written at the scope asking for it, rather than
+	// inherited. The core is the only thing that knows: the row the page receives is
+	// stripped down to what this scope decided, and a row that has decided nothing here
+	// looks exactly like a row somebody just added and left alone.
+	//
+	// It decides two things, and both are things a page must not get wrong: whether the
+	// row may be deleted here (an inherited row may only be switched off), and whether
+	// saving a shorter list is a deletion or a no-op. Answering it by guessing from the
+	// fields a row happens to carry is how an inherited row ended up with a Remove on it
+	// and an administrator's own cluster without one.
+	rowOwnField = "dogit_row_own"
+	// rowNameField is what a row is called, for a page to call it by.
+	//
+	// It is the core's word and not a field: a name this scope has not decided is not
+	// sent as one, because an empty field that means "inherited" and comes back holding
+	// the inherited value teaches that clearing a field does nothing. The page still has
+	// to be able to say which place a row is — a row nobody can name is a row nobody can
+	// find — so the name comes as itself rather than as a field to save.
+	rowNameField = "dogit_row_name"
 )
 
 // checkListSetting refuses a list that is not a list of the fields the module
@@ -937,6 +956,8 @@ func checkListSetting(spec models.SettingSpec, value json.RawMessage) error {
 		byKey[autoDeployField] = models.SettingSpec{
 			Key: autoDeployField, Label: "Autodeploy", Type: "bool"}
 		byKey[rowIDField] = models.SettingSpec{Key: rowIDField, Label: "Row", Type: "string"}
+		byKey[rowOwnField] = models.SettingSpec{Key: rowOwnField, Label: "Own row", Type: "bool"}
+		byKey[rowNameField] = models.SettingSpec{Key: rowNameField, Label: "Row name", Type: "string"}
 	}
 
 	for index, row := range rows {
@@ -1068,10 +1089,6 @@ func (s *Server) ownSettings(effective, inherited map[string]json.RawMessage,
 	out := map[string]json.RawMessage{}
 	for key, value := range effective {
 		above, hasAbove := inherited[key]
-		if !hasAbove {
-			out[key] = value
-			continue
-		}
 
 		var spec *models.SettingSpec
 		for i := range specs {
@@ -1080,7 +1097,23 @@ func (s *Server) ownSettings(effective, inherited map[string]json.RawMessage,
 				break
 			}
 		}
-		if spec == nil || spec.Items == nil || len(spec.Items.Identify) == 0 {
+		named := spec != nil && spec.Items != nil && len(spec.Items.Identify) > 0
+
+		if !hasAbove {
+			// Nothing above holds this key at all. A named list still goes row by row:
+			// every row of it was written here, and saying so is what lets the page offer
+			// Remove on an administrator's own cluster and on nothing else.
+			if !named {
+				out[key] = value
+				continue
+			}
+			if own := ownEntries(value, nil, spec.Items.Identify); len(own) > 0 {
+				out[key] = own
+			}
+			continue
+		}
+
+		if !named {
 			// A plain value: this scope's answer or nobody's.
 			if !sameJSON(value, above) {
 				out[key] = value
@@ -1145,7 +1178,15 @@ func ownEntries(effective, inherited json.RawMessage, identify []string) json.Ra
 			}
 		}
 		if was == nil {
-			rows = append(rows, row)
+			// No counterpart above: this scope is where the row was written. Said in the
+			// row, because a row that carries nothing else cannot be told apart from one
+			// that is inherited and untouched.
+			own := make(map[string]json.RawMessage, len(row)+1)
+			for field, value := range row {
+				own[field] = value
+			}
+			own[rowOwnField] = json.RawMessage("true")
+			rows = append(rows, own)
 			continue
 		}
 		kept := map[string]json.RawMessage{}
@@ -1154,18 +1195,19 @@ func ownEntries(effective, inherited json.RawMessage, identify []string) json.Ra
 		if id, ok := row[rowIDField]; ok {
 			kept[rowIDField] = id
 		}
-		for _, field := range identify {
-			if value, ok := row[field]; ok {
-				kept[field] = value
-			}
+		// The name, as a name: it is how the page says "this place exists, and it is not
+		// yours to change". It is not written into the fields, because a field is an
+		// answer this scope gave, and the answer "the place above is called this" is not
+		// one — it is what happens when nobody has answered. The loop below still keeps
+		// the name as a field when this scope has given one of its own, which is a rename.
+		if name := nameOf(row); name != "" {
+			kept[rowNameField] = json.RawMessage(strconv.Quote(name))
 		}
 		for field, value := range row {
 			if previous, had := was[field]; !had || !sameJSON(value, previous) {
 				kept[field] = value
 			}
 		}
-		// The name comes even when this scope overrode nothing: it is how the page says
-		// "this place exists, and it is not yours to change". Nothing else does.
 		rows = append(rows, kept)
 	}
 	if len(rows) == 0 {
@@ -1220,11 +1262,18 @@ func withoutEmpties(integration *models.Integration, key string, value json.RawM
 		}
 	}
 
-	emptied := false
+	emptied, stripped := false, false
 	kept := make([]map[string]json.RawMessage, 0, len(rows))
 	for _, row := range rows {
 		trimmed := make(map[string]json.RawMessage, len(row))
 		for field, raw := range row {
+			// Whose row a row is, and what it is called, are the core's to say. A page
+			// may send both back after reading them, and storing them would let the next
+			// read believe the page.
+			if field == rowOwnField || field == rowNameField {
+				stripped = true
+				continue
+			}
 			var text string
 			if err := json.Unmarshal(raw, &text); err == nil && text == "" {
 				emptied = true
@@ -1236,7 +1285,7 @@ func withoutEmpties(integration *models.Integration, key string, value json.RawM
 			kept = append(kept, trimmed)
 		}
 	}
-	if !emptied && !identified {
+	if !emptied && !identified && !stripped {
 		return value, nil
 	}
 	encoded, err := json.Marshal(kept)
@@ -1287,12 +1336,21 @@ func (s *Server) withoutRedundant(r *http.Request, integration *models.Integrati
 		return value
 	}
 
-	var groupID, projectID *uuid.UUID
+	// The levels above this one, and only those — the same resolution the reading side
+	// stops one level up, so that "what the level above says" means the same thing on
+	// both paths.
+	//
+	// Comparing a row with what this level said last time instead is not "redundant",
+	// it is an erasure: a project that has Autodeploy off writes the whole row back
+	// when somebody turns In use off, the Autodeploy field matches the project's own
+	// previous answer, and the override is dropped as though it were a copy of the
+	// instance's — so the switch it was protecting comes back on by itself.
+	groupID, projectID := s.scopeParents(r.Context(), scopeType, scopeID)
 	switch scopeType {
 	case store.ScopeGroup:
-		groupID = scopeID
+		groupID, projectID = nil, nil
 	case store.ScopeProject:
-		projectID = scopeID
+		projectID = nil
 	}
 	above, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID,
 		groupID, projectID, integration.Capabilities.Settings)
@@ -1313,12 +1371,23 @@ func (s *Server) withoutRedundant(r *http.Request, integration *models.Integrati
 		return strings.Join(parts, " ")
 	}
 
+	// Which row of the level above a row is talking about: by the identity the core gave
+	// it first, because a name is a field a lower level may change and a row that has none
+	// of its own here — a place it has named nothing for — is matched by nothing else.
+	idOf := func(row map[string]json.RawMessage) string {
+		return strings.Trim(string(row[rowIDField]), `"`)
+	}
+
 	trimmed := false
 	kept := make([]map[string]json.RawMessage, 0, len(rows))
 	for _, row := range rows {
 		var was map[string]json.RawMessage
 		for _, one := range inherited {
-			if nameOf(one) == nameOf(row) {
+			if id := idOf(row); id != "" && idOf(one) == id {
+				was = one
+				break
+			}
+			if nameOf(one) == nameOf(row) && nameOf(row) != "" {
 				was = one
 				break
 			}
@@ -1358,7 +1427,15 @@ func (s *Server) withoutRedundant(r *http.Request, integration *models.Integrati
 			}
 			out[field] = raw
 		}
+		// A row that kept something of its own keeps its identity as well, even though
+		// the level above has one that is the same: the identity is how this row is found
+		// again — by the next save, and by the merge that puts this row back on top of the
+		// one it overrides. A row that overrides a name and arrives without its identity
+		// is a second row of the same cluster.
 		if len(out) > 0 {
+			if id, ok := row[rowIDField]; ok {
+				out[rowIDField] = id
+			}
 			kept = append(kept, out)
 		}
 	}
