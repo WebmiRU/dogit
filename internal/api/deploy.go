@@ -169,11 +169,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// The core's own steps, on the same channel the module narrates on.
 	//
 	log("Deploying to %s\n", spec.Target)
-	log("  target:    %s\n", spec.Target)
-	log("  cluster:   %s\n", spec.Cluster)
-	if spec.Namespace != "" {
-		log("  namespace: %s\n", spec.Namespace)
-	}
+	log("  module:    %s\n", spec.Module)
 
 	// The image this run built. A deployment of something else is a different thing
 	// and is refused here rather than sent on to be applied as though it were what
@@ -208,10 +204,11 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	}
 
 	request := deployRequest{
-		Project:        project.Path,
-		Target:         spec.Target,
-		Cluster:        spec.Cluster,
-		Namespace:      spec.Namespace,
+		Project: project.Path,
+		// Where in the cluster, and which cluster, is the place's own business: it is
+		// written down on the row that carries the kubeconfig, and a configuration that
+		// repeated it here would be a second place to keep in step with the first.
+		Place:          spec.Target,
 		Image:          image,
 		Placeholder:    imagePlaceholder,
 		Manifests:      manifests,
@@ -223,7 +220,6 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		Sha:            pipelineRun.SHA,
 		Tags:           s.deployedImageTags(ctx, repoDir, pipelineRun),
 		Commit:         shortRunSHA(pipelineRun),
-		Place:          spec.Name,
 	}
 	// The credential the cluster pulls with.
 	//
@@ -242,7 +238,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	request.Expect.Secrets = spec.Expect.Secrets
 	request.Expect.ConfigMaps = spec.Expect.ConfigMaps
 
-	target, err := s.deployModule(ctx, spec.Target)
+	target, err := s.deployModule(ctx, spec.Module)
 	if err != nil {
 		return err
 	}
@@ -255,7 +251,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	call, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(target.Endpoint, "/")+"/deploy", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("could not address the %s module: %w", spec.Target, err)
+		return fmt.Errorf("could not address the %s module: %w", spec.Module, err)
 	}
 	call.Header.Set("Content-Type", "application/json")
 	call.Header.Set("Accept", "application/x-ndjson")
@@ -267,16 +263,16 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	client := &http.Client{Timeout: 0}
 	response, err := client.Do(call)
 	if err != nil {
-		log("The %s module did not answer: %v\n", spec.Target, err)
-		return fmt.Errorf("the %s module did not answer: %w", spec.Target, err)
+		log("The %s module did not answer: %v\n", spec.Module, err)
+		return fmt.Errorf("the %s module did not answer: %w", spec.Module, err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		message := strings.TrimSpace(string(raw))
-		log("The %s module refused: %s\n", spec.Target, message)
-		return fmt.Errorf("the %s module refused: %s", spec.Target, message)
+		log("The %s module refused: %s\n", spec.Module, message)
+		return fmt.Errorf("the %s module refused: %s", spec.Module, message)
 	}
 
 	// The module narrates as it goes, and everything it says goes into the job's log
@@ -289,6 +285,16 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	var (
 		failed  string
 		arrived int
+		// The record the last line named, kept so that a line which names none is
+		// still attributable.
+		//
+		// The module writes the record onto every line it means a page to attribute.
+		// The ones that only close a phase are the exception it is easy to forget, and
+		// the cost of forgetting is not a missing record but a page that cannot tell
+		// which place a line belongs to — which on a project with two places means
+		// both cards draw both rollouts. A line of one deployment in the middle of
+		// another is about the same record, so the core says which.
+		lastRecord map[string]any
 	)
 	reader := bufio.NewReader(response.Body)
 	// Пауза между строками от модуля, для разработки и демонстраций.
@@ -318,6 +324,12 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 					failed = progress.Message
 				}
 				_, _ = s.appendJobOutput(ctx, job, stream, progressLine(progress))
+
+				if progress.Deployment != nil {
+					lastRecord = progress.Deployment
+				} else if lastRecord != nil {
+					progress.Deployment = lastRecord
+				}
 
 				// The operation's own event. Separate from the history below because
 				// this arrives many times a minute and that arrives once.
@@ -355,7 +367,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	if arrived == 0 {
 		// Silence after a deployment is not a result. It means the stream ended before
 		// anything was said, and the cluster may or may not have been touched at all.
-		return fmt.Errorf("the %s module said nothing about what it did", spec.Target)
+		return fmt.Errorf("the %s module said nothing about what it did", spec.Module)
 	}
 
 	log("Deployed in %s.\n", time.Since(started).Round(time.Second))

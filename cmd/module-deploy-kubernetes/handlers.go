@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -87,12 +88,12 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if strings.TrimSpace(request.Project) == "" || strings.TrimSpace(request.Cluster) == "" {
-		writeError(w, http.StatusBadRequest, "a deployment names a project and a cluster")
+	if strings.TrimSpace(request.Project) == "" || strings.TrimSpace(request.Place) == "" {
+		writeError(w, http.StatusBadRequest, "a deployment names a project and a place")
 		return
 	}
 
-	cluster, namespace, client, err := c.clusterFor(ctx, request.Project, request.Cluster, request.Namespace)
+	places, err := c.placesNamed(ctx, request.Project, request.Place)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -104,6 +105,57 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable,
 			"this module cannot remember deployments, so it is not deploying anything: "+errNoHistory.Error())
 		return
+	}
+
+	// The answer is a stream, not a value: a deployment takes minutes, and a caller
+	// that hears nothing until the end is watching a spinner rather than a rollout.
+	//
+	// One stream for every place this deployment goes to, in the order the places were
+	// written down: a configuration that names a place it holds twice is asking for two
+	// rollouts, and a reader watching one stream should see both.
+	stream := newProgressWriter(w)
+
+	var last deploy.Deployment
+	for index, place := range places {
+		record, failed := c.deployOne(ctx, request, place, stream, index, len(places))
+		last = record
+		if failed == nil {
+			continue
+		}
+		var busy deploy.ErrBusy
+		if errors.As(failed, &busy) {
+			// The one place this is not 200 for: a place already being deployed to was
+			// never deployed to at all, so there is no record of it to report.
+			writeError(w, http.StatusConflict, failed.Error())
+			return
+		}
+		stream.send(deploy.Progress{Phase: string(record.Phase),
+			Message: failed.Error(), Failed: true})
+	}
+	stream.send(deploy.Progress{Done: true, Message: "finished", Deployment: &last})
+}
+
+/**
+ * Carries out the deployment into one place, and reports what happened.
+ *
+ * Split out of the handler because a deployment may name a place a project holds more
+ * than once: the loop above is the fan-out, and everything in here is what happens to a
+ * single place — which is what all of it used to be, in one piece.
+ */
+func (c *coreClient) deployOne(ctx context.Context, request deployRequest, place Cluster,
+	stream *progressWriter, at, of int) (deploy.Deployment, error) {
+
+	namespace := strings.TrimSpace(request.Namespace)
+	if namespace == "" {
+		namespace = place.DefaultNamespace
+	}
+	if strings.TrimSpace(namespace) == "" {
+		return deploy.Deployment{}, errNoNamespace(place.Name)
+	}
+
+	client, err := place.Connect(ctx)
+	if err != nil {
+		return deploy.Deployment{}, err
 	}
 
 	substitution := k8s.Substitution{Placeholder: request.Placeholder, Image: request.Image}
@@ -120,24 +172,29 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	if workload == "" {
 		// Asked of what was applied rather than configured separately: a second place
 		// to name the workload is a second place to get it wrong, and a rollback that
-		// looked at the wrong name would undo somebody else's deployment.
+		// looked at the wrong name would undo somebody's deployment.
 		if found := deploy.WorkloadsOf(manifests); len(found) > 0 {
 			workload = found[0]
 		}
 	}
 
-	// The cluster's own answers first, and the repository's configuration over them: a
+	// The place's own answers first, and the repository's configuration over them: a
 	// project that asks for a shorter wait is describing this particular deployment,
 	// and asking to keep the Jobs is a claim about code that is reviewed with it.
-	timeout := cluster.timeout()
+	timeout := place.timeout()
 	if request.TimeoutSeconds > 0 {
 		timeout = time.Duration(request.TimeoutSeconds) * time.Second
 	}
-	keepJobs := cluster.keepJobs() || request.KeepJobs
+	keepJobs := place.keepJobs() || request.KeepJobs
 
-	// The answer is a stream, not a value: a deployment takes minutes, and a caller
-	// that hears nothing until the end is watching a spinner rather than a rollout.
-	stream := newProgressWriter(w)
+	// With more than one place, everything said is said about which place: two rollouts
+	// sharing a log with nothing to tell them apart is a log nobody can read.
+	say := func(progress deploy.Progress) {
+		if of > 1 {
+			progress.Message = place.Name + "/" + namespace + ": " + progress.Message
+		}
+		stream.send(progress)
+	}
 
 	deployer := deploy.New(client, c.history, func(format string, args ...any) {
 		log.Printf(format, args...)
@@ -155,15 +212,15 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	record, err := deployer.Run(ctx, deploy.Request{
-		Progress:       deploy.ClosingPhases(stream.send),
+	return deployer.Run(ctx, deploy.Request{
+		Progress:       deploy.ClosingPhases(say),
 		Project:        request.Project,
 		PullSecret:     pullSecret,
-		Cluster:        cluster.Name,
+		Cluster:        place.Name,
 		Namespace:      namespace,
 		Image:          request.Image,
 		Tags:           request.Tags,
-		Place:          request.Place,
+		Place:          place.Name,
 		Commit:         request.Commit,
 		Placeholder:    request.Placeholder,
 		Manifests:      manifests,
@@ -175,23 +232,37 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		Timeout:        timeout,
 		KeepJobs:       keepJobs,
 	})
+}
 
-	// However it went, the last line says so and carries the record. The status is 200
-	// either way: the request was answered, and the answer is what happened rather than
-	// whether it was what was hoped for — so a reader takes the last line and is never
-	// left guessing from a status code.
-	//
-	// One place it is not 200: a place that is already being deployed to was never
-	// deployed at all, so there is no record and no stream to say anything into.
-	var busy deploy.ErrBusy
-	if errors.As(err, &busy) {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
+/**
+ * Every place a project holds under this name.
+ *
+ * All of them, because names need not be unique: a configuration that says
+ * `place: staging` deploys into every place called staging, so two of them in two
+ * namespaces is a way of saying "both of these" rather than a conflict waiting to be
+ * reported. Read once and deployed to in turn, so one request cannot watch the list
+ * change under it halfway through.
+ */
+func (c *coreClient) placesNamed(ctx context.Context, project, name string) ([]Cluster, error) {
+	settings, err := c.settings(ctx, project)
 	if err != nil {
-		stream.send(deploy.Progress{Phase: string(record.Phase), Message: err.Error(), Failed: true})
+		return nil, err
 	}
-	stream.send(deploy.Progress{Done: true, Message: "finished", Deployment: &record})
+	clusters, err := clustersOf(settings)
+	if err != nil {
+		return nil, err
+	}
+
+	var found []Cluster
+	for _, one := range clusters {
+		if one.Name == name {
+			found = append(found, one)
+		}
+	}
+	if len(found) == 0 {
+		return nil, clusterGone(settings, name)
+	}
+	return found, nil
 }
 
 // clusterFor resolves which cluster, which namespace, and a client for it.
@@ -231,6 +302,21 @@ func (c *coreClient) clusterFor(ctx context.Context, project, name, namespace st
 // The client sends the id of the deployment it wants back rather than an image: this
 // module is the one that knows what that deployment ran, and a client that could name
 // an arbitrary image could put anything at all on a cluster.
+// describeImage names an image the way a sentence can carry it: the repository, and as
+// much of the digest as is worth reading. A full sha256 in an error is sixty-four
+// characters of nothing anybody can compare by eye.
+func describeImage(image string) string {
+	at := strings.Index(image, "@")
+	if at < 0 {
+		return image
+	}
+	digest := image[at+1:]
+	if len(digest) > 19 {
+		return image[:at] + "@" + digest[:12] + "…"
+	}
+	return image
+}
+
 func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -267,6 +353,59 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 	cluster, namespace, client, err := c.clusterFor(ctx, request.Project, request.Cluster, request.Namespace)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Whether this can be done at all, asked before the first line of the answer.
+	//
+	// Past that point the response is a story and its status is already spoken for:
+	// a refusal written afterwards can only be a line in a success, and the caller
+	// reads a revert that ended with nothing in it as a revert that worked.
+	target, err := c.history.ByID(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := deploy.Revertable(target, request.Workload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Whether the place is free, asked while a refusal can still be a refusal.
+	//
+	// One deployment per place at a time is a rule about the cluster, and a rollback
+	// obeys it like anything else: it takes the place first, so a place somebody is
+	// already deploying to is refused here — before this module has said anything,
+	// rather than after it has rolled pods and found it had nowhere to record that it
+	// did.
+	running, err := c.history.Current(ctx, request.Project, request.Cluster, namespace)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if running != nil && running.State == deploy.StateRunning {
+		writeError(w, http.StatusConflict, fmt.Sprintf(
+			"another deployment is under way in %s/%s (%s), so nothing has been put back",
+			request.Cluster, namespace, describeImage(running.Image)))
+		return
+	}
+
+	// And whether it is already running the image that was asked for: setting an image
+	// a workload already has changes nothing, so a rollback that reports doing it has
+	// reported work it did not do.
+	workload := request.Workload
+	if workload == "" {
+		workload = target.Workload
+	}
+	now, err := client.RunningImage(ctx, namespace, workload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if now == target.Image {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"%s is already running %s in %s/%s, so there is nothing to put back",
+			workload, describeImage(target.Image), request.Cluster, namespace))
 		return
 	}
 

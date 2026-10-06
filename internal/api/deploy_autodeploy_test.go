@@ -76,9 +76,9 @@ func TestARunThatStartedByItselfSkipsOnlyThePlaceThatSaidNo(t *testing.T) {
 		{Name: "build", Stage: "build"},
 		{Name: "push", Stage: "push"},
 		{Name: "deploy:prod", Stage: "deploy", Deploy: map[string]any{
-			"target": "kubernetes", "cluster": "prod"}},
+			"module": "kubernetes", "target": "prod"}},
 		{Name: "deploy:stage", Stage: "deploy", Deploy: map[string]any{
-			"target": "kubernetes", "cluster": "stage"}},
+			"module": "kubernetes", "target": "stage"}},
 	}
 
 	kept := f.server.withoutAutodeployJobs(t.Context(), project, jobs)

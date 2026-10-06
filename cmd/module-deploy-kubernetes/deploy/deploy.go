@@ -264,6 +264,13 @@ func ClosingPhases(report func(Progress)) func(Progress) {
 
 // ImageDeployment is the last deployment of an image, and the place it went to.
 type ImageDeployment struct {
+	// Image is which image this deployment put on the workload.
+	//
+	// Named here rather than assumed by whoever is looking: the summary hangs off a
+	// catalogue row that already knows the digest, so it looks like a field nobody
+	// needs — until somebody asks what "put this back" means and the row says a place
+	// and a workload but not what would be going back there.
+	Image     string    `json:"image"`
 	ID        string    `json:"id"`
 	Cluster   string    `json:"cluster"`
 	Namespace string    `json:"namespace"`
@@ -354,6 +361,15 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 	var said []LogLine
 	watching := request.Progress
 	request.Progress = func(progress Progress) {
+		// Every line carries the record, including the ones that only close a phase.
+		//
+		// A line that says which deployment it belongs to is one a page can put in the
+		// right place's card. A line without one belongs to none of them, and a project
+		// with two places in it then draws one deployment's rollout on both cards — the
+		// same steps twice on each, in an order that belongs to neither.
+		if progress.Deployment == nil {
+			progress.Deployment = &record
+		}
 		if progress.Message != "" {
 			said = append(said, LogLine{
 				Phase: progress.Phase, Message: progress.Message,
@@ -383,7 +399,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		if err := d.runJob(ctx, substitution, request, job); err != nil {
 			request.report(Progress{Phase: StepPre, Step: index + 1, Of: len(request.Pre),
 				Message: err.Error(), Failed: true})
-			return d.fail(ctx, record, PhasePre, err)
+			return d.fail(ctx, request, record, PhasePre, err)
 		}
 	}
 
@@ -393,7 +409,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 	secretName := ""
 	if request.PullSecret != nil {
 		if err := d.client.EnsurePullSecret(ctx, request.Namespace, *request.PullSecret); err != nil {
-			return d.fail(ctx, record, PhaseApply, err)
+			return d.fail(ctx, request, record, PhaseApply, err)
 		}
 		secretName = request.PullSecret.Name
 		d.logf("wrote the pull secret %s", secretName)
@@ -412,7 +428,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		written.Body = body
 
 		if _, err := d.client.Apply(ctx, written); err != nil {
-			return d.fail(ctx, record, PhaseApply, err)
+			return d.fail(ctx, request, record, PhaseApply, err)
 		}
 		d.logf("applied %s", written.Ref())
 		request.report(Progress{Phase: StepApply, Step: index + 1, Of: len(request.Manifests),
@@ -466,7 +482,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 
 		if err != nil {
 			request.report(Progress{Phase: StepRollout, Message: err.Error(), Failed: true})
-			return d.fail(ctx, record, PhaseApply, err)
+			return d.fail(ctx, request, record, PhaseApply, err)
 		}
 		request.report(Progress{Phase: StepRollout, Ready: ready, Desired: wanted,
 			Message: fmt.Sprintf("every pod is running the new image (%d of %d)", ready, wanted)})
@@ -611,30 +627,44 @@ func (d *Deployer) waitForJob(ctx context.Context, object k8s.Object) (bool, err
 //
 // What it does not do is undo a migration, a ConfigMap or anything else that was
 // applied alongside: only the image goes back.
+// Revertable says what is wrong with going back to this record, or nothing.
+//
+// Asked before the response has begun rather than after, because a revert is narrated:
+// the first line written commits the answer to being a success with a story in it, and
+// a refusal that arrives afterwards has nowhere to be said. It then goes as a plain
+// error with a status of its own, and the caller sees it. Refused inside the stream it
+// was a status of 200 and silence — a page that watched a workload change for two
+// minutes and was told, at the end, nothing at all.
+func Revertable(target Deployment, workload string) error {
+	if target.State != StateSucceeded && target.State != StateRolledBack && target.State != StateReverted {
+		return fmt.Errorf(
+			"deployment %s did not finish, so there is nothing in it to go back to: it %s",
+			target.ID, target.State)
+	}
+	if strings.TrimSpace(target.Image) == "" {
+		return fmt.Errorf(
+			"deployment %s deployed no image, so there is nothing to go back to", target.ID)
+	}
+	if strings.TrimSpace(workload) == "" && strings.TrimSpace(target.Workload) == "" {
+		return fmt.Errorf(
+			"deployment %s says what namespace it went to but not which workload, so there is nothing to change",
+			target.ID)
+	}
+	return nil
+}
+
 func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deployment, error) {
 	target, err := d.history.ByID(ctx, request.ID)
 	if err != nil {
 		return Deployment{}, err
 	}
-
-	if target.State != StateSucceeded && target.State != StateRolledBack && target.State != StateReverted {
-		return Deployment{}, fmt.Errorf(
-			"deployment %s did not finish, so there is nothing in it to go back to: it %s",
-			request.ID, target.State)
-	}
-	if strings.TrimSpace(target.Image) == "" {
-		return Deployment{}, fmt.Errorf(
-			"deployment %s deployed no image, so there is nothing to go back to", request.ID)
+	if err := Revertable(target, request.Workload); err != nil {
+		return Deployment{}, err
 	}
 
 	workload := request.Workload
 	if workload == "" {
 		workload = target.Workload
-	}
-	if workload == "" {
-		return Deployment{}, fmt.Errorf(
-			"deployment %s says what namespace it went to but not which workload, so there is nothing to change",
-			request.ID)
 	}
 
 	// The namespace is the target's, not the target deployment's: somebody may have
@@ -650,26 +680,18 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 		timeout = 10 * time.Minute
 	}
 
-	// Watching, as with a deploy: the pods are the progress.
-	stop, counted := d.watchRollout(ctx, Request{Progress: request.Progress, Rollout: workload,
-		Namespace: namespace, Image: target.Image})
-	rollout, err := d.client.SetImage(ctx, namespace, workload, target.Image, timeout)
-	stop()
-	if err != nil {
-		return Deployment{}, err
-	}
-	wanted, ready, retired := counted()
-	d.logf("put %s back on %s: %s", target.Image, workload, rollout.Reason)
-
-	report(request.Progress, Progress{Phase: StepApply, Message: fmt.Sprintf(
-		"%s now runs %s", workload, target.Image)})
-
-	// A new record rather than a change to the old one.
+	// The place is taken before anything is changed, not after.
 	//
-	// The old one is history: it is the record that this image ran, and rewriting it
-	// to say it did not would leave a history with no memory of a version having been
-	// live at all. This one says what was put back and why, and points at the
-	// deployment it came from.
+	// Written the other way round for a while: roll the pods, then write down what was
+	// rolled. Then a revert that found the place already busy had already changed the
+	// image before it discovered it could not record the change — the pods on one image,
+	// the history saying another, and the refusal arriving after the answer had begun,
+	// where it had nowhere to be read. One deployment per place is a rule about the
+	// cluster, so it is claimed like one: first, or not at all.
+	//
+	// A new record rather than a change to the old one: the old one is history, it is
+	// the record that this image ran, and rewriting it to say it did not would leave a
+	// history with no memory of a version having been live at all.
 	reverted := Deployment{
 		ID:        uuid.New(),
 		Project:   target.Project,
@@ -685,6 +707,24 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 	if err != nil {
 		return reverted, err
 	}
+
+	// Watching, as with a deploy: the pods are the progress.
+	stop, counted := d.watchRollout(ctx, Request{Progress: request.Progress, Rollout: workload,
+		Namespace: namespace, Image: target.Image})
+	rollout, err := d.client.SetImage(ctx, namespace, workload, target.Image, timeout)
+	stop()
+	wanted, ready, retired := counted()
+	if err != nil {
+		failed, finishErr := d.finish(ctx, reverted, PhaseApply, StateFailed, err.Error())
+		if finishErr != nil {
+			return failed, finishErr
+		}
+		return failed, err
+	}
+	d.logf("put %s back on %s: %s", target.Image, workload, rollout.Reason)
+
+	report(request.Progress, Progress{Phase: StepApply, Message: fmt.Sprintf(
+		"%s now runs %s", workload, target.Image)})
 
 	// The rollback is a deployment like any other, and it rolled containers out like
 	// any other: its history row says so.
@@ -819,8 +859,21 @@ func (d *Deployer) finish(ctx context.Context, record Deployment, phase Phase, s
 // reading the page later, and the returned error answers "why did this call fail" for
 // the task that made the call. Losing the second while keeping the first is how a
 // failed deployment is reported as a successful one with a note in a table.
-func (d *Deployer) fail(ctx context.Context, record Deployment, phase Phase, cause error) (Deployment, error) {
+func (d *Deployer) fail(ctx context.Context, request Request, record Deployment,
+	phase Phase, cause error) (Deployment, error) {
+
 	d.logf("deployment %s failed in %s: %v", record.ID, phase, cause)
+
+	// Said the way every other step is said, and for the reason every other step is said:
+	// the log of a deployment is the list of things that happened to it, and a list that
+	// ends at the last thing that worked is missing the one that matters.
+	//
+	// Written through the request rather than straight to the store, because that is
+	// what puts it in both places at once: on the card while it happens, and in the log
+	// when it is read afterwards. A line written only to the store is overwritten by the
+	// run's own closing write, so the failure has to go in with the rest.
+	request.report(Progress{Phase: string(phase), Failed: true,
+		Message: fmt.Sprintf("failed in %s: %v", phase, cause)})
 
 	failed, writeErr := d.finish(ctx, record, phase, StateFailed, cause.Error())
 	if writeErr != nil {

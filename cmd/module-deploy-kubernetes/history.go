@@ -221,8 +221,8 @@ func (h *postgresHistory) Images(ctx context.Context, project, cluster, namespac
 	rows, err := h.pool.Query(ctx, `
 		SELECT grouped.image, grouped.first_seen, grouped.times, grouped.succeeded,
 		       grouped.tags,
-		       last.id, last.cluster, last.namespace, last.workload, last.state,
-		       last.started_at
+		       last.image, last.id, last.cluster, last.namespace, last.workload,
+		       last.state, last.started_at
 		FROM (
 			SELECT image, min(started_at) AS first_seen, count(*) AS times,
 			       count(*) FILTER (WHERE state = 'succeeded') AS succeeded,
@@ -243,9 +243,16 @@ func (h *postgresHistory) Images(ctx context.Context, project, cluster, namespac
 			LIMIT $4 OFFSET $5
 		) AS grouped
 		LEFT JOIN LATERAL (
-			SELECT id, cluster, namespace, workload, state, started_at
+			-- In the same place as the row it hangs off, which the outer query has
+			-- already chosen and this one has to keep to: an image deployed to both
+			-- places is one row in each place's catalogue, and each row's "where it is"
+			-- has to be this place. Read without it, both places answer with whichever
+			-- was deployed most recently, and one place's page offers to put an image
+			-- back on the other place's workload — for an image that was never there.
+			SELECT image, id, cluster, namespace, workload, state, started_at
 			FROM deployments
 			WHERE project = $1 AND image = grouped.image AND state = 'succeeded'
+			  AND ($2 = '' OR cluster = $2) AND ($3 = '' OR namespace = $3)
 			ORDER BY started_at DESC LIMIT 1
 		) AS last ON true
 		ORDER BY grouped.first_seen DESC`,
@@ -258,12 +265,13 @@ func (h *postgresHistory) Images(ctx context.Context, project, cluster, namespac
 	out := []deploy.KnownImage{}
 	for rows.Next() {
 		var one deploy.KnownImage
-		var lastID, lastCluster, lastNamespace, lastWorkload *string
+		var lastImage, lastID, lastCluster, lastNamespace, lastWorkload *string
 		var lastState *deploy.State
 		var lastAt *time.Time
 		var tags []byte
 		if err := rows.Scan(&one.Image, &one.FirstSeen, &one.Times, &one.Succeeded, &tags,
-			&lastID, &lastCluster, &lastNamespace, &lastWorkload, &lastState, &lastAt); err != nil {
+			&lastImage, &lastID, &lastCluster, &lastNamespace, &lastWorkload, &lastState,
+			&lastAt); err != nil {
 			return nil, 0, err
 		}
 		if len(tags) > 0 {
@@ -271,8 +279,9 @@ func (h *postgresHistory) Images(ctx context.Context, project, cluster, namespac
 		}
 		if lastID != nil {
 			one.Deployed = &deploy.ImageDeployment{
-				ID: *lastID, Cluster: *lastCluster, Namespace: *lastNamespace,
-				Workload: *lastWorkload, State: *lastState, StartedAt: *lastAt,
+				Image: *lastImage, ID: *lastID, Cluster: *lastCluster,
+				Namespace: *lastNamespace, Workload: *lastWorkload,
+				State: *lastState, StartedAt: *lastAt,
 			}
 		}
 		out = append(out, one)
@@ -335,10 +344,7 @@ func (h *postgresHistory) Counts(ctx context.Context, id uuid.UUID, wanted, read
 }
 
 func (h *postgresHistory) Current(ctx context.Context, project, cluster, namespace string) (*deploy.Deployment, error) {
-	rows, err := h.pool.Query(ctx, `
-		SELECT id, project, cluster, namespace, image, workload, state, phase, reason,
-		       started_at, finished_at, pods_wanted, pods_ready, pods_retired, tags, commit, place
-		FROM deployments
+	rows, err := h.pool.Query(ctx, deploymentColumns+`
 		WHERE project = $1 AND cluster = $2 AND namespace = $3
 		ORDER BY started_at DESC LIMIT 1`, project, cluster, namespace)
 	if err != nil {
@@ -372,10 +378,7 @@ func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace 
 		return nil, 0, fmt.Errorf("count the deployment history: %w", err)
 	}
 
-	rows, err := h.pool.Query(ctx, `
-		SELECT id, project, cluster, namespace, image, workload, state, phase, reason,
-		       started_at, finished_at, pods_wanted, pods_ready, pods_retired, tags, commit, place
-		FROM deployments
+	rows, err := h.pool.Query(ctx, deploymentColumns+`
 		WHERE project = $1
 		  AND ($2 = '' OR cluster = $2)
 		  AND ($3 = '' OR namespace = $3)
@@ -406,6 +409,19 @@ func (h *postgresHistory) List(ctx context.Context, project, cluster, namespace 
 func (h *postgresHistory) Close(_ context.Context) {
 	h.pool.Close()
 }
+
+// The columns of a deployment, in the order scanDeployment reads them.
+//
+// Written once and used by every query that reads a whole record, because a list
+// written out again is a list that can fall behind: one of these was six columns short
+// for as long as there had been two places to deploy to, and the only reader of it was
+// the one that puts a version back. Every revert failed, in two milliseconds, and the
+// failure was answered as a success — which is what a record nobody can read looks like
+// from the outside.
+const deploymentColumns = `
+	SELECT id, project, cluster, namespace, image, workload, state, phase, reason,
+	       started_at, finished_at, pods_wanted, pods_ready, pods_retired, tags, commit, place
+	FROM deployments`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -626,9 +642,7 @@ func (h *postgresHistory) setStartedAt(ctx context.Context, id uuid.UUID, starte
 // that from a project and a namespace — several deployments to the same place look
 // alike from here.
 func (h *postgresHistory) ByID(ctx context.Context, id uuid.UUID) (deploy.Deployment, error) {
-	rows, err := h.pool.Query(ctx, `
-		SELECT id, project, cluster, namespace, image, workload, state, phase, reason, started_at, finished_at
-		FROM deployments WHERE id = $1`, id)
+	rows, err := h.pool.Query(ctx, deploymentColumns+` WHERE id = $1`, id)
 	if err != nil {
 		return deploy.Deployment{}, fmt.Errorf("read the deployment: %w", err)
 	}

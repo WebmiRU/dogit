@@ -43,6 +43,15 @@ const props = defineProps<{
    */
   place?: { cluster: string; namespace: string }
   /**
+   * Whether the run under way has a deployment for this place that has not started.
+   *
+   * Not asked here: the row above already knows, and it knows it from the run rather
+   * than from this card's own history — which is the whole point of it being a separate
+   * fact. A card told nothing says what it last did; a card told this says that the
+   * thing it last did was a different commit, and that this one has not got here yet.
+   */
+  queued?: boolean
+  /**
    * Whether to show what the repository says about where this goes.
    *
    * Once per page rather than once per place: the file names the places and does not
@@ -216,6 +225,55 @@ const scopedCluster = computed(() => props.place?.cluster ?? '')
 /** The namespace this block is about, if it was told one. */
 const scopedNamespace = computed(() => props.place?.namespace ?? '')
 
+/**
+ * Whether a line said while watching belongs on this card.
+ *
+ * Every line a module says while deploying carries the record of the deployment it is
+ * about, and a card about one place is about that place's record and nothing else. This
+ * is the same question the rows are asked, in the same terms: a project with two places
+ * in it has two rollouts under way at once, and one card showing both says the first
+ * place is being deployed to while it is waiting for its turn — the same steps twice on
+ * each card, in an order that belongs to neither.
+ *
+ * A line that names no place is no card's line but the card that was told no place at
+ * all. Those are the lines of the run rather than of a deployment: the image being
+ * built, the image being pushed, a runner saying what a job is up to. They belong to
+ * the project — one build serves every place, and a place that has not been given
+ * anything cannot have been the thing being built. Drawing them on a place's card says
+ * that place is being deployed while it is still waiting its turn, and then the card
+ * flips back to the last thing it did, which is a green run of an older commit, and the
+ * reader is left watching a place that says it succeeded while the run is still going.
+ */
+function mineToSay(record: unknown): boolean {
+  if (!scopedCluster.value) return true
+  if (!record || typeof record !== 'object') return false
+  const said = record as { cluster?: string; namespace?: string }
+  if ((said.cluster ?? '') !== scopedCluster.value) return false
+  // A card that was told no namespace makes no claim about one, which is what the
+  // history asks the same rows about — otherwise a place that never named a namespace
+  // would show nothing at all, having been told by the module which one it used.
+  return !scopedNamespace.value || (said.namespace ?? '') === scopedNamespace.value
+}
+
+/**
+ * Where an image is, in as few words as the catalogue says it.
+ *
+ * Not a `Deployment`, because it is not one: the catalogue's row is which image went
+ * where and when, with no phase it died on and no reason, and a type that promises
+ * those would either be lying or make the catalogue answer questions it was never
+ * asked. Putting an image back needs the address and the digest, and this is the
+ * address and the digest.
+ */
+interface PlacedImage {
+  id: string
+  image: string
+  cluster: string
+  namespace: string
+  workload: string
+  state: string
+  started_at: string
+}
+
 /** An image, with what is known about it. */
 interface KnownImage {
   /**
@@ -235,7 +293,7 @@ interface KnownImage {
   /** The names this image was published under, as they were when it was deployed. */
   tags?: string[]
   /** The operation that put it into the cluster, if it did. */
-  live: Deployment | null
+  live: PlacedImage | null
 }
 
 function shortImage(image: string): string {
@@ -611,7 +669,7 @@ const rows = computed(() => {
  * the history had already caught up while the pill had not. There is no way to be half
  * wrong when there is only one answer to be wrong about.
  */
-const verdict = computed<{ tone: 'working' | 'ok' | 'bad'; word: string; cls: string }>(() => {
+const verdict = computed<{ tone: 'working' | 'ok' | 'bad' | 'waiting'; word: string; cls: string }>(() => {
   // Two words, because two different things are happening and "deploying" says
   // neither of them right. An image being built and pushed is not a deployment: no pod
   // is being touched, and a card saying "deploying" over a forty-second image build
@@ -634,6 +692,14 @@ const verdict = computed<{ tone: 'working' | 'ok' | 'bad'; word: string; cls: st
     return { tone: 'bad', word: 'failed', cls: 'badge-red' }
   }
 
+  // Waiting its turn: the run under way has a deployment for this place and has not
+  // started it. What the history holds is an older commit's work, and a green edge over
+  // it — the edge the eye reads first, and the one the row above repeats in its dot —
+  // says the run is finished with this place when it has not begun. No colour of its own
+  // for that: the accent edge is the one this card already wears when it has nothing to
+  // claim, and "nothing to claim yet" is exactly what it is saying.
+  if (props.queued) return { tone: 'waiting', word: 'waiting its turn', cls: 'badge-neutral' }
+
   const last = deployments.value[0]
   if (!last) return { tone: 'ok', word: 'nothing yet', cls: 'badge-neutral' }
   // A row the module has started but not finished says the card is busy, not what to
@@ -654,6 +720,27 @@ const verdict = computed<{ tone: 'working' | 'ok' | 'bad'; word: string; cls: st
 
 const stateBadge = computed(() => verdict.value.word)
 const stateBadgeClass = computed(() => verdict.value.cls)
+
+/**
+ * Whether this place is running this image right now.
+ *
+ * Asked of the operations rather than of the catalogue: the catalogue says where each
+ * image has been, and after a rollback the image that is running is an old row of it —
+ * the newest row is the one that was just taken away. A list whose top row is always
+ * the newest deployment then shows the image being deployed away as though it were the
+ * one in the cluster, and the answer to "what is running in production" is the newest
+ * row instead of the running one.
+ */
+const runningImage = computed(() => {
+  const settled = deployments.value.find((one) =>
+    one.state === 'succeeded' || one.state === 'reverted' || one.state === 'rolled_back')
+  return settled?.image ?? ''
+})
+
+/** Whether the catalogue's row is the image this place is on. */
+function isRunning(image: KnownImage): boolean {
+  return Boolean(runningImage.value) && runningImage.value === image.name
+}
 
 /** The digest the run is applying, for the title attribute on the rows. */
 const activeImage = computed(() => {
@@ -778,7 +865,18 @@ async function loadImages() {
         first_seen: string
         times: number
         succeeded: number
+        /** Every name this image was ever deployed under, whichever place. */
+        tags?: string[]
+        /**
+         * The last deployment of this image that worked, and where it put it.
+         *
+         * It names its image because this is the row somebody clicks "put this back"
+         * on, and the question that button asks is about an image: answered with a
+         * workload and a namespace and no image, the page has nothing to put back and
+         * fails on the way to finding out.
+         */
         deployed?: {
+          image: string
           id: string
           cluster: string
           namespace: string
@@ -808,6 +906,7 @@ async function loadImages() {
         live: one.deployed
           ? {
               id: one.deployed.id,
+              image: one.deployed.image,
               cluster: one.deployed.cluster,
               namespace: one.deployed.namespace,
               workload: one.deployed.workload,
@@ -984,10 +1083,21 @@ function noteOperation(payload: Record<string, unknown>) {
  * back through whatever the cluster still remembers. That history is bounded, prunable,
  * and gone entirely if the Deployment is recreated.
  */
-async function revertTo(deployment: Deployment) {
+async function revertTo(deployment: PlacedImage) {
+  // The row came from the catalogue, which knows the image and names it in the
+  // deployment it remembers — and if that ever stops being so, the button says which
+  // image it cannot put back instead of failing on the first line of the question.
+  const image = deployment.image ?? ''
+  if (!image) {
+    const message = 'This row does not say which image it is, so there is nothing to put back.'
+    error.value = message
+    notify(message, { type: 'error', timer: 0 })
+    return
+  }
+
   const where = `${deployment.cluster}/${deployment.namespace || 'its default namespace'}`
   const question =
-    `Put ${shortImage(deployment.image)} back on ${where}?\n\n` +
+    `Put ${shortImage(image)} back on ${where}?\n\n` +
     `What ${deployment.workload || 'the workload'} runs will be this image again.\n` +
     'A database migration, a ConfigMap and anything else applied alongside are left as ' +
     'they are — only the image goes back.'
@@ -996,13 +1106,20 @@ async function revertTo(deployment: Deployment) {
   busy.value = true
   error.value = ''
   try {
-    await api.post(`/projects/${props.projectId}/deployments/revert`, {
-      cluster: deployment.cluster,
-      namespace: deployment.namespace,
-      workload: deployment.workload,
-      deployment_id: deployment.id,
-    })
-    notify(`${shortImage(deployment.image)} is being put back`, { type: 'success' })
+    // Which module, in the query, as every other request to this module's endpoints does.
+    // Left off, the core looks for a module of kind "deploy:" — the empty name — finds
+    // nothing, and answers with an internal error about a server that is working: the
+    // one thing wrong was that nobody said which module to ask.
+    await api.post(
+      `/projects/${props.projectId}/deployments/revert?target=${encodeURIComponent(target.value)}`,
+      {
+        cluster: deployment.cluster,
+        namespace: deployment.namespace,
+        workload: deployment.workload,
+        deployment_id: deployment.id,
+      },
+    )
+    notify(`${shortImage(image)} is being put back`, { type: 'success' })
     finishOperation()
     await load()
   } catch (caught) {
@@ -1058,6 +1175,8 @@ onMounted(async () => {
       // operation with no project at all would otherwise land on every project page.
       if (payload.project && payload.project !== props.projectPath) return
       if (!payload.job_id && !payload.phase) return
+      // Not this card's place, not this card's line.
+      if (!mineToSay(payload.deployment)) return
       noteOperation(payload)
     },
   })
@@ -1095,6 +1214,12 @@ onMounted(async () => {
       // Finished: whatever was under way is not any more.
       finishOperation()
       void load()
+      // The images with it, because a deployment that has just finished is what put
+      // one here. Read at mount only, the list was whatever was in the place when the
+      // page was opened, and the tab said so about a tag that had been in the cluster
+      // for a minute — the newest image missing from the newest place, which is the one
+      // anybody opens that tab to see.
+      void loadImages()
     },
   })
 
@@ -1495,7 +1620,10 @@ watch(() => props.module.id, load)
                     <span v-else class="muted">never deployed</span>
                   </td>
                   <td class="actions-col">
-                    <span v-if="image.live && live.has(image.live.id)" class="badge badge-green">
+                    <span
+                      v-if="image.live && (live.has(image.live.id) || isRunning(image))"
+                      class="badge badge-green"
+                    >
                       running now
                     </span>
                     <button

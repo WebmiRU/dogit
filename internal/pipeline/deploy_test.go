@@ -33,9 +33,8 @@ func TestAFileThatDoesNotMentionDeployingDoesNotDeploy(t *testing.T) {
 func TestTheBlockIsRead(t *testing.T) {
 	config, err := Parse([]byte(`
 deploy:
-  target: kubernetes
-  cluster: production-eu
-  namespace: web
+  module: kubernetes
+  target: production
   manifests:
     - k8s/deployment.yaml
     - k8s/service.yaml
@@ -55,7 +54,7 @@ deploy:
 	}
 
 	d := config.Deploy
-	if d.Target != "kubernetes" || d.Cluster != "production-eu" || d.Namespace != "web" {
+	if d.Module != "kubernetes" || d.Target != "production" {
 		t.Errorf("the destination was read as %+v", d)
 	}
 	if len(d.Manifests) != 2 || d.Manifests[0] != "k8s/deployment.yaml" {
@@ -77,7 +76,7 @@ deploy:
 
 // `deploy` is not a job, however much it looks like one.
 func TestDeployIsNotAJob(t *testing.T) {
-	config, err := Parse([]byte("deploy:\n  target: kubernetes\n  manifests: [a.yaml]\n" + deployable))
+	config, err := Parse([]byte("deploy:\n  module: kubernetes\n  target: production\n  manifests: [a.yaml]\n" + deployable))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -93,7 +92,7 @@ func TestDeployIsNotAJob(t *testing.T) {
 // A misspelt field is refused. Silently dropping `namespace` deploys somewhere else,
 // and somewhere else is not something anybody can undo by looking at the result.
 func TestAMisspeltFieldIsRefused(t *testing.T) {
-	_, err := Parse([]byte("deploy:\n  target: kubernetes\n  namespacee: web\n  manifests: [a.yaml]\n" + deployable))
+	_, err := Parse([]byte("deploy:\n  module: kubernetes\n  target: production\n  namespacee: web\n  manifests: [a.yaml]\n" + deployable))
 	if err == nil {
 		t.Fatal("a misspelt field was accepted")
 	}
@@ -106,7 +105,7 @@ func TestAMisspeltFieldIsRefused(t *testing.T) {
 // believes otherwise would deploy the wrong thing on a pipeline that builds nothing.
 func TestAFileCannotChooseTheImage(t *testing.T) {
 	_, err := Parse([]byte(
-		"deploy:\n  target: kubernetes\n  manifests: [a.yaml]\n  image: something-else\n" + deployable))
+		"deploy:\n  module: kubernetes\n  target: production\n  manifests: [a.yaml]\n  image: something-else\n" + deployable))
 	if err == nil {
 		t.Fatal("a file was allowed to name the image to deploy")
 	}
@@ -120,9 +119,9 @@ func TestAFileCannotChooseTheImage(t *testing.T) {
 func TestADeployWithNothingToDoIsRefused(t *testing.T) {
 	for name, file := range map[string]string{
 		"no target":     "deploy:\n  manifests: [a.yaml]\n",
-		"no manifests":  "deploy:\n  target: kubernetes\n",
+		"no manifests":  "deploy:\n  module: kubernetes\n  target: production\n",
 		"a bare true":   "deploy: true\n",
-		"an empty step": "deploy:\n  target: kubernetes\n  manifests: [a.yaml]\n  pre:\n    - name: migrate\n",
+		"an empty step": "deploy:\n  module: kubernetes\n  target: production\n  manifests: [a.yaml]\n  pre:\n    - name: migrate\n",
 	} {
 		if _, err := Parse([]byte(file + deployable)); err == nil {
 			t.Errorf("%s was accepted", name)
@@ -134,7 +133,7 @@ func TestADeployWithNothingToDoIsRefused(t *testing.T) {
 // commit is not the place to read anything else from.
 func TestAManifestMayOnlyLiveInsideTheRepository(t *testing.T) {
 	for _, path := range []string{"/etc/passwd", "../../../etc/shadow", "k8s/../../secrets"} {
-		file := "deploy:\n  target: kubernetes\n  manifests: [" + path + "]\n" + deployable
+		file := "deploy:\n  module: kubernetes\n  target: production\n  manifests: [" + path + "]\n" + deployable
 		_, err := Parse([]byte(file))
 		if err == nil {
 			t.Errorf("the path %q was accepted", path)
@@ -150,7 +149,7 @@ func TestAManifestMayOnlyLiveInsideTheRepository(t *testing.T) {
 // this block says no to keys it does not know instead of quietly skipping them.
 func TestAnUnknownKeyIsRefused(t *testing.T) {
 	_, err := Parse([]byte(
-		"deploy:\n  target: kubernetes\n  manifests: [a.yaml]\n  our_own_note: migrate before Friday\n" + deployable))
+		"deploy:\n  module: kubernetes\n  target: production\n  manifests: [a.yaml]\n  our_own_note: migrate before Friday\n" + deployable))
 	if err == nil {
 		t.Fatal("an unknown key was accepted")
 	}
@@ -163,7 +162,7 @@ func TestAnUnknownKeyIsRefused(t *testing.T) {
 // natural to write.
 func TestABareStepIsAPathToAManifest(t *testing.T) {
 	config, err := Parse([]byte(
-		"deploy:\n  target: kubernetes\n  manifests: [a.yaml]\n  pre:\n    - k8s/migrate-job.yaml\n" + deployable))
+		"deploy:\n  module: kubernetes\n  target: production\n  manifests: [a.yaml]\n  pre:\n    - k8s/migrate-job.yaml\n" + deployable))
 	if err != nil {
 		t.Fatalf("a bare path was refused: %v", err)
 	}

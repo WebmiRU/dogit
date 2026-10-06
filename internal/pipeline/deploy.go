@@ -15,8 +15,9 @@ import (
 // instance's default has no idea which of a hundred projects meant to be affected.
 //
 //	deploy:
-//	 cluster: production-eu          # a row of settings inside the module
-//	 namespace: web
+//	 module: kubernetes               # who does the deploying
+//	 target: production               # a row of that module's own settings: the place,
+//	                                 # with the cluster and the namespace it carries
 //	 manifests:
 //	   - k8s/deployment.yaml         # image: IMAGE, substituted by digest
 //	   - k8s/service.yaml
@@ -59,17 +60,27 @@ type DeploySpec struct {
 	// should not be the only thing standing between a mistake and production.
 	TagOnly bool `yaml:"tag_only"`
 
-	// Target names the deploy module to do it, such as "kubernetes". Written rather
+	// Module names the deploy module to do it, such as "kubernetes". Written rather
 	// than assumed: the same word will mean Nomad or an archive over SSH later, and a
 	// file that does not say which cannot be read by somebody else's module.
+	//
+	// Called a module and not a target, because the target of a deployment is where it
+	// goes: `target: staging` is the place, and a file where one word meant both is a
+	// file nobody can read twice without getting it wrong.
+	Module string `yaml:"module"`
+
+	// Target is which of the module's places to deploy to — a row of the module's own
+	// settings, by the name that row is written down under.
+	//
+	// A place and not a cluster, because one cluster holds as many places as there are
+	// namespaces in it, and a configuration that named only the cluster could not say
+	// which of them it meant. It was also the wrong way round: where a cluster is, and
+	// which cluster it is, belongs to the row that carries the kubeconfig — the place
+	// knows, and the file only has to name it.
+	//
+	// Names need not be unique: every place with this name is deployed to, so two of
+	// them in two namespaces is a way of saying "both of these".
 	Target string `yaml:"target"`
-
-	// Cluster is which of the target's rows to deploy to. Free text, because what
-	// identifies a cluster is the module's business and not the core's.
-	Cluster string `yaml:"cluster"`
-
-	// Namespace is where in the cluster. Empty means the target's default.
-	Namespace string `yaml:"namespace"`
 
 	// Manifests are paths inside the repository, read at the commit being deployed.
 	Manifests []string `yaml:"manifests"`
@@ -212,9 +223,9 @@ func parseDeploy(node *yaml.Node) (DeploySpec, error) {
 		return spec, fmt.Errorf("deploy: %w", err)
 	}
 
-	// Refused rather than ignored. A misspelt `namespace` that is silently dropped is
-	// a deploy that goes to the wrong place, which is the one mistake in this file
-	// that cannot be undone by looking at the result.
+	// Refused rather than ignored. A misspelt `target` that is silently dropped is
+	// a deploy that goes nowhere, which is the one mistake in this file that cannot be
+	// undone by looking at the result.
 	for index := 0; index+1 < len(node.Content); index += 2 {
 		key := node.Content[index].Value
 		if key == "image" {
@@ -227,16 +238,19 @@ func parseDeploy(node *yaml.Node) (DeploySpec, error) {
 		}
 
 		switch key {
-		case "name", "target", "cluster", "namespace", "manifests", "pre", "post",
+		case "name", "module", "target", "manifests", "pre", "post",
 			"expect", "rollout", "timeout", "rules", "tag_only":
 		default:
 			return spec, fmt.Errorf(
-				"deploy has no field called %q; it knows name, target, cluster, "+
-					"namespace, manifests, pre, post, expect, rollout, timeout, rules "+
+				"deploy has no field called %q; it knows name, module, target, "+
+					"manifests, pre, post, expect, rollout, timeout, rules "+
 					"and tag_only", key)
 		}
 	}
 
+	if strings.TrimSpace(spec.Module) == "" {
+		return spec, fmt.Errorf("deploy does not say who deploys it: name a module")
+	}
 	if strings.TrimSpace(spec.Target) == "" {
 		return spec, fmt.Errorf("deploy does not say where to deploy: name a target")
 	}

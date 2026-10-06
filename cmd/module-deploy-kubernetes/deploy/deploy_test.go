@@ -114,6 +114,10 @@ func (f *fakeClient) SetImage(_ context.Context, _, _, image string, _ time.Dura
 	return k8s.Rollout{Desired: 1, Updated: 1, Ready: 1, Done: true}, nil
 }
 
+func (f *fakeClient) RunningImage(_ context.Context, _, _ string) (string, error) {
+	return f.setImageFails, nil
+}
+
 func (f *fakeClient) Revisions(_ context.Context, _, _ string) ([]k8s.Revision, error) {
 	return nil, nil
 }

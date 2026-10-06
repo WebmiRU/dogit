@@ -31,10 +31,10 @@ import (
 // a module that has no such row all mean yes: nothing is stopped unless somebody
 // stopped it.
 func (s *Server) autodeployAllowed(ctx context.Context, project *models.Project,
-	target, cluster string) bool {
+	target, place string) bool {
 
-	cluster = strings.TrimSpace(cluster)
-	if cluster == "" {
+	place = strings.TrimSpace(place)
+	if place == "" {
 		return true
 	}
 
@@ -63,26 +63,33 @@ func (s *Server) autodeployAllowed(ctx context.Context, project *models.Project,
 		return true
 	}
 
+	// Every place with this name, not the first one: a deployment that says
+	// `place: staging` goes to all of them, so one place's switch is about all of
+	// them. A place that is switched off for itself is not deployed to at all, and has
+	// nothing to say about the others.
 	for _, row := range placesOf(settings) {
 		name, _ := stringValue(row["name"])
-		if strings.TrimSpace(name) != cluster {
+		if strings.TrimSpace(name) != place {
 			continue
 		}
-		// A place that is not in use is not deployed to at all, so this has nothing
-		// to say about it.
 		if !flagOf(row, switchField, true) {
-			return true
+			continue
 		}
-		return flagOf(row, autoDeployField, true)
+		if !flagOf(row, autoDeployField, true) {
+			namespace, _ := stringValue(row["default_namespace"])
+			s.log.Info("this place does not deploy by itself, so the deployment is not started",
+				"project", projectPath(project), "place", place, "namespace", namespace)
+			return false
+		}
 	}
 	return true
 }
 
 // placesOf is the clusters setting as a list of rows.
 //
-// The core does not know what a cluster is: it knows that this setting is where the
-// places are kept, that a row's "name" is what a deployment job calls it, and that
-// "enabled" and "auto_deploy" are the two words it keeps for itself in such a list.
+// The core does not know what a place is: it knows that this setting is where the places
+// are kept, that a row's "name" is what a deployment calls it, and that "enabled" and
+// "auto_deploy" are the two words it keeps for itself in such a list.
 func placesOf(settings map[string]json.RawMessage) []map[string]json.RawMessage {
 	var rows []map[string]json.RawMessage
 	if raw, ok := settings[placesKey]; ok {
@@ -161,30 +168,37 @@ func (s *Server) withoutAutodeployJobs(ctx context.Context, project *models.Proj
 			kept = append(kept, job)
 			continue
 		}
-		target, cluster := deployTargetOf(job)
-		if s.autodeployAllowed(ctx, project, target, cluster) {
+		target, place := deployTargetOf(job)
+		if s.autodeployAllowed(ctx, project, target, place) {
 			kept = append(kept, job)
 			continue
 		}
 		s.log.Info("a deployment was not started by a push: this place does not deploy by itself",
-			"project", projectPath(project), "place", cluster, "job", job.Name)
+			"project", projectPath(project), "place", place, "job", job.Name)
 	}
 	return kept
 }
 
 // deployTargetOf is where a deployment job goes, out of the job's own copy of what the
 // repository said: which module and which place in it.
-func deployTargetOf(job store.Job) (target, cluster string) {
+func deployTargetOf(job store.Job) (target, place string) {
 	encoded, err := json.Marshal(job.Deploy)
 	if err != nil {
 		return "", ""
 	}
 	var spec struct {
-		Target  string `json:"target"`
-		Cluster string `json:"cluster"`
+		Module string `json:"module"`
+		Target string `json:"target"`
+		Name   string `json:"name"`
 	}
 	if err := json.Unmarshal(encoded, &spec); err != nil {
 		return "", ""
 	}
-	return spec.Target, spec.Cluster
+	// The place a deployment goes to is the one it names; a configuration that names
+	// none is taken to mean the deploy itself, which is what a single-place
+	// configuration used to be.
+	if place := strings.TrimSpace(spec.Target); place != "" {
+		return spec.Module, place
+	}
+	return spec.Module, spec.Name
 }

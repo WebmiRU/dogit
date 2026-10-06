@@ -12,10 +12,12 @@
  * and the two would disagree the moment either changed alone.
  */
 interface Place {
+  /** What this deployment is called — the entry's own name. */
   name: string
+  /** Which module does the deploying. */
+  module: string
+  /** Which of that module's places it goes to, by the name the place is written under. */
   target: string
-  cluster: string
-  namespace: string
   tag_only: boolean
   rollout: boolean
   rules: string[]
@@ -75,7 +77,7 @@ onMounted(async () => {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="place in places" :key="place.name || place.cluster">
+        <tr v-for="place in places" :key="place.name || place.target">
           <td>
             <span class="place-name">{{ place.name || '—' }}</span>
             <!-- A place that only a tag can reach says so here rather than by its
@@ -83,10 +85,13 @@ onMounted(async () => {
                  read, and the rule is what stops it, not the prose. -->
             <span v-if="place.tag_only" class="badge badge-neutral">by tag only</span>
           </td>
+          <!-- Who deploys it and where it goes: the module is the one doing the work,
+               the place is the row of its own settings that says where in the cluster
+               and with which credentials. -->
           <td class="small">
-            <span class="mono">{{ place.target }}</span>
-            <span class="muted"> · {{ place.cluster }}</span>
-            <span v-if="place.namespace" class="muted"> · {{ place.namespace }}</span>
+            <span class="mono">{{ place.module }}</span>
+            <span class="muted"> → </span>
+            <span class="mono">{{ place.target || '—' }}</span>
           </td>
           <td class="mono small">{{ listensTo(place) }}</td>
         </tr>

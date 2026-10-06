@@ -34,6 +34,7 @@ const props = defineProps<{
 
 /** One row of the clusters list, as this project sees it. */
 interface Place {
+  /** The cluster, under the name the module has it by. The place's name is both of these. */
   name: string
   namespace: string
   /**
@@ -56,9 +57,28 @@ interface Place {
   inUse: boolean
   /** Whether a push may do it by itself. Nobody having said means yes. */
   autodeploy: boolean
+  /**
+   * Whether the run under way has a deployment for this place that has not started.
+   *
+   * From the run rather than from this page's own reading of the last deployment: the
+   * last deployment is about an older commit, and a row showing it green beside a run
+   * that is plainly still working through its other places is answering a question
+   * nobody asked.
+   */
+  queued: boolean
 }
 
 const places = ref<Place[]>([])
+
+/**
+ * Which places the run under way has not reached yet, by name.
+ *
+ * A name rather than a row, because a name is what the repository's file says and the
+ * file is where the deployment names its place. Two rows of one name are one entry in
+ * it, and both of them are due: a deployment to a name goes to every place written
+ * under it.
+ */
+const due = ref<Record<string, boolean>>({})
 
 /**
  * What last ran in each place, as the module reports it.
@@ -131,6 +151,7 @@ async function load() {
         namespace: typeof row.default_namespace === 'string' ? row.default_namespace : '',
         inUse: row.enabled !== false,
         autodeploy: row.auto_deploy !== false,
+        queued: due.value[name] === true,
       })
     }
     places.value = seen
@@ -143,6 +164,24 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+async function loadQueued() {
+  try {
+    const answer = await api.get<{ places?: { target?: string; queued?: boolean }[] }>(
+      `/projects/${props.projectId}/deploy-places`,
+    )
+    const next: Record<string, boolean> = {}
+    for (const one of answer.places ?? []) {
+      if (one?.queued && typeof one.target === 'string') next[one.target] = true
+    }
+    due.value = next
+  } catch {
+    // A page that cannot tell what the run has not reached yet claims nothing about it:
+    // every row falls back to its own last deployment, which is true of the past.
+    due.value = {}
+  }
+  for (const place of places.value) place.queued = due.value[place.name] === true
 }
 
 /**
@@ -215,6 +254,13 @@ function spanOf(run: Run): number | undefined {
  */
 function stateTone(place: Place): { tone: string; word: string } {
   const run = runs.value[place.name]
+  // This run has not got here yet, which is not the same answer as "the last one went
+  // well". The last one was a different commit, and a green dot beside a run that is
+  // still working through the places before this one says the run is finished with this
+  // place when it has not started it.
+  if (place.queued && run?.state !== 'running') {
+    return { tone: 'unknown', word: 'this run has not reached this place yet' }
+  }
   if (!run) return { tone: 'unknown', word: 'nothing deployed here yet' }
   const word = run.state || 'unknown'
   if (word === 'running') return { tone: 'working', word: 'deploying' }
@@ -285,6 +331,12 @@ async function save(rows: Place[]) {
  * project's own Autodeploy off with it, which is two answers changed by one click, one
  * of them not even on screen.
  */
+/** Closes the form for adding a place without adding one. */
+function cancelAdd() {
+  adding.value = false
+  newName.value = ''
+}
+
 function own(place: Place): Record<string, unknown> {
   // A name is sent only when this project has one of its own: the name on the page is
   // usually the module's, and writing it here would say this project named this place.
@@ -313,7 +365,12 @@ async function addPlace() {
   saving.value = 'adding'
   error.value = ''
   try {
-    await save([...places.value, { name, namespace: '', ours: true, own: { name }, inUse: true, autodeploy: true }])
+    await save([...places.value, {
+      name, namespace: '', ours: true, own: { name }, inUse: true, autodeploy: true,
+      // Nothing is deploying to a place that did not exist a moment ago, whatever the
+      // run under way was doing.
+      queued: false,
+    }])
     adding.value = false
     newName.value = ''
     await load()
@@ -333,6 +390,7 @@ async function addPlace() {
  * ran must not go on showing what was true before it.
  */
 async function loadEverything() {
+  await loadQueued()
   await load()
   try {
     await loadRuns()
@@ -352,11 +410,15 @@ onRewake(() => {
 // it has got several times a second, and the answer does not change that often.
 let runsSoon: ReturnType<typeof setTimeout> | undefined
 watchEvents({
-  kinds: ['deploy.history', 'deploy.operation'],
+  // `pipeline.updated` as well: a run beginning is the moment every row stops being
+  // current, and a page that only re-read on a deployment's own lines says nothing for
+  // the whole build — which on a slow build is most of a run.
+  kinds: ['deploy.history', 'deploy.operation', 'pipeline.updated'],
   project: () => props.projectPath,
   onEvent: () => {
     clearTimeout(runsSoon)
     runsSoon = setTimeout(() => {
+      void loadQueued().catch(() => {})
       void loadRuns().catch(() => {})
     }, 800)
   },
@@ -395,7 +457,6 @@ watchEvents({
              two facts either side of them. -->
         <span class="place-leading">
           <span class="place-name mono">{{ place.name }}</span>
-          <span v-if="place.namespace" class="muted small">{{ place.namespace }}</span>
 
           <!-- Whose place this is, said once, where the place is named. A page that cannot
                answer "whose setting is this" is a page nobody will trust enough to switch
@@ -459,6 +520,9 @@ watchEvents({
              the colour of the card's edge on purpose: the edge is inside a fold, and a
              list of places has to be read without opening any of them. -->
         <span class="place-trailing">
+          <!-- Said before the last run rather than instead of it: both are true, and the
+               order is what keeps them from being read as one. -->
+          <span v-if="place.queued" class="muted small place-queued">waiting its turn</span>
           <span v-if="ranAt(place)" class="muted small place-ran">{{ ranAt(place) }}</span>
           <span
             class="place-state"
@@ -478,6 +542,7 @@ watchEvents({
           :module="module"
           :can-manage="props.canManage"
           :place="{ cluster: place.name, namespace: place.namespace }"
+          :queued="place.queued"
           :show-repository="index === 0"
           @settings-changed="load"
         />
@@ -495,10 +560,14 @@ watchEvents({
           aria-label="Name of the place to add"
           spellcheck="false"
         >
-        <button class="btn btn-small btn-primary" type="submit" :disabled="saving === 'adding' || !newName.trim()">
+        <button
+          class="btn btn-small btn-primary"
+          type="submit"
+          :disabled="saving === 'adding' || !newName.trim()"
+        >
           {{ saving === 'adding' ? 'Adding…' : 'Add' }}
         </button>
-        <button class="btn btn-small" type="button" @click="adding = false; newName = ''">
+        <button class="btn btn-small" type="button" @click="cancelAdd">
           Cancel
         </button>
       </form>
@@ -522,8 +591,10 @@ watchEvents({
 .places-add-form {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
+
 
 .add-name {
   flex: 1 1 320px;

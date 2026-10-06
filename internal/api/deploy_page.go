@@ -51,12 +51,25 @@ func (s *Server) handleProjectDeployPlaces(w http.ResponseWriter, r *http.Reques
 	}
 
 	places := make([]map[string]any, 0, len(config.Deploys))
+	due := s.placesDueNow(r.Context(), project)
 	for _, spec := range config.Deploys {
 		places = append(places, map[string]any{
-			"name":     spec.Name,
-			"target":   spec.Target,
-			"cluster":  spec.Cluster,
-			"namespace": spec.Namespace,
+			"name":   spec.Name,
+			"module": spec.Module,
+			"target": spec.Target,
+			// Whether the run under way has not reached this place yet.
+			//
+			// Asked of the run rather than worked out by the page: a place this run is
+			// still working its way towards has nothing of its own to show, and a page
+			// that fills the gap with the last thing that happened to it draws a green
+			// deployment of an older commit — which reads as "done" for as long as the
+			// run takes, right beside another place that is plainly still going.
+			//
+			// The names come from the default branch while the jobs come from the commit
+			// being run, so a run deployed from a branch whose file disagrees with the
+			// default one says nothing here rather than guessing: an entry the run has
+			// no job for is simply not marked.
+			"queued":   due[spec.Target],
 			"tag_only": spec.TagOnly,
 			"rollout":  spec.Rollout,
 			// Said in the repository's own words rather than evaluated here: a page
@@ -69,6 +82,46 @@ func (s *Server) handleProjectDeployPlaces(w http.ResponseWriter, r *http.Reques
 		"places": places,
 		"branch": project.DefaultBranch,
 	})
+}
+
+// placesDueNow names the places the run under way has not reached yet.
+//
+// The newest run that has not ended, and the deployments in it that have neither begun
+// nor finished: those are the places whose turn is coming. A run with nothing left to do
+// says nothing about any place — a place it never deployed to was not waiting for
+// anything, and saying "queued" there would be a place that can never stop waiting.
+func (s *Server) placesDueNow(ctx context.Context, project *models.Project) map[string]bool {
+	due := map[string]bool{}
+
+	runs, _, err := s.store.Pipelines().ListPipelinesPage(ctx, project.ID,
+		store.PipelineQuery{Page: 1, PerPage: 1})
+	if err != nil || len(runs) == 0 {
+		return due
+	}
+	switch runs[0].Status {
+	case store.PipelinePending, store.PipelineRunning:
+	default:
+		return due
+	}
+
+	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, runs[0].ID)
+	if err != nil {
+		return due
+	}
+	for _, job := range jobs {
+		if job.Stage != "deploy" || job.Status != store.JobPending {
+			continue
+		}
+		// "Target" and not "target": the specification is written into the job as the
+		// Go value marshalled, and its fields carry no names of their own, so it is
+		// stored under the field's own. Read as the file spells it, this answers
+		// nothing and says every place is waiting for ever.
+		target, _ := job.Deploy["Target"].(string)
+		if target != "" {
+			due[target] = true
+		}
+	}
+	return due
 }
 
 // handleProjectDeployPlan is the step list a deployment of this project goes through.
@@ -363,6 +416,17 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, map[string]any{
 			"phase": progress.Phase, "message": progress.Message,
 			"ready": progress.Ready, "desired": progress.Desired,
+			// Which place this is about, which is the whole of what the core knows
+			// about it: a revert is somebody choosing a place and asking for an image
+			// there, and it is that place's card that has to show it happening. Sent
+			// without this, the lines belong to no place, and a card about one place
+			// shows nothing at all while its own workload is being changed — a log that
+			// stops mid-run with no failure anywhere, which is the one thing a log must
+			// never be.
+			"deployment": map[string]any{
+				"cluster": request.Cluster, "namespace": request.Namespace,
+				"workload": request.Workload,
+			},
 		})
 	})
 	if err != nil {
@@ -413,6 +477,14 @@ func (s *Server) deployModuleFor(r *http.Request, project *models.Project) (*mod
 	if target == "" {
 		target = strings.TrimSpace(r.PathValue("target"))
 	}
+	if target == "" {
+		// Said as a request that is missing something, not as a failure inside the
+		// server. With no name there is no kind to look up, and asking for the module
+		// called "" fails in a way that reads as the instance being broken rather than
+		// as the caller having left out the one word that says which module to ask.
+		return nil, errBadRequest(
+			"say which deploy module this is about: the request names none")
+	}
 
 	found, err := s.deployModule(r.Context(), target)
 	if err != nil {
@@ -424,7 +496,6 @@ func (s *Server) deployModuleFor(r *http.Request, project *models.Project) (*mod
 	}
 	return found, nil
 }
-
 
 // callDeployModule asks a deploy module something, as that module.
 //

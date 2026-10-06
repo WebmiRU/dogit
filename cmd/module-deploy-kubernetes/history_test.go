@@ -139,3 +139,63 @@ func TestAnAbandonedDeploymentDoesNotHoldThePlace(t *testing.T) {
 		t.Errorf("the current deployment is %s, want the new one", current.ID)
 	}
 }
+
+// One record, read back whole.
+//
+// This is the query that puts a version back, and it is the only reader that is asked
+// for one record rather than a list of them. Written out separately from the list, it
+// fell six columns behind: every revert failed while reading the row, in milliseconds,
+// and the caller — which had already begun its answer — was told 200 and given nothing.
+// A record read in pieces is a record that cannot be put back.
+func TestADeploymentIsReadBackWhole(t *testing.T) {
+	history := historyFor(t)
+	ctx := context.Background()
+
+	record := deploy.Deployment{
+		ID: uuid.New(), Project: "t/whole", Cluster: "c", Namespace: "n",
+		Image: "reg/app@sha256:eee", Workload: "app", Place: "c",
+		Tags: []string{"v1"}, Commit: "abc1234", StartedAt: time.Now(),
+	}
+	if _, err := history.Begin(ctx, record); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() { _ = history.Finish(ctx, record.ID, deploy.StateSucceeded, "") })
+
+	// The phase is written as the run reaches it, not when it starts: a deployment that
+	// is begun has not reached one. Written afterwards and read back here, because a
+	// record read without its phase is a failure nobody can be shown.
+	if err := history.Phase(ctx, record.ID, deploy.StateRunning, deploy.StepRollout, ""); err != nil {
+		t.Fatalf("write the phase: %v", err)
+	}
+
+	back, err := history.ByID(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("read the record back: %v", err)
+	}
+
+	// Every field the reader promises, checked rather than assumed: a column list that
+	// has fallen behind fails as a count mismatch deep inside a scan, in a request about
+	// something else entirely.
+	if back.ID != record.ID || back.Project != record.Project ||
+		back.Cluster != record.Cluster || back.Namespace != record.Namespace {
+		t.Errorf("read back as %s/%s/%s, want %s/%s/%s",
+			back.Project, back.Cluster, back.Namespace,
+			record.Project, record.Cluster, record.Namespace)
+	}
+	if back.Image != record.Image || back.Workload != record.Workload ||
+		back.Place != record.Place || back.Commit != record.Commit {
+		t.Errorf("read back image %q workload %q place %q commit %q, want %q %q %q %q",
+			back.Image, back.Workload, back.Place, back.Commit,
+			record.Image, record.Workload, record.Place, record.Commit)
+	}
+	if back.Phase != deploy.StepRollout || back.State != deploy.StateRunning {
+		t.Errorf("read back %s/%s, want %s/%s", back.State, back.Phase,
+			deploy.StateRunning, deploy.StepRollout)
+	}
+	if len(back.Tags) != 1 || back.Tags[0] != record.Tags[0] {
+		t.Errorf("read back tags %v, want %v", back.Tags, record.Tags)
+	}
+	if back.StartedAt.IsZero() {
+		t.Error("read back with no start time")
+	}
+}

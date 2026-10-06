@@ -179,18 +179,28 @@ func manifest() map[string]any {
 				"description": "Where this module may deploy. A project picks one of these by name, " +
 					"so the address lives here once rather than in every repository that deploys there.",
 				"items": map[string]any{
-					// The name is what says which cluster an entry is, and saying so is
-					// what lets a group or a project change one of them without restating
-					// the rest: the list is inherited entry by entry from the level above.
-					"identify":  []string{"name"},
+					// What says which place an entry is: its name and the namespace it is
+					// in. Both, because names need not be unique — two places called
+					// "staging" in two namespaces are two places, and a list that could
+					// only tell them apart by name could hold one of them. It is also what
+					// lets a group or a project change one place without restating the
+					// rest: the list is inherited entry by entry from the level above.
+					"identify":  []string{"name", "default_namespace"},
 					"add_label": "Add a cluster",
 					"fields": []map[string]any{
 						{
 							"key":   "name",
 							"label": "Name",
 							"type":  "string",
-							"description": "What the project's configuration calls this cluster, such as " +
-								"production-eu. Changing it does not move anything already deployed.",
+							// What a deployment refers to. Names need not be unique: a
+							// configuration that says `place: staging` deploys into every
+							// place with that name, so two of them in two namespaces is a
+							// way of saying "both of these", not a conflict to be prevented.
+							"description": "What this place is called. A deployment names the place it " +
+								"goes to, and every place with this name is deployed to — so two " +
+								"places may share a name, as long as they are in different " +
+								"namespaces. Which cluster this is comes from the kubeconfig " +
+								"below, not from here.",
 						},
 						{
 							"key":   "kubeconfig",

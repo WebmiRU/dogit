@@ -1195,12 +1195,22 @@ func ownEntries(effective, inherited json.RawMessage, identify []string) json.Ra
 		if id, ok := row[rowIDField]; ok {
 			kept[rowIDField] = id
 		}
-		// The name, as a name: it is how the page says "this place exists, and it is not
-		// yours to change". It is not written into the fields, because a field is an
-		// answer this scope gave, and the answer "the place above is called this" is not
-		// one — it is what happens when nobody has answered. The loop below still keeps
-		// the name as a field when this scope has given one of its own, which is a rename.
-		if name := nameOf(row); name != "" {
+		// The row's own name, as a name: it is how the page says "this place exists, and
+		// it is not yours to change". It is not written into the fields, because a field
+		// is an answer this scope gave, and the answer "the place above is called this"
+		// is not one — it is what happens when nobody has answered. The loop below still
+		// keeps the name as a field when this scope has given one of its own, which is a
+		// rename.
+		//
+		// The first identifying field and not the whole identity joined: a row of a list
+		// that identifies itself by a name and a namespace is called its name, and a page
+		// handed "production web" would look for a cluster with a space in its name and
+		// find nothing.
+		if len(identify) > 0 {
+			if first, ok := row[identify[0]]; ok {
+				kept[rowNameField] = first
+			}
+		} else if name := nameOf(row); name != "" {
 			kept[rowNameField] = json.RawMessage(strconv.Quote(name))
 		}
 		for field, value := range row {

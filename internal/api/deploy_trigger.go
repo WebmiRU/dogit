@@ -100,6 +100,15 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 			return
 		}
 		s.reportDeployFinished(ctx, job, run, project, status, reason)
+
+		// Then ask whether this run has another deployment waiting.
+		//
+		// A deployment does not end through the path a runner's job ends through — the
+		// core carries it out itself — so nothing was looking for the next one, and a
+		// configuration with two places in it deployed the first and left the second
+		// pending for ever: a run that says it is still going somewhere it has already
+		// been.
+		s.startDeployIfReady(context.WithoutCancel(ctx), run.ID)
 	}
 
 	// The configuration is read from the commit being run, once more, rather than
@@ -142,7 +151,16 @@ func (s *Server) pendingDeploy(ctx context.Context, pipelineID int64) (*store.Jo
 	for index := range jobs {
 		job := jobs[index]
 		if job.Deploy != nil {
-			if deploy == nil {
+			// The first deployment of this run that has not been started yet.
+			//
+			// It used to be the first deployment of the run, full stop, which meant a
+			// configuration with two places in it deployed the first one and left the
+			// second pending for ever: the check found the one that had already run, saw
+			// that it was not waiting for anything, and stopped there. They are taken in
+			// the order the configuration lists them and one at a time — the module
+			// refuses two rollouts into one namespace at the same moment on purpose, and
+			// there is no reason to arrange that deliberately across two.
+			if deploy == nil && job.Status == store.JobPending {
 				deploy = &jobs[index]
 			}
 			continue

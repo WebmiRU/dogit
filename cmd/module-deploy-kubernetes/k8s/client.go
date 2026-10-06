@@ -116,6 +116,14 @@ type Client interface {
 	// cluster still has any idea what ran before.
 	SetImage(ctx context.Context, namespace, name, image string, timeout time.Duration) (Rollout, error)
 
+	// RunningImage is what a workload's containers are running right now.
+	//
+	// Asked on its own so that a refusal can be made before an answer begins: a caller
+	// that is already streaming cannot say "you are putting back what is already
+	// running" — it can only finish a success that changed nothing, which is a green
+	// tick over no work.
+	RunningImage(ctx context.Context, namespace, name string) (string, error)
+
 	// Counts says how far a rollout has got, in the numbers a person watching asks
 	// about.
 	Counts(ctx context.Context, namespace, name, image string) (RolloutCounts, error)
@@ -594,6 +602,18 @@ func (c *clusterClient) SetImage(ctx context.Context, namespace, name, image str
 	return c.awaitImage(ctx, namespace, name, image, timeout)
 }
 
+// RunningImage is what a workload's containers are running right now.
+func (c *clusterClient) RunningImage(ctx context.Context, namespace, name string) (string, error) {
+	deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("there is no deployment called %s in %s", name, namespace)
+		}
+		return "", fmt.Errorf("read deployment %s: %w", name, err)
+	}
+	return imagesOf(deployment), nil
+}
+
 // RolloutCounts is how a rollout is going, in the two numbers a person actually asks
 // about: how many pods are running the new image, and how many of the old ones are
 // still up.
@@ -991,6 +1011,16 @@ func tally(pods map[string]podSeen, desired int) RolloutCounts {
 // The image is checked as well as the rollout being finished, because those are two
 // different questions, and answering only the second is how a revert reports success
 // over a cluster still running what it had before.
+// awaitImage waits until the workload is actually running the image it was given.
+//
+// Not until the Deployment's template names it: that is true the moment the update is
+// accepted, and a caller that returns there reports a finished operation over pods
+// that are still running the image it was asked to take away. "Finished" then meant
+// "asked for", and the page showed a green tick while the old pods carried on serving.
+//
+// So the wait is for the rollout, by the same judgement a deployment waits by, and the
+// answer is that judgement — including the reason it did not finish, which is the part
+// somebody watching a rollback needs.
 func (c *clusterClient) awaitImage(ctx context.Context, namespace, name, image string,
 	timeout time.Duration) (Rollout, error) {
 
@@ -999,17 +1029,25 @@ func (c *clusterClient) awaitImage(ctx context.Context, namespace, name, image s
 	}
 	deadline := time.Now().Add(timeout)
 
-	last := ""
+	last, state := "", Rollout{}
 	for {
 		deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err == nil {
 			last = imagesOf(deployment)
 			if last == image {
-				return c.rolloutNow(ctx, namespace, name)
+				state = rolloutOf(deployment)
+				if state.Done {
+					return state, nil
+				}
 			}
 		}
 
 		if time.Now().After(deadline) {
+			if last == image {
+				return state, fmt.Errorf(
+					"the image was set to %s but %s never finished rolling it out: %s",
+					image, name, state.Reason)
+			}
 			return Rollout{}, fmt.Errorf(
 				"the image was set to %s but %s is running %s", image, name, describe(last))
 		}
@@ -1019,15 +1057,6 @@ func (c *clusterClient) awaitImage(ctx context.Context, namespace, name, image s
 		case <-time.After(2 * time.Second):
 		}
 	}
-}
-
-// rolloutNow reads the rollout state without waiting for it.
-func (c *clusterClient) rolloutNow(ctx context.Context, namespace, name string) (Rollout, error) {
-	deployment, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return Rollout{}, fmt.Errorf("read deployment %s: %w", name, err)
-	}
-	return rolloutOf(deployment), nil
 }
 
 // imagesOf is what a workload's containers are running, in order.
