@@ -979,17 +979,46 @@ let lastLoadedAt = 0
  */
 const availability = ref<Record<string, 'present' | 'missing' | 'unknown'>>({})
 
-/** Asks the registry, once per page, after the page itself has been drawn. */
-async function loadAvailability(rows: { name: string }[]) {
-  const names = rows.map((one) => one.name)
+/** Whether the question about the page on screen is under way. */
+const checking = ref(false)
+
+/** The page the last question was about, so one page is never asked about twice. */
+let askedAbout = ''
+
+/**
+ * Asks the registry about the page on screen, when the page on screen is this tab.
+ *
+ * Not at mount and not with the list: a page of places loads an image list for every place
+ * it holds, and asking each of them about ten manifests before anybody has looked at the
+ * tab is ten requests to somebody else's storage for an answer nobody has asked for. The
+ * question waits for the tab.
+ *
+ * It still does not hold the list up. The page of images is on screen first, with its own
+ * column of unknowns, and the answers land behind it — waiting for a registry before a list
+ * can be read at all would make somebody else's outage this page's loading time.
+ */
+function ensureAvailability() {
+  if (tab.value !== 'images' || !scopedCluster.value) return
+  const names = images.value.map((one) => one.name)
+  if (names.length === 0) return
+  const about = names.join('\n')
+  // Already asked about this page and the answers are here, or on their way: asking again
+  // would be a second round of the same question.
+  if (about === askedAbout && (checking.value || Object.keys(availability.value).length > 0)) {
+    return
+  }
+  askedAbout = about
+  void loadAvailability(names)
+}
+
+/** The question itself. The names are what is asked about — not a page number, because a
+ *  page is a list of names and the names are the question. */
+async function loadAvailability(names: string[]) {
   if (names.length === 0 || !scopedCluster.value) {
     availability.value = {}
     return
   }
-  // The page is on screen already: this is a second question about a page of ten, and
-  // waiting for it would mean waiting for somebody else's registry before a list of images
-  // could be read at all. It fills in behind the list, and a row that has not been answered
-  // about yet says so rather than claiming to be there.
+  checking.value = true
   const askedAt = names.join('\n')
   try {
     const answer = await api.post<{
@@ -1003,16 +1032,23 @@ async function loadAvailability(rows: { name: string }[]) {
     for (const one of answer.images ?? []) states[one.image] = one.state
     // A page that changed while the question was in flight gets its answers dropped rather
     // than shown against rows that are not the ones that were asked about.
-    if (askedAt !== images.value.map((one) => one.name).join('\n')) return
-    availability.value = states
+    if (askedAt === images.value.map((one) => one.name).join('\n')) availability.value = states
   } catch (caught) {
     console.warn('[dogit] the registry could not be asked about these images', caught)
-    if (askedAt !== images.value.map((one) => one.name).join('\n')) return
-    // Left as it was: a page whose rows have no marks is a page that says nothing, which is
-    // what a registry that could not be reached has honestly said.
-    availability.value = {}
+    // Left empty: a page whose rows say nothing is a page that says nothing, which is what
+    // a registry that could not be reached has honestly said.
+    if (askedAt === images.value.map((one) => one.name).join('\n')) availability.value = {}
+  } finally {
+    checking.value = false
   }
 }
+
+// Asking happens when the tab is opened and when another page of it is read — not when the
+// list arrives, because the list arrives for every place on the page and the tab is open for
+// none of them.
+watch(tab, (now) => {
+  if (now === 'images') ensureAvailability()
+})
 
 /** What is known about one image, which is nothing until it has been answered about. */
 function availabilityOf(image: string): 'present' | 'missing' | 'unknown' | '' {
@@ -1123,14 +1159,18 @@ async function loadImages() {
     availability.value = {}
     return
   }
-  void loadAvailability(images.value)
+  ensureAvailability()
 }
 
 /** Goes to a page of the catalogue by asking for it. */
 function goToImagePage(to: number) {
   if (to < 1 || to > imagePages.value) return
   imagePage.value = to
+  // Another page, another question — and the marks of the page just left are about images
+  // that are no longer on screen, so they go rather than waiting to be overwritten.
   availability.value = {}
+  checking.value = false
+  askedAbout = ''
   void loadImages()
 }
 
@@ -1883,12 +1923,23 @@ watch(() => props.module.id, load)
                     </span>
                     <span
                       v-else-if="availabilityOf(image.name) === 'unknown'"
-                      class="muted"
+                      class="badge badge-neutral"
                       title="the registry did not answer, so whether this image can be pulled from it is not known"
                     >
-                      not known
+                      Unknown
                     </span>
-                    <span v-else class="muted">—</span>
+                    <!-- Not an answer yet, so not a badge: the question is going out and
+                         the row says what is happening to it. It turns into one of the
+                         three above within a moment, and a badge that is about to change
+                         is a badge that was never an answer. -->
+                    <span
+                      v-else-if="checking"
+                      class="muted small"
+                      title="asking the registry now"
+                    >
+                      Checking…
+                    </span>
+                    <span v-else class="badge badge-neutral">Unknown</span>
                   </td>
                   <td class="actions-col">
                     <!-- Not gated on the row having a deployment of its own: an image
