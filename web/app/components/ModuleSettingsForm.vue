@@ -17,8 +17,7 @@ import type { ModuleRow, SettingEntry, SettingSpec } from '~/types/module'
 const props = withDefaults(
   defineProps<{
     module: ModuleRow
-    /** Whose values this is: instance, group or project. */
-    /**
+  /**
    * Fields this page must not show, by key.
    *
    * A field is hidden rather than emptied, and the form says why: a cluster's
@@ -39,10 +38,12 @@ const props = withDefaults(
   /**
    * Whether this viewer may change anything here.
    *
-   * A page that is open to everybody who may read a project shows its settings with the
-   * controls still there, and does not: a control that cannot work makes the page look
-   * broken, and the point of this form on a project page is that a developer can see
-   * what they deploy to.
+   * Off unless the page says otherwise, because Vue gives an absent Boolean prop the
+   * value false and a form that silently became read-only is worse than one that never
+   * could be edited. A page that is open to everybody who may read a project shows its
+   * settings with the controls still there, and does not: a control that cannot work
+   * makes the page look broken, and the point there is that a developer can see what
+   * they deploy to.
    */
   canEdit?: boolean
   scope?: 'instance' | 'group' | 'project'
@@ -690,10 +691,9 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                    asks whether a push may do it by itself. They are different questions:
                    the first takes the place away, the second leaves it here for somebody
                    to deploy to on purpose. -->
+              <div v-if="spec.items?.identify?.length" class="row-switches" :title="inheritedNote">
               <label
-                v-if="spec.items?.identify?.length"
                 class="row-switch"
-                :title="inheritedNote"
               >
                 <span class="row-switch-name">Autodeploy</span>
                 <button
@@ -708,7 +708,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                   <span class="knob" />
                 </button>
               </label>
-              <label v-if="spec.items?.identify?.length" class="row-switch">
+              <label class="row-switch">
                 <span class="row-switch-name">In use</span>
                 <button
                   class="switch"
@@ -722,6 +722,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                   <span class="knob" />
                 </button>
               </label>
+              </div>
               <button
                 v-if="rowIsOwn(spec, row) || !spec.items?.identify?.length"
                 class="link-button row-remove"
@@ -736,10 +737,13 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               </span>
             </div>
 
-            <!-- This row's own Save, below its own fields: a row is saved by itself,
-                 so changing one's namespace is never also a chance to rewrite the
-                 other's kubeconfig. -->
-            <!-- What this project has not decided yet, as one small button each. -->
+            <!-- What this scope has not decided yet, as one small link each: an empty
+                 box for every field of the module would be a page of values somebody
+                 forgot to fill in. -->
+            <!-- This row's own Save, below its own fields: a row is saved by itself, so
+                 changing one's namespace is never also a chance to rewrite the other's
+                 kubeconfig. It is here, at the end, and not under the row's name where
+                 it would be a button above the thing it acts on. -->
             <div v-if="mayEdit && hiddenFieldsOf(spec, row).length" class="setting-entry-more">
               <span class="muted small">also:</span>
               <button
@@ -754,31 +758,6 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
               </button>
             </div>
 
-            <div class="setting-entry-actions">
-              <!-- The hint takes its room whether or not it has anything to say, and the
-                   buttons keep their width while they are disabled: a row that changes
-                   shape when a switch is flicked makes the switch feel like it moved
-                   something. -->
-              <span class="muted small pending" :class="{ show: rowChanged(spec, index) }">
-                not saved yet
-              </span>
-              <button
-                class="btn btn-small"
-                type="button"
-                :disabled="busy || !mayEdit || !rowChanged(spec, index)"
-                @click="revertRow(spec, index)"
-              >
-                Discard
-              </button>
-              <button
-                class="btn btn-small btn-primary"
-                type="button"
-                :disabled="busy || !mayEdit || !rowChanged(spec, index)"
-                @click="saveRow(spec, index)"
-              >
-                {{ busy ? 'Saving…' : 'Save this row' }}
-              </button>
-            </div>
 
             <div
               v-for="field in fieldsOf(spec, row).filter((one) => !(props.hideFields ?? []).includes(one.key))"
@@ -835,6 +814,31 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
                 :type="field.secret ? 'password' : 'text'"
                 :placeholder="field.default !== undefined ? String(field.default) : ''"
               />
+            </div>
+            <div class="setting-entry-actions">
+              <!-- The hint takes its room whether or not it has anything to say, and the
+                   buttons keep their width while they are disabled: a row that changes
+                   shape when a switch is flicked makes the switch feel like it moved
+                   something. -->
+              <span class="muted small pending" :class="{ show: rowChanged(spec, index) }">
+                not saved yet
+              </span>
+              <button
+                class="btn btn-small"
+                type="button"
+                :disabled="busy || !mayEdit || !rowChanged(spec, index)"
+                @click="revertRow(spec, index)"
+              >
+                Discard
+              </button>
+              <button
+                class="btn btn-small btn-primary"
+                type="button"
+                :disabled="busy || !mayEdit || !rowChanged(spec, index)"
+                @click="saveRow(spec, index)"
+              >
+                {{ busy ? 'Saving…' : 'Save this row' }}
+              </button>
             </div>
           </div>
 
@@ -1000,9 +1004,9 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
 
 .setting-entry-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 8px 16px;
   margin-bottom: 10px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
@@ -1034,19 +1038,22 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
 }
 
 /* A row's own fates: remove it if this scope wrote it, switch it off if not. */
-.row-switch,
-.row-remove {
+/* A row's own answers, in one group on the right: two switches and, for a row this
+   scope wrote, its own Remove. They are laid out as a group so that the switches line up
+   with each other and the row does not read as a sentence. */
+.row-switches {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 6px 18px;
   margin-left: auto;
-  cursor: pointer;
 }
 
-.row-switch + .row-switch,
-.row-switch + .row-remove,
+.row-switch,
 .row-remove {
-  margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
 }
 
 .row-switch-name {
@@ -1056,7 +1063,7 @@ watch(() => [props.module.id, props.scope, props.scopeID], load)
   color: var(--text-muted);
   /* The width of the longest of these words, so that switching one on and off does not
      narrow the row it is in. */
-  min-width: 74px;
+  min-width: 72px;
 }
 
 /* Why an inherited row has no Remove button, said once where it is seen. */

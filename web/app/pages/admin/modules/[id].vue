@@ -285,6 +285,7 @@ const storageFraction = computed(() => {
             <ModuleSettingsForm
               :module="module"
               scope="instance"
+              :can-edit="true"
               note="These are the instance-wide values. Group and project scopes override them and are configured on the group or project page."
             />
           </div>
