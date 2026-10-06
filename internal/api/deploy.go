@@ -114,6 +114,11 @@ type registryCredential struct {
 	Username string `json:"username,omitempty"`
 	// SecretName is what the module should call the Secret it writes.
 	SecretName string `json:"secret_name"`
+	// InsecureTLS is what is known about this registry's certificate, for a module that
+	// has to reach the same registry over the same connection to ask whether an image is
+	// still there. It is not written into the cluster: a kubelet is told to accept a bad
+	// certificate by a flag, not by a secret, and a secret is not that flag.
+	InsecureTLS bool `json:"insecure_tls,omitempty"`
 }
 
 type deployManifest struct {

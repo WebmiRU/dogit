@@ -88,6 +88,12 @@ type deployRegistry struct {
 	Token      string `json:"token"`
 	Username   string `json:"username"`
 	SecretName string `json:"secret_name"`
+	// InsecureTLS is what the registry on the list says about its own certificate. It is
+	// written into a pull secret as a kubelet flag rather than into the secret, and it is
+	// read here for the same reason: this module asks the registry whether it still serves
+	// an image, and it has to ask over the connection the cluster would use rather than
+	// over one that verifies where the pull would not.
+	InsecureTLS bool `json:"insecure_tls,omitempty"`
 }
 
 // pullSecretOf is the Secret to write into the namespace, or nil when there is nothing to
@@ -478,6 +484,20 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Whether the registry still has the version being put back, asked here for the same
+	// reason everything above it is asked here: past this point the answer is a stream, and
+	// a refusal inside it can only be a line in a success.
+	//
+	// Only "the registry says it does not have it" stops it. A registry that did not
+	// answer has not said that, and a rollback refused on a timeout would make every
+	// rollback on an instance dead for as long as somebody else's registry is asleep.
+	if gone, at := imageGone(ctx, request.Registry, target.Image); gone != "" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"%s is not in %s, so there is nothing to put back — the registry has to have "+
+				"it under that digest before a workload can be moved back to it", gone, at))
+		return
+	}
+
 	// A stream, like a deploy: putting a version back is a rollout too, and the pods
 	// coming up one at a time is exactly what somebody watching wants to see.
 	stream := newProgressWriter(w)
@@ -507,6 +527,43 @@ func (c *coreClient) handleRevert(w http.ResponseWriter, r *http.Request) {
 		stream.send(deploy.Progress{Message: err.Error(), Failed: true})
 	}
 	stream.send(deploy.Progress{Done: true, Message: "finished", Deployment: &record})
+}
+
+// imageGone is what to tell somebody whose registry has answered that it does not have the
+// version they asked for, and where it answered that — empty when it did not.
+//
+// The credential and the address are the ones the core resolved for this place, which is what
+// makes the answer about the pull that would happen: the same registry, the same login, the
+// same decision about the certificate.
+//
+// Nothing is asked when the core named no registry or the record's image carries neither a
+// digest nor a tag: there is no name to ask about, and a rollback that cannot even say which
+// version it wants is refused by the check above rather than here.
+func imageGone(ctx context.Context, registry *deployRegistry, image string) (gone, at string) {
+	if registry == nil {
+		return "", ""
+	}
+	address := registryAddressOf(registry)
+	if address == "" {
+		return "", ""
+	}
+	path, reference := k8s.ImageReferenceAt(image, address)
+	if path == "" || reference == "" {
+		return "", ""
+	}
+	probe := k8s.RegistryProbe{
+		Address:     address,
+		Username:    registry.Username,
+		Token:       registry.Token,
+		InsecureTLS: registry.InsecureTLS,
+	}
+	if probe.Has(ctx, path, reference) != k8s.Missing {
+		return "", ""
+	}
+	// The version as the place would name it: the repository without the address, and
+	// the digest. The address is said once, as the registry — writing the same host twice
+	// in one sentence makes a reader check whether there are two of them.
+	return path + "@" + reference, address
 }
 
 // handleCurrent answers what is running in one place, right now.
@@ -809,6 +866,67 @@ func (c *coreClient) handleImages(w http.ResponseWriter, r *http.Request) {
 		"per_page": perPage, "pages": pages, "has_more": page*perPage < total,
 	})
 }
+
+// handleImagesAvailability asks the registry this place pulls from whether it still serves
+// each of the images on a page of the catalogue.
+//
+// Asked of the registry rather than of anything this module remembers, because the question
+// is about the registry and not about this module's history: the history says what was
+// deployed here, and a registry somebody deleted last week still answers for everything this
+// module has a record of. The core supplies the address and the credential because it is the
+// core that resolved them for the place, and this module would otherwise have to resolve
+// them a second time and could come to a different answer.
+//
+// Fifty is the limit and the core is expected to stay under it — a page of ten. It is here
+// anyway, because a request that asks a registry about a thousand manifests at once is a
+// request for a rate limit, and the answer that comes back is "unknown" for all of them.
+func (c *coreClient) handleImagesAvailability(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Registry deployRegistry `json:"registry"`
+		Images   []struct {
+			Path      string `json:"path"`
+			Reference string `json:"reference"`
+		} `json:"images"`
+	}
+	if err := decode(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(request.Registry.Address) == "" {
+		writeError(w, http.StatusBadRequest,
+			"the availability of an image is asked of a registry, and no registry was named")
+		return
+	}
+	if len(request.Images) > availabilityLimit {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"%d images were asked about at once, and the limit is %d",
+			len(request.Images), availabilityLimit))
+		return
+	}
+
+	probe := k8s.RegistryProbe{
+		Address:     request.Registry.Address,
+		Username:    request.Registry.Username,
+		Token:       request.Registry.Token,
+		InsecureTLS: request.Registry.InsecureTLS,
+	}
+	images := make([]k8s.ProbedImage, 0, len(request.Images))
+	for _, one := range request.Images {
+		images = append(images, k8s.ProbedImage{Path: one.Path, Reference: one.Reference})
+	}
+	states := probe.AvailabilityOf(r.Context(), images)
+
+	answers := make([]map[string]any, 0, len(images))
+	for i, one := range images {
+		answers = append(answers, map[string]any{
+			"path": one.Path, "reference": one.Reference, "state": string(states[i]),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"images": answers})
+}
+
+// availabilityLimit is how many manifests one request may ask about.
+const availabilityLimit = 50
 
 // handleTestCluster says whether a cluster can be reached, before anything is deployed
 // to it.

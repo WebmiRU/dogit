@@ -40,10 +40,12 @@ type placePull struct {
 	// cluster. Said in the log, because "the cluster will pull with no credential" is the
 	// answer to half of "why is this deployment failing".
 	Anonymous bool
-	// InsecureTLS is what the registry on the list says about its own certificate. It
-	// changes nothing here: a cluster is told to accept a bad certificate by a flag on the
-	// kubelet, not by a secret. It travels so the log can say what kind of registry this
-	// is, which is the first thing anybody checks when a pull fails.
+	// InsecureTLS is what is known about this registry's certificate: what a record on
+	// the list says, and for the registry this instance runs, what the address it
+	// published says. A cluster is told to accept a bad certificate by a flag on the
+	// kubelet rather than by a secret, so this does not travel into the workload — it
+	// travels to the module, which has to reach the same registry over the same
+	// connection when it is asked whether an image is still there.
 	InsecureTLS bool
 	// Image is the image this place pulls: the same path and the same digest, at Address.
 	Image string
@@ -86,6 +88,10 @@ func (p *placePull) credential() *registryCredential {
 		Token:      p.Token,
 		Username:   p.Username,
 		SecretName: "dogit-registry",
+		// Travels with the credential because the module reaches this same registry to
+		// ask whether a version is still there before it puts one back, and it has to get
+		// there the way the cluster does.
+		InsecureTLS: p.InsecureTLS,
 	}
 }
 
@@ -97,10 +103,15 @@ func pullSaid(p *placePull) string {
 	switch {
 	case p.Anonymous:
 		return " (no credential: the cluster pulls from it without one)"
+	// This instance's own registry first, whatever its certificate is like: the credential
+	// for it is always one of ours, and saying "a credential from the list of registries"
+	// about a token minted here would send somebody looking in the wrong place.
+	case p.TheInstanceRegistry:
+		return " (the cluster will pull with a credential of ours)"
 	case p.InsecureTLS:
 		return " (a credential from the list of registries; its certificate does not verify)"
 	default:
-		return " (the cluster will pull with a credential of ours)"
+		return " (a credential from the list of registries)"
 	}
 }
 
@@ -128,8 +139,28 @@ func (s *Server) placePullFor(ctx context.Context, project *models.Project,
 		return nil, nil
 	}
 
-	// The registry the image is already addressed to, which is where the run pushed it.
-	instanceAddress := registryHostFrom(repository)
+	pull, err := s.placePullFrom(ctx, project, module, place,
+		registryHostFrom(repository), log)
+	if err != nil {
+		return nil, err
+	}
+	if pull == nil {
+		return nil, nil
+	}
+	pull.Image = imageAtRegistry(image, pull.Address)
+	return pull, nil
+}
+
+// placePullFrom is where a place pulls from and what it pulls with, for any reason.
+//
+// The address is what the caller expects the images to be found at — for a deployment, the
+// host the image already carries, because that is where the run pushed it — and it is only
+// a suggestion in one respect: naming the registry this instance runs changes where the
+// credential comes from, and nothing else. Everything else is one decision, read once, and
+// this is the place it is made in: a deployment and a question about an image are answered
+// from the same value, or one of them is answering about a pull the other would not make.
+func (s *Server) placePullFrom(ctx context.Context, project *models.Project,
+	module *models.Integration, place, address string, log func(string, ...any)) (*placePull, error) {
 
 	chosen, err := s.placeRegistry(ctx, project, module, place, log)
 	if err != nil {
@@ -139,16 +170,10 @@ func (s *Server) placePullFor(ctx context.Context, project *models.Project,
 	// The registry this instance runs needs no lookup: the image already carries its
 	// address, and the credential for it is a token minted for this project and nothing
 	// else.
-	if sameRegistry(chosen, instanceAddress) {
-		return s.instanceRegistryPull(ctx, project, image, instanceAddress)
+	if sameRegistry(chosen, address) {
+		return s.instanceRegistryPull(ctx, project, "", address)
 	}
-
-	pull, err := s.registryCredentialFor(ctx, project, place, chosen)
-	if err != nil {
-		return nil, err
-	}
-	pull.Image = imageAtRegistry(image, chosen)
-	return pull, nil
+	return s.registryCredentialFor(ctx, project, place, chosen)
 }
 
 // placeRegistryCredential is what a rollback needs: the place's registry and its credential.
@@ -212,12 +237,27 @@ func (s *Server) instanceRegistryPull(ctx context.Context, project *models.Proje
 	if err != nil {
 		return nil, err
 	}
-	return &placePull{
+	pull := &placePull{
 		Address:             address,
 		Token:               token,
 		Image:               image,
 		TheInstanceRegistry: true,
-	}, nil
+	}
+	if published, perr := s.registryAddress(ctx, registry); perr == nil {
+		pull.InsecureTLS = servesWithoutTLS(published)
+	}
+	return pull, nil
+}
+
+// servesWithoutTLS is whether an address the registry module published is one with no
+// certificate behind it.
+//
+// The same question the cluster answers for itself, asked here because something that is
+// going to speak to this registry has to reach it the way the cluster does: an address
+// published as http and asked over https is a different service on the same machine, and a
+// client that guessed wrong there reports the registry as unreachable when it is not.
+func servesWithoutTLS(address string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(address)), "http://")
 }
 
 // registryCredentialFor is what the core knows about one address, and the refusal when it
@@ -249,6 +289,7 @@ func (s *Server) registryCredentialFor(ctx context.Context, project *models.Proj
 			pull.Token = token
 			pull.Anonymous = false
 			pull.TheInstanceRegistry = true
+			pull.InsecureTLS = servesWithoutTLS(published)
 			return pull, nil
 		}
 	case err != nil && !errors.Is(err, store.ErrNotFound):

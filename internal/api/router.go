@@ -151,10 +151,10 @@ func (s *Server) Register(r chi.Router) {
 		// The event feed the frontend follows. A WebSocket will replace the polling
 		// without changing what a page has to do.
 		// Both shapes of the same feed: a stream to follow, and a cursor read for
-	// anything that would rather ask. See internal/api/events.go.
-	authenticated.Get("/events", s.handleEventStream)
-	authenticated.Get("/events/stream", s.handleEventLive)
-	authenticated.Get("/events/socket", s.handleEventSocket)
+		// anything that would rather ask. See internal/api/events.go.
+		authenticated.Get("/events", s.handleEventStream)
+		authenticated.Get("/events/stream", s.handleEventLive)
+		authenticated.Get("/events/socket", s.handleEventSocket)
 
 		// Module administration: an administrator sees and configures modules,
 		// and a user mints the tokens they present to them.
@@ -291,7 +291,8 @@ func (s *Server) projectRoutes() chi.Router {
 	projects.Post(base+"/deployments/revert", s.handleRevertDeployment)
 	projects.Post(base+"/deploy-clusters/test", s.handleTestDeployCluster)
 	projects.Get(base+"/deploy-images", s.handleProjectDeployImages)
-		projects.Get(base+"/deploy-current", s.handleProjectDeployCurrent)
+	projects.Post(base+"/deploy-images-availability", s.handleProjectDeployImagesAvailability)
+	projects.Get(base+"/deploy-current", s.handleProjectDeployCurrent)
 	projects.Get(base+"/deploy-places", s.handleProjectDeployPlaces)
 	projects.Get(base+"/deploy-plan", s.handleProjectDeployPlan)
 

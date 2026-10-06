@@ -157,11 +157,16 @@ function podsOf(one: Deployment) {
   return bits.join(' · ')
 }
 
-/** How many rows a page holds, for both lists: twenty is what fits without scrolling
- *  past the end of it, and an operations list that stops at twenty is the whole
- *  history this instance has. */
-const PAGE = 20
-const IMAGE_PAGE = 20
+/**
+ * How many rows a page holds, for both lists.
+ *
+ * Ten. Twenty fitted on a screen and meant that the interesting row was often on the
+ * next page, and a list whose second page nobody looks at is a list whose tenth row does
+ * not exist — which is exactly the row a rollback is chosen from. Paging is already here;
+ * ten rows a page makes the first page worth reading.
+ */
+const PAGE = 10
+const IMAGE_PAGE = 10
 
 const { add: notify } = useNotifyPool()
 
@@ -963,6 +968,71 @@ let loadingNow = false
 let loadAgain = false
 let lastLoadedAt = 0
 
+/**
+ * What the registry this place pulls from said about each image on this page.
+ *
+ * Keyed by the image name the catalogue has, because that is what a row carries and what
+ * would have to be matched. Three states, and they are not two: `present`, `missing`, and
+ * `unknown` — a registry that did not answer. Only `missing` is acted on, because a timeout
+ * is not a deletion and refusing every rollback on an instance whose registry happens to be
+ * slow would be a much worse failure than the one this is about.
+ */
+const availability = ref<Record<string, 'present' | 'missing' | 'unknown'>>({})
+
+/** Asks the registry, once per page, after the page itself has been drawn. */
+async function loadAvailability(rows: { name: string }[]) {
+  const names = rows.map((one) => one.name)
+  if (names.length === 0 || !scopedCluster.value) {
+    availability.value = {}
+    return
+  }
+  // The page is on screen already: this is a second question about a page of ten, and
+  // waiting for it would mean waiting for somebody else's registry before a list of images
+  // could be read at all. It fills in behind the list, and a row that has not been answered
+  // about yet says so rather than claiming to be there.
+  const askedAt = names.join('\n')
+  try {
+    const answer = await api.post<{
+      images?: { image: string; state: 'present' | 'missing' | 'unknown' }[]
+    }>(`/projects/${props.projectId}/deploy-images-availability?target=${encodeURIComponent(target.value)}`, {
+      cluster: scopedCluster.value,
+      namespace: scopedNamespace.value,
+      images: names,
+    })
+    const states: Record<string, 'present' | 'missing' | 'unknown'> = {}
+    for (const one of answer.images ?? []) states[one.image] = one.state
+    // A page that changed while the question was in flight gets its answers dropped rather
+    // than shown against rows that are not the ones that were asked about.
+    if (askedAt !== images.value.map((one) => one.name).join('\n')) return
+    availability.value = states
+  } catch (caught) {
+    console.warn('[dogit] the registry could not be asked about these images', caught)
+    if (askedAt !== images.value.map((one) => one.name).join('\n')) return
+    // Left as it was: a page whose rows have no marks is a page that says nothing, which is
+    // what a registry that could not be reached has honestly said.
+    availability.value = {}
+  }
+}
+
+/** What is known about one image, which is nothing until it has been answered about. */
+function availabilityOf(image: string): 'present' | 'missing' | 'unknown' | '' {
+  return availability.value[image] ?? ''
+}
+
+/**
+ * Whether a version can be put back, and why not when it cannot.
+ *
+ * Only a registry that has said the image is not there. Every other state — including a
+ * registry that said nothing — leaves the button as it was, because the module refuses the
+ * rollback anyway if the image turns out to be gone, and a button greyed out on a network
+ * hiccup teaches people that the button is broken.
+ */
+function revertBlocked(image: string): string {
+  return availabilityOf(image) === 'missing'
+    ? 'the registry this place pulls from does not have this image any more'
+    : ''
+}
+
 /** How close together two loads may be and still both be worth making. */
 const LOAD_SETTLE_MS = 250
 
@@ -1050,13 +1120,17 @@ async function loadImages() {
     // none" unless the failure says so, and a catalogue that silently reads as empty is
     // worse than one that admits it could not be read.
     console.warn('[dogit] the image catalogue could not be read', caught)
+    availability.value = {}
+    return
   }
+  void loadAvailability(images.value)
 }
 
 /** Goes to a page of the catalogue by asking for it. */
 function goToImagePage(to: number) {
   if (to < 1 || to > imagePages.value) return
   imagePage.value = to
+  availability.value = {}
   void loadImages()
 }
 
@@ -1231,6 +1305,18 @@ async function revertTo(deployment: PlacedImage) {
   const image = deployment.image ?? ''
   if (!image) {
     const message = 'This row does not say which image it is, so there is nothing to put back.'
+    error.value = message
+    notify(message, { type: 'error', timer: 0 })
+    return
+  }
+
+  // Asked here as well as on the button, because a button that is greyed out is not the only
+  // way something gets here: an answer that arrived while this page sat open is the usual
+  // way, and a refusal that arrives after the question was asked is a question somebody
+  // watched fail for an answer they had.
+  const blocked = revertBlocked(image)
+  if (blocked) {
+    const message = `This version cannot be put back: ${blocked}.`
     error.value = message
     notify(message, { type: 'error', timer: 0 })
     return
@@ -1733,6 +1819,10 @@ watch(() => props.module.id, load)
                   <th>Tags</th>
                   <th>Operations</th>
                   <th>Where</th>
+                  <!-- Its own column because it is a fact about the registry rather than
+                       about this project: the same image is in the registry or it is not,
+                       and it can change without anything here being deployed. -->
+                  <th>In the registry</th>
                   <th class="actions-col">Put back</th>
                 </tr>
               </thead>
@@ -1765,6 +1855,30 @@ watch(() => props.module.id, load)
                       {{ image.live.cluster }}/{{ image.live.namespace }}
                     </span>
                     <span v-else class="muted">never deployed</span>
+                  </td>
+                  <!-- Asked of the registry this place pulls from, once per page, after
+                       the page was drawn. "not asked" is drawn as a dash rather than as
+                       "yes": a row that has not been answered about is not a row that has
+                       been found. -->
+                  <td class="small registry-cell">
+                    <span v-if="availabilityOf(image.name) === 'present'" class="muted">
+                      there
+                    </span>
+                    <span
+                      v-else-if="availabilityOf(image.name) === 'missing'"
+                      class="badge badge-warning"
+                      title="the registry this place pulls from has answered that it does not have this image"
+                    >
+                      gone
+                    </span>
+                    <span
+                      v-else-if="availabilityOf(image.name) === 'unknown'"
+                      class="muted"
+                      title="the registry did not answer, so whether this image is there is not known"
+                    >
+                      not known
+                    </span>
+                    <span v-else class="muted">—</span>
                   </td>
                   <td class="actions-col">
                     <!-- Not gated on the row having a deployment of its own: an image
@@ -1803,12 +1917,18 @@ watch(() => props.module.id, load)
                     >
                       Retire {{ retiredDone }}/{{ retiredTotal }}
                     </span>
+                    <!-- Refused here, in advance, when the registry has said the image is
+                         not there: the module refuses the same thing a moment later, and
+                         refusing it before the question is asked saves a cluster from
+                         being told to pull an image nobody can pull. Every other state
+                         leaves the button alone — a registry that did not answer is not
+                         a reason to stop anybody, it is a reason to know less. -->
                     <button
                       v-else-if="props.canManage && image.live"
                       class="btn btn-small"
                       type="button"
-                      :disabled="busy"
-                      title="Put this image back on the workload"
+                      :disabled="busy || !!revertBlocked(image.name)"
+                      :title="revertBlocked(image.name) || 'Put this image back on the workload'"
                       @click="revertTo(image.live)"
                     >
                       Revert to this
