@@ -29,6 +29,22 @@ export function shortDigest(image: string): string {
   return digest ? `[${digest.slice(0, 12)}]` : ''
 }
 
+/**
+ * The digest on its own: short, no algorithm, and no brackets.
+ *
+ * A third form because both of the others are tied to where they are read, and neither
+ * survives being moved. shortImage squashes the digest into the name as
+ * "repository[digest]", which reads as one identifier written oddly rather than as a name
+ * and a digest. shortDigest's brackets are for a digest sitting inside a sentence, where
+ * something has to set it off from the words around it — in a cell of its own, under a
+ * column already headed Digest, they are only noise.
+ */
+export function bareDigest(image: string): string {
+  const at = image.indexOf('@')
+  const digest = (at < 0 ? image : image.slice(at + 1)).replace(/^[a-z0-9]+:/, '')
+  return digest ? digest.slice(0, 12) : ''
+}
+
 /** Relative time such as "3 minutes ago", falling back to an absolute date. */
 export function timeAgo(value: string | Date | undefined | null): string {
   if (!value) return ''

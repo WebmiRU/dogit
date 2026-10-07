@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onRewake } from '~/lib/eventSocket'
-import { shortImage as formatShortImage } from '~/utils/format'
+import { bareDigest, shortImage as formatShortImage } from '~/utils/format'
 /**
  * What is deploying now, and what has been deployed.
  *
@@ -354,6 +354,18 @@ interface KnownImage {
  * them instead of reading them.
  */
 const shortImage = formatShortImage
+
+/**
+ * The repository half of an image address, without the digest.
+ *
+ * "registry.f220.ru/test/versions@sha256:90481ae2…" and "registry.f220.ru/test/versions"
+ * are the same image, and only the second is something a person can paste into a pull. The
+ * digest is not part of the name, so it does not belong inside it; it has a column.
+ */
+function imageRepository(image: string): string {
+  const at = (image ?? '').indexOf('@')
+  return at < 0 ? image : image.slice(0, at)
+}
 
 /**
  * The image's address: where it is and which one it is.
@@ -1908,6 +1920,13 @@ watch(() => props.module.id, load)
               <thead>
                 <tr>
                   <th>Image</th>
+                  <!-- Its own column, because a name and a digest are two different
+                       facts and one of them is not a name. Squashed together they read as
+                       one identifier written in an odd way, which is exactly how it
+                       looked: "registry.f220.ru/test/versions[90481ae28906]" is not
+                       something anybody can type. The repository is what a person pulls;
+                       the digest is what makes it unambiguous. -->
+                  <th>Digest</th>
                   <th>Tags</th>
                   <th>Operations</th>
                   <th>Where</th>
@@ -1924,9 +1943,25 @@ watch(() => props.module.id, load)
                   :key="image.digest"
                   :class="{ wanted: wanted && image.digest.endsWith(wanted) }"
                 >
-                  <!-- Repository and digest together, the way anything that pulls this would write
-                       it. The digest alone identifies it and names it for nobody. -->
-                  <td class="mono small image-cell">{{ shortImage(image.name) }}</td>
+                  <!-- The repository on its own, which is the part a person can copy into a pull or a
+                       kubectl. The digest beside it is in its own column, and together
+                       they say the same thing "repo@digest" does, in the order a person
+                       reads it. -->
+                  <td class="mono small image-cell">{{ imageRepository(image.name) }}</td>
+                  <!-- A chip like the tag beside it, because that is what it is: a label on
+                       this image, read rather than copied. The brackets it used to carry
+                       are shortDigest's, and those belong to a digest quoted inside a
+                       sentence, where something has to tell the digest apart from the
+                       words around it. In a cell of its own, under a column already headed
+                       Digest, there are no words to be confused with. The full address is
+                       in the title, since twelve characters are for reading and the rest
+                       is for copying. -->
+                  <td class="small">
+                    <span v-if="bareDigest(image.name)" class="tag mono" :title="image.name">
+                      {{ bareDigest(image.name) }}
+                    </span>
+                    <span v-else class="muted">—</span>
+                  </td>
                   <!-- The names this image was published under. Shown as tags in their
                        own column rather than under the digest, because they are the
                        names a person knows it by and the digest is not one of them. -->

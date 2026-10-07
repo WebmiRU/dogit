@@ -116,6 +116,19 @@ func main() {
 			core.history = history
 			log.Printf("module-deploy: history store ready")
 		}
+	} else {
+		// Said out loud, because this is the one way to be found without waiting for
+		// somebody to notice.
+		//
+		// The core hands the credentials over once, and hands over nothing after that,
+		// so a module that has lost the file where it kept them will be given none and
+		// cannot ask again: recovering is the administrator's job, and it has to start
+		// with somebody knowing this happened. Everything else about this module still
+		// works, and the deployments it does are recorded nowhere — which reads from the
+		// outside exactly like a module that has simply never deployed anything. Silence
+		// here would be the same as a healthy module that happens to have no history,
+		// and those two are told apart only by this line.
+		log.Printf("module-deploy: no saved database, deployments will not be remembered")
 	}
 
 	go heartbeat(ctx, core, cfg.interval, reRegister)

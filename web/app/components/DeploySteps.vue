@@ -133,28 +133,42 @@ watch(
  * message is a snapshot of one step, and a list built from snapshots loses the ticks
  * the moment a later step says anything.
  */
-/** The steps to draw: what the core planned, plus anything reported afterwards. */
+/** The steps to draw: anything announced that the plan did not name, then the plan. */
 const order = computed<PlannedStep[]>(() => {
-  const planned = [...(props.plan ?? [])]
-  const known = new Set(planned.map((one) => one.key))
+  const announced: PlannedStep[] = []
+  const known = new Set((props.plan ?? []).map((one) => one.key))
 
-  // Anything the module announces that was not in the plan is still real work and
-  // still belongs on the list: the core cannot know every step before the module
-  // starts, and the module is the one doing it. Appended in the order it arrived,
-  // which is the order it happened.
+  // Anything said that the plan did not name is still real work and still belongs on the
+  // list: the core cannot know every step before anybody starts, and the runner announcing
+  // its stages as it goes is exactly how this list learns what the build did. Collected in
+  // arrival order, which is the order it happened.
   for (const key of lastHeard.value.keys()) {
     if (known.has(key)) continue
     known.add(key)
-    planned.push({ key, label: labelOf(key) })
+    announced.push({ key, label: labelOf(key) })
   }
 
-  return planned
+  // Ahead of the plan rather than after it. The core does not start a deployment until the
+  // stage before it has finished, so whatever a runner said was said before the module said
+  // anything — and appending it below "Retire the old pods" dated the whole build as the
+  // last thing that happened. It also put the build's stages at the far end of the list,
+  // where reachedAt picked them up as the high-water mark during the build itself: every
+  // step of the deployment plan then sat at a lower index and was painted as done, several
+  // seconds before there was a deployment to do.
+  return [...announced, ...(props.plan ?? [])]
 })
 
-/** A name for a step the core did not mention, taken from what the module said. */
+/**
+ * A name for a step the plan did not mention.
+ *
+ * The stage's own name, and not a piece of what was said about it. A label cut out of the
+ * message is that same message again a few pixels along, in the same row, and only the part
+ * of it that happens to fit the column — so a page read "pushed
+ * registry.f220.ru/test/versions:80" and then, beside it, the whole sentence again. Naming
+ * the stage and putting what was said underneath it is one thing instead of two.
+ */
 function labelOf(key: string) {
-  const said = lastHeard.value.get(key)
-  return said?.message.slice(0, 40) || key
+  return key.charAt(0).toUpperCase() + key.slice(1)
 }
 
 /** Everything said so far, by phase: the last word on each. */

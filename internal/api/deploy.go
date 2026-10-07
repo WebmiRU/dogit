@@ -692,14 +692,47 @@ func (s *Server) deployModule(ctx context.Context, target string) (*models.Integ
 	kind := fmt.Sprintf(deployTargetKind, target)
 	module, err := s.store.Integrations().ByKind(ctx, kind)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"no module of kind %q is installed, so %q cannot be deployed to; "+
-				"this instance has nothing that deploys to it", kind, target)
+		// A 404 and not a plain error, because it is one.
+		//
+		// Left as it was, this came back as "an unexpected error occurred" with a 500,
+		// which says the server broke. Nothing broke: the caller named something this
+		// instance has no deploy module for. It is also the most likely mistake here,
+		// because a person reads "target" as the cluster — the name they can see in the
+		// places list — while this asks for the module's kind, which is a different word
+		// entirely and never appears in the interface. So the answer says what it wanted
+		// and what is actually installed, instead of leaving that to the server's log.
+		return nil, errNotFoundf(
+			"no deploy module of kind %q is installed; this instance has %s",
+			kind, s.installedDeployKinds(ctx))
 	}
 	if !module.Enabled {
-		return nil, fmt.Errorf("the %q module has been forbidden on this instance", kind)
+		return nil, errForbiddenf("the %q module has been forbidden on this instance", kind)
 	}
 	return module, nil
+}
+
+// installedDeployKinds are the deploy modules this instance actually has, said the way a
+// caller can act on: as the kinds to pass, not as a count.
+//
+// A count would be enough to tell that the answer is wrong and useless for working out
+// what to pass instead, and somebody who mistook a cluster for a kind has exactly that
+// question.
+func (s *Server) installedDeployKinds(ctx context.Context) string {
+	installed, err := s.store.Integrations().List(ctx)
+	if err != nil {
+		return "none that could be read"
+	}
+
+	kinds := []string{}
+	for _, one := range installed {
+		if strings.HasPrefix(one.Kind, "deploy:") && one.Enabled {
+			kinds = append(kinds, one.Kind)
+		}
+	}
+	if len(kinds) == 0 {
+		return "no deploy modules at all"
+	}
+	return strings.Join(kinds, " and ")
 }
 
 // readDeployManifests reads the repository's manifests at the commit.

@@ -657,6 +657,27 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 	return job, nil
 }
 
+// CountPendingJobs is how many jobs are sitting in the queue waiting for a runner.
+//
+// The same question ClaimJob asks, over the same rows, so that the number a runner is told
+// is the number it would have got: counting a job that is about to be taken and reporting it
+// as still waiting is the kind of off-by-one that makes a panel disagree with itself for a
+// few seconds at a time and teaches people to stop reading it.
+//
+// Deploy jobs are excluded for the same reason ClaimJob excludes them — a job with a deploy
+// has no script, so it is not work a runner can be given, and counting it would report a
+// queue that cannot be worked off.
+func (r *PipelineRepo) CountPendingJobs(ctx context.Context) (int, error) {
+	var count int
+	err := r.s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM jobs WHERE status = $1 AND deploy IS NULL`,
+		JobPending).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count pending jobs: %w", err)
+	}
+	return count, nil
+}
+
 // jobByIDTx reads one job through a transaction, so that a job taken inside it can be
 // read before it is given away.
 func (r *PipelineRepo) jobByIDTx(ctx context.Context, tx pgx.Tx, id int64) (*Job, error) {

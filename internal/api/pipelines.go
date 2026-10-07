@@ -661,6 +661,21 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"job": jobView(r, job)})
 }
 
+// pendingJobCount is how deep the queue is, or nil when that cannot be read.
+//
+// `any` rather than a plain count, because the one answer worse than not telling a runner how
+// deep the queue is, is telling it the queue is empty. A runner that believes it is idle on
+// an empty queue is behaving correctly, and the panel would be the only thing saying
+// otherwise. Nil means "not known", which a runner can pass on and a person can act on.
+func (s *Server) pendingJobCount(r *http.Request) any {
+	count, err := s.store.Pipelines().CountPendingJobs(r.Context())
+	if err != nil {
+		s.log.Warn("count the queue", "error", err)
+		return nil
+	}
+	return count
+}
+
 // handleClaimJob hands the next pending job to a runner module.
 //
 // The endpoint is module-authenticated, so a runner needs no user token and no
@@ -689,7 +704,16 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 		if err == store.ErrNotFound {
 			// Nothing to do is an answer, not a failure: a runner polls this every few
 			// seconds and an empty queue is the normal case.
-			s.writeJSON(w, r, http.StatusOK, map[string]any{"job": nil})
+			//
+			// The depth goes back either way, and that is the point of it. A runner
+			// that is polling an empty queue is the one case where the answer is not
+			// obvious from the runner's side — it cannot tell "nobody has pushed
+			// anything" from "the jobs are there and nobody is coming for them", and
+			// those two want opposite responses from whoever is watching.
+			s.writeJSON(w, r, http.StatusOK, map[string]any{
+				"job":     nil,
+				"waiting": s.pendingJobCount(r),
+			})
 			return
 		}
 		s.writeError(w, r, err)
@@ -699,7 +723,10 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("job claimed", "job", job.ID, "job_name", job.Name,
 		"project", job.ProjectPath, "runner", integration.Kind)
 
-	answer := map[string]any{"job": s.runnerJobView(r, job)}
+	answer := map[string]any{
+		"job":     s.runnerJobView(r, job),
+		"waiting": s.pendingJobCount(r),
+	}
 
 	// A job that builds an image needs a credential for the registry, and the
 	// registry's naming rule is the registry's own. The core asks the registry

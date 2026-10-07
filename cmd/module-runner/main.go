@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -293,6 +294,46 @@ type claim struct {
 	CloneURL string     `json:"clone_url,omitempty"`
 	Key      *deployKey `json:"key,omitempty"`
 	LogKey   string     `json:"log_key,omitempty"`
+
+	// Waiting is how many jobs were still queued at the core after this one was taken.
+	// A pointer because the core says "not known" by leaving it out, and a runner that
+	// cannot count the queue must say so rather than report a confident zero — the two
+	// mean opposite things to whoever is watching, and only one of them is true.
+	Waiting *int `json:"waiting,omitempty"`
+}
+
+// What this runner knows about itself between one heartbeat and the next.
+//
+// Package-level because the loop that does the work and the loop that reports on it are
+// separate goroutines with nothing to hand a reading across, and because these are
+// readings rather than state: a runner that starts over has simply not measured anything
+// yet, which is worth saying and not worth failing over.
+var (
+	// queueDepth is the core's answer to the last claim, not a count of anything held
+	// here — this runner holds no queue, and the number it passes on is the one that
+	// tells a waiting job whether anybody is coming.
+	queueDepth atomic.Int64
+	// queueKnown is whether the core answered at all. False means the number is a
+	// leftover, and a leftover shown as current is worse than nothing shown.
+	queueKnown atomic.Bool
+	lastWorkAt atomic.Int64 // unix nanoseconds; zero until work has actually arrived
+
+	// runnerSlots is this runner's capacity, read by the heartbeat to say how busy it
+	// is. A plain variable because it is set once, before any goroutine exists that
+	// could read it, and because len() of a channel is the answer already — counting
+	// slots separately would be a second answer that can disagree with the first.
+	runnerSlots chan struct{}
+)
+
+// recordClaim remembers what the last answer to "is there anything for me" said.
+func recordClaim(answer claim) {
+	if answer.Waiting != nil {
+		queueDepth.Store(int64(*answer.Waiting))
+		queueKnown.Store(true)
+	}
+	if answer.Job != nil {
+		lastWorkAt.Store(time.Now().UnixNano())
+	}
 }
 
 // deployKey is the credential for one job: a private key and where it came from.
@@ -312,6 +353,7 @@ type registryAccess struct {
 // loop takes work until the context is cancelled.
 func loop(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg config) {
 	slots := make(chan struct{}, cfg.concurrency)
+	runnerSlots = slots
 	ticker := time.NewTicker(cfg.poll)
 	defer ticker.Stop()
 
@@ -346,6 +388,7 @@ func take(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg con
 
 	answer, err := core.claim(ctx, cfg.tags())
 	answer.core = core
+	recordClaim(answer)
 	if err != nil {
 		<-slots
 		if !errors.Is(err, errNothingToDo) {
@@ -1463,6 +1506,29 @@ func stats() map[string]any {
 	if cpus := countCPUs(); cpus > 0 {
 		extra["cores"] = fmt.Sprint(cpus)
 	}
+
+	// The queue, and this runner's own use of it. Both are needed, and neither says
+	// anything about the other: from inside the runner, a queue full of jobs and a queue
+	// nobody has pushed to look exactly the same, and that is the whole difference between
+	// "raise the concurrency" and "nothing is wrong".
+	if queueKnown.Load() {
+		extra["queue"] = fmt.Sprint(queueDepth.Load())
+	} else {
+		// Said plainly rather than left at zero, because a runner that has not heard
+		// from the core must not look like one that has and found nothing.
+		extra["queue"] = "unknown"
+	}
+	if runnerSlots != nil {
+		extra["jobs"] = fmt.Sprintf("%d of %d running", len(runnerSlots), cap(runnerSlots))
+	}
+	// When work last arrived, because a runner idle for a minute and a runner idle for an
+	// hour are different problems and look identical from the outside.
+	if at := lastWorkAt.Load(); at > 0 {
+		extra["last_work"] = time.Since(time.Unix(0, at)).Round(time.Second).String() + " ago"
+	} else {
+		extra["last_work"] = "none yet"
+	}
+
 	for key, value := range extra {
 		if reading["extra"] == nil {
 			reading["extra"] = map[string]string{}

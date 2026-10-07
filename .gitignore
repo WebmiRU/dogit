@@ -20,3 +20,7 @@
 .vscode/
 *.swp
 .DS_Store
+# Binaries built by "go build" at the repository root
+/module-runner
+/module-registry
+/module-deploy-kubernetes
