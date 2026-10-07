@@ -48,6 +48,20 @@ kubectl -n buildkit create secret generic buildkit-client \
 kubectl -n buildkit delete pod buildkit-build --ignore-not-found --wait=false >/dev/null 2>&1
 
 say "собираю ${repo} и пушу в registry.f220.ru"
+
+# Реестр проверяет права по проекту, а не по имени репозитория: токен на
+# repository:test/versions выдаётся, на repository:что-то-ещё — нет. Поэтому push-имя
+# обязано быть именем проекта, и это не формальность, а единственный способ узнать, кому
+# образ вообще можно положить.
+#
+# Формат тот же, что у docker: base64(логин:пароль) в config.json, и buildctl читает его
+# оттуда же. Секрет, а не ConfigMap, потому что это пароль.
+push_auth="$(printf '%s:%s' \
+  "${DOGIT_PUSH_USER:?логин для пуша}" "${DOGIT_PUSH_PASSWORD:?пароль для пуша}" | base64 -w0)"
+kubectl -n buildkit create secret generic buildkit-push-auth \
+  --from-literal=config.json="{\"auths\":{\"registry.f220.ru\":{\"auth\":\"${push_auth}\"}}}" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+
 kubectl apply -f - >/dev/null <<YAML
 apiVersion: v1
 kind: Pod
@@ -60,6 +74,10 @@ spec:
   containers:
     - name: buildctl
       image: moby/buildkit:rootless
+      env:
+        # buildctl читает креды реестра отсюда — тот же файл, что и у docker.
+        - name: DOCKER_CONFIG
+          value: /docker-config
       command:
         - buildctl
         - --addr
@@ -92,6 +110,9 @@ spec:
         - name: certs
           mountPath: /certs
           readOnly: true
+        - name: cfg
+          mountPath: /docker-config
+          readOnly: true
         - name: out
           mountPath: /tmp
       resources:
@@ -117,6 +138,9 @@ spec:
     - name: certs
       secret:
         secretName: buildkit-client
+    - name: cfg
+      secret:
+        secretName: buildkit-push-auth
     - name: out
       emptyDir: {}
 YAML

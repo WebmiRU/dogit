@@ -28,6 +28,65 @@ A heavy build — Go, Node — will be tight in the ~2.5 GB that is free. The po
 ceiling for that reason, and `--oci-worker-max-parallelism` is not set yet, which is the next
 thing to set if the node turns out to be shared with anything that also needs to be up.
 
+## The process sandbox could not be recovered here
+
+`--oci-worker-no-process-sandbox` is in the manifest because it is what makes an
+unprivileged build work under Kubernetes, and it has a real cost: the daemon cannot kill a
+process that refuses to exit, and an `ExecOp` container can kill — and possibly `ptrace` —
+arbitrary processes in the daemon's own container. BuildKit's documentation points at
+`securityContext.procMount: Unmasked` as the near-equivalent of the Docker flag this
+replaces, and notes that it differs in depending on `hostUsers: false`. On this cluster that
+does not work, and it was worth the hour it took to find out rather than the week it would
+have cost to assume.
+
+Measured, on jabjab at v1.36.5+k3s1, kernel 6.12:
+
+| configuration | process sandbox | snapshotter | builds |
+| --- | --- | --- | --- |
+| `moby/buildkit:rootless`, `--oci-worker-no-process-sandbox` | no | `overlayfs` | **yes** |
+| `hostUsers: false`, `moby/buildkit:latest`, `procMount: Unmasked`, `overlayfs` | yes | `overlayfs` | **no** |
+| the same, `native` | yes | `native` | **no** |
+
+Two separate failures, both measured rather than reasoned about.
+
+**`hostUsers: false` with the rootless image does not start at all.** The pod is already in
+a user namespace, and the rootlesskit inside it cannot create a nested one:
+
+```
+[rootlesskit:parent] error: failed to setup UID/GID map:
+newuidmap 13 [0 1000 1 1 100000 65536] failed: newuidmap: write to uid_map failed: Operation not permitted
+```
+
+**`hostUsers: false` with the plain image starts, reports `process-mode:sandbox`, and then
+cannot build.** The first bind mount is refused:
+
+```
+failed to read dockerfile: failed to mount /tmp/buildkit-mount…:
+  [{Type:bind Source:/var/lib/buildkit/runc-overlayfs/snapshots/snapshots/2/fs
+    Options:[rbind ro]}]: mount source: …: operation not permitted
+```
+
+Not a snapshotter problem: `native` fails identically, on `runc-native/snapshots/snapshots/1`.
+The emptyDir that BuildKit's own troubleshooting prescribes for this exact error was in
+place, at the path the plain image uses. So the mounts a pod gets inside a user namespace
+cannot be re-bound read-only from within it, and the process sandbox is the price of that.
+
+Upstream has not caught up here: `examples/kubernetes/pod.rootless.yaml` still ships the
+rootless image and the flag. This configuration is one the documentation describes only in
+fragments, which is why the fix for the failure above is not written down anywhere.
+
+**What the remaining exposure actually is.** The daemon runs as uid 1000 with no host mounts
+but its cache PVC, and it has no Kubernetes token. So the worst a Dockerfile can do is reach
+inside the builder's own container: kill `buildkitd`, which fails the build and restarts the
+pod, or leak memory into the 2 GB ceiling, which OOMKills it. On a single-replica builder
+that is a stalled queue, not a host. It is a smaller thing than the flag's warning sounds
+like, and it is the thing to weigh against `privileged: true`, which would restore the
+sandbox and give up the reason for the pod.
+
+If the sandbox ever does need to come back, the options are `privileged: true` on this
+cluster, or a different runtime — the refusal is a mount-namespace restriction, not a
+BuildKit setting.
+
 ## What is not settled
 
 **Running the jobs.** BuildKit builds images and does not run containers, so the step that
@@ -37,13 +96,10 @@ limits and node isolation, which they have no way of getting while a shared Dock
 what runs them — but it means the runner needs a scoped Kubernetes token, and that is a
 larger change than the builder was.
 
-**`hostUsers: false` instead of `--oci-worker-no-process-sandbox`.** The flag is currently
-what makes an unprivileged build work under Kubernetes, and it has a real cost: the daemon
-cannot kill a process that refuses to exit, and an `ExecOp` container can kill and possibly
-ptrace arbitrary processes in the daemon's own container. BuildKit's documentation notes that
-`securityContext.procMount: Unmasked` is a near-equivalent of the Docker flag this replaces,
-and that it differs in depending on `hostUsers: false`. If a pod's own user namespace is
-enough, the flag and its cost both go away. Not tried yet, and it is the first thing to try.
+**`hostUsers: false` instead of `--oci-worker-no-process-sandbox`.** Tried, measured, and it
+does not work on this cluster. The table above has the numbers; the short version is that the
+pod's mounts cannot be re-bound from inside its own user namespace, so the sandbox and the
+unprivileged pod are not both available here.
 
 **The push path.** Dogit mints a project-scoped module token for each build and the runner
 does `docker login -u builder` with it. BuildKit takes the same thing as a Docker
