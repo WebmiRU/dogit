@@ -97,6 +97,16 @@ type Request struct {
 	// so that a rollback has something to act on without asking the cluster what it
 	// thinks was deployed.
 	Workload string
+	// Preface is what the image's own run did before this deployment began, as lines
+	// under the phases the plan gives them.
+	//
+	// Written into the record and not said to anybody watching. The build was done and
+	// narrated by another job, in its own words, to a page that was watching it then —
+	// and a line repeated here in the core's words arrives after the reader has already
+	// seen it, saying less than what they saw. What it must not do is leave a hole: the
+	// record of a deployment is what somebody opens next week, and a log that starts at
+	// the manifests says the image came out of nowhere.
+	Preface []LogLine
 	// Timeout is how long to wait. Zero means the target's own.
 	Timeout time.Duration
 
@@ -366,7 +376,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 	// Every line this deployment says is also written down, here as it happens and to
 	// the database when it ends. A watcher sees a deployment once; somebody reading
 	// about it next week needs it to still be there.
-	var said []LogLine
+	said := append([]LogLine{}, request.Preface...)
 	watching := request.Progress
 	request.Progress = func(progress Progress) {
 		// Every line carries the record, including the ones that only close a phase.

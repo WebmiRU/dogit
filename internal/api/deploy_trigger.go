@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ewolf/dogit/internal/models"
@@ -225,6 +226,34 @@ func (s *Server) deploySpecFor(ctx context.Context, project *models.Project,
 	return config, nil
 }
 
+// placeRecordOf is which place a job is about, as an event about that place has to name
+// itself — the place's name and the namespace it deploys into, and nothing else.
+//
+// Nil when the job names no place, which is every job that is not a deployment. That is
+// not a shrug: an event with no place in it belongs to the project, and the pages that
+// draw per place decide for themselves what to do with one.
+func (s *Server) placeRecordOf(ctx context.Context, project *models.Project,
+	job *store.Job) map[string]any {
+
+	if job == nil || job.Deploy == nil {
+		return nil
+	}
+	place := strings.TrimSpace(asString(job.Deploy["Target"]))
+	if place == "" {
+		return nil
+	}
+	record := map[string]any{"cluster": place}
+
+	module, err := s.deployModule(ctx, strings.TrimSpace(asString(job.Deploy["Module"])))
+	if err != nil || module == nil {
+		return record
+	}
+	if namespace := placeNamespaceIn(s.placeRows(ctx, project, module), place); namespace != "" {
+		record["namespace"] = namespace
+	}
+	return record
+}
+
 // reportDeployFinished tells the rest of the system a deployment is done.
 //
 // Same events as any other job, because a deployment is any other job: the pipeline
@@ -242,16 +271,33 @@ func (s *Server) reportDeployFinished(ctx context.Context, job *store.Job, run *
 		"pipeline_id": run.ID,
 		"job_name":    job.Name,
 		"status":      status,
+		// A deployment is a job like any other, so this line is the same one the build
+		// sends and says no more about the run — and a run with two places in it has one
+		// deployment still to come. Said apart, so a page watching the second place is
+		// not told by the first place's ending that nothing is left.
+		"run_finished": !s.runStillHasWork(ctx, run.ID),
+		"job_id":       job.ID,
 	})
 
 	// The history changed — once, now, and not again until the next deployment. Its own
 	// event so that a page watching the list of what has been deployed does not also
 	// redraw it for every pod that comes up.
-	s.publishPipeline(ctx, project.ID, nil, models.EventDeployHistory, map[string]any{
+	history := map[string]any{
 		"job_id":  job.ID,
 		"status":  status,
 		"project": project.Path,
-	})
+	}
+	// Which place, because "a deployment ended" is not one event but one per place, and
+	// a project has as many of them as it has places.
+	//
+	// Said apart because a place that is switched off ends in a millisecond: a run with
+	// two places was over for the one nobody may deploy to before the other had read a
+	// single manifest, and a page that took every ending as its own closed the card of
+	// the place still rolling out and took its log with it.
+	if record := s.placeRecordOf(ctx, project, job); record != nil {
+		history["deployment"] = record
+	}
+	s.publishPipeline(ctx, project.ID, nil, models.EventDeployHistory, history)
 
 	remaining, err := s.store.Pipelines().UnfinishedJobs(ctx, run.ID)
 	if err != nil || remaining != 0 {

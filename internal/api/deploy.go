@@ -94,6 +94,17 @@ type deployRequest struct {
 	// list that is neither.
 	Commit string `json:"commit,omitempty"`
 
+	// Preface is what this run did to the image before the deployment began, under the
+	// phases the plan already promises: the build and the push, which happened in another
+	// job and finished before this one started.
+	//
+	// For the record rather than for the watchers. The build said what it was doing
+	// while it did it, in its own words, to whoever was watching then — and a page that
+	// was not open at the time reads this deployment's log next week, where a log
+	// starting at the manifests says the image arrived from nowhere. Two lines, said
+	// once, in the past tense, about work that is already done.
+	Preface []prefaceLine `json:"preface,omitempty"`
+
 	// Place is the name this repository gave the destination, when it named it.
 	//
 	// Carried because the cluster and namespace do not say which of three places this
@@ -213,6 +224,10 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		return err
 	}
 
+	// The names the image went out under, asked for once: the deployment is about this
+	// image under these names, and its record says what became of them.
+	tags := s.deployedImageTags(ctx, repoDir, pipelineRun)
+
 	request := deployRequest{
 		Project: project.Path,
 		// Where in the cluster, and which cluster, is the place's own business: it is
@@ -228,8 +243,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		TimeoutSeconds: deployTimeoutSeconds(spec.Timeout),
 		Ref:            pipelineRun.Ref,
 		Sha:            pipelineRun.SHA,
-		Tags:           s.deployedImageTags(ctx, repoDir, pipelineRun),
+		Tags:           tags,
 		Commit:         shortRunSHA(pipelineRun),
+		Preface:        prefaceFor(ctx, s, pipelineRun, job.ID, image, tags),
 	}
 
 	request.Expect.Secrets = spec.Expect.Secrets
@@ -488,6 +504,61 @@ func progressLine(progress deployProgress) string {
 
 	line.WriteString(progress.Message)
 	return line.String() + "\n"
+}
+
+// prefaceLine is one line of a deployment's record that a job other than this one said.
+type prefaceLine struct {
+	Phase   string `json:"phase"`
+	Message string `json:"message"`
+}
+
+// prefaceFor is what this run did to the image before the deployment, as lines under the
+// phases the plan gives them.
+//
+// Read out of the run rather than remembered from watching it: the build is over by the
+// time a deployment starts, and the record is written for somebody who was not here. The
+// job that built the image and how long it took are both in the run, and the names the
+// image was pushed under are what this deployment is about to use.
+//
+// Nothing when the run built nothing — a deployment of an image from somewhere else has
+// no build to account for, and a step with a line that invents one is worse than a step
+// the plan left out.
+func prefaceFor(ctx context.Context, s *Server, run *store.Pipeline, jobID int64,
+	image string, tags []string) []prefaceLine {
+
+	built, from := builtImage(ctx, s, run, jobID)
+	if strings.TrimSpace(built) == "" {
+		return nil
+	}
+
+	builtLine := fmt.Sprintf("built by the %q job", from)
+	if jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, run.ID); err == nil {
+		for _, job := range jobs {
+			if job.Name != from || job.DurationMS <= 0 {
+				continue
+			}
+			builtLine += fmt.Sprintf(" in %s",
+				(time.Duration(job.DurationMS) * time.Millisecond).Round(time.Second))
+			break
+		}
+	}
+	builtLine += "."
+
+	// The name without its digest: a tag is a name and a digest is not one, and
+	// "image@sha256:…:v88.53" is a sentence nobody can read.
+	name, _, _ := strings.Cut(image, "@")
+	pushed := "pushed"
+	switch {
+	case name != "" && len(tags) > 0:
+		pushed = fmt.Sprintf("pushed as %s:%s", name, strings.Join(tags, ", :"))
+	case name != "":
+		pushed = fmt.Sprintf("pushed as %s", name)
+	}
+
+	return []prefaceLine{
+		{Phase: "build", Message: builtLine},
+		{Phase: "push", Message: pushed},
+	}
 }
 
 // imageForDeploy is the image this run produced, resolved to a digest.

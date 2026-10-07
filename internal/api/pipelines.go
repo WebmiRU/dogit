@@ -974,15 +974,69 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, map[string]any{
-		"job_id":  job.ID,
-		"phase":   phase,
-		"message": message,
-		"ready":   req.Ready,
-		"desired": req.Desired,
-	})
+	// Said once per place this run is on its way to, because a card is watching one place
+	// and drops an event that does not name it.
+	//
+	// A runner says what it is doing and the core is what knows where the run is going, so
+	// a build's progress that names no place reaches a page that is not watching a build:
+	// the two steps a deployment's plan promises sit there with nothing under them while
+	// twenty seconds of build go by, and the plan looks like two steps nobody performs.
+	// Which is what it was — not the work, which the runner does and says, but the place
+	// the work is for, which only the core knows.
+	//
+	// Once for the project when the run names no place at all: a build that is not on its
+	// way anywhere is still worth a line, and a page that cannot see it says so by saying
+	// nothing, which is not the same as having nothing to say.
+	publish := func(record map[string]any) {
+		payload := map[string]any{
+			"job_id":  job.ID,
+			"phase":   phase,
+			"message": message,
+			"ready":   req.Ready,
+			"desired": req.Desired,
+		}
+		if record != nil {
+			payload["deployment"] = record
+		}
+		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, payload)
+	}
+
+	places := s.placesOfRun(r.Context(), project, job.PipelineID)
+	if len(places) == 0 {
+		publish(nil)
+	}
+	for _, place := range places {
+		record := map[string]any{"cluster": place.place}
+		if place.namespace != "" {
+			record["namespace"] = place.namespace
+		}
+		publish(record)
+	}
 
 	s.writeJSON(w, r, http.StatusNoContent, nil)
+}
+
+// runStillHasWork is whether a run has a job left to do, in the sense that decides whether
+// a line about a finished job is also a line about a finished run.
+//
+// Out of the run's own jobs rather than out of the run's status, because a run's status is
+// only written once, at the end: read there, it says "running" for the whole run and cannot
+// answer this at all. And it is asked of the run rather than of the job because the whole
+// of the difference between the two is what else the run has in it.
+func (s *Server) runStillHasWork(ctx context.Context, runID int64) bool {
+	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, runID)
+	if err != nil {
+		// Cannot tell, and the answer that keeps a page honest is the careful one: a card
+		// left open over nothing ends on the next thing said, while a card closed over a
+		// run that is still going cannot be reopened by the run itself.
+		return true
+	}
+	for _, job := range jobs {
+		if job.Status == store.JobPending || job.Status == store.JobRunning {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
@@ -1076,6 +1130,17 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 					"pipeline_id": pipeline.ID,
 					"job_name":    job.Name,
 					"status":      status,
+					// Said separately because it is a different fact, and a page that
+					// cannot tell them apart treats a build ending as a run ending — which
+					// closes a card watching the rollout that follows the build, a second
+					// before that rollout says anything.
+					"run_finished": !s.runStillHasWork(r.Context(), pipeline.ID),
+					// The job it is about, so that a page watching one run can tell this
+					// line from the same line about another. Two runs are under way at
+					// once more often than not — a push builds while a tag is being rolled
+					// out — and a page that took every end as its own closed over a rollout
+					// it was watching because a build somewhere else had finished.
+					"job_id": job.ID,
 				})
 
 				jobEvent := notifyContext{

@@ -579,6 +579,13 @@ func (s *Server) carryOutRevert(ctx context.Context, module *models.Integration,
 
 	s.publishPipeline(ctx, project.ID, nil, models.EventDeployHistory, map[string]any{
 		"project": project.Path,
+		// The place, as a deployment's own ending says it: a rollback is one place's
+		// work, and a page watching another place's rollout is not told by it that the
+		// log it is reading has ended.
+		"deployment": map[string]any{
+			"cluster":   request.Cluster,
+			"namespace": request.Namespace,
+		},
 	})
 
 	if err != nil {

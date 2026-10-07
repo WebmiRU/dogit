@@ -116,7 +116,17 @@ func (s *Server) placeInUse(ctx context.Context, project *models.Project,
 		return true
 	}
 
-	for _, row := range placesOf(settings) {
+	return placeSwitchedOn(placesOf(settings), place)
+}
+
+// placeSwitchedOn is whether a project's own row for a place says it is in use, out of rows
+// already read.
+//
+// Split from placeInUse so that the row is read once per question rather than once per
+// question per place: naming every place of a run asks about each of them, and each read
+// walks the whole places list of a module to answer one line of it.
+func placeSwitchedOn(rows []map[string]json.RawMessage, place string) bool {
+	for _, row := range rows {
 		name, _ := stringValue(row["name"])
 		if strings.TrimSpace(name) != place {
 			continue
@@ -124,6 +134,71 @@ func (s *Server) placeInUse(ctx context.Context, project *models.Project,
 		return flagOf(row, switchField, true)
 	}
 	return true
+}
+
+// aPlaceNamed is one place as an event about it has to be written: the name a deployment
+// calls it, and the namespace it deploys into, which is all a card matches on.
+type aPlaceNamed struct {
+	place     string
+	namespace string
+}
+
+// placesOfRun is every place this run names a deployment for, ready to be named in an
+// event about the run's work.
+//
+// Out of the run's own jobs and not out of the configuration file, for the reason the
+// deployment reads it from the job: the rules were applied when the run was created, and a
+// file edited since then describes a different set of places than the one this run was
+// asked to do.
+//
+// A place this project has switched off is left out, and a place named by two jobs is named
+// once. The first because the work in hand is not for a place this project may not deploy
+// to, and a card opened to watch it would never see a rollout — it would have to be read a
+// second time to understand. The second because one line arriving twice reads as a log that
+// says everything twice.
+func (s *Server) placesOfRun(ctx context.Context, project *models.Project,
+	pipelineID int64) []aPlaceNamed {
+
+	if project == nil || pipelineID == 0 {
+		return nil
+	}
+	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, pipelineID)
+	if err != nil {
+		return nil
+	}
+
+	named := []aPlaceNamed{}
+	seen := map[string]bool{}
+	for _, job := range jobs {
+		if job.Deploy == nil {
+			continue
+		}
+		// The keys as the job carries them, which is how the page reads them too: the
+		// column is a Go struct written out as it stands, so "Target" here and "target"
+		// there are the same field to Go and two different fields to a map.
+		place := strings.TrimSpace(asString(job.Deploy["Target"]))
+		if place == "" || seen[place] {
+			continue
+		}
+
+		module, err := s.deployModule(ctx, strings.TrimSpace(asString(job.Deploy["Module"])))
+		if err != nil || module == nil {
+			continue
+		}
+		// Written down before the row is read, so that a place two jobs name is read once
+		// and not once per job — including a place that turns out to be switched off.
+		seen[place] = true
+
+		rows := s.placeRows(ctx, project, module)
+		if !placeSwitchedOn(rows, place) {
+			continue
+		}
+		named = append(named, aPlaceNamed{
+			place:     place,
+			namespace: placeNamespaceIn(rows, place),
+		})
+	}
+	return named
 }
 
 // placesOf is the clusters setting as a list of rows.

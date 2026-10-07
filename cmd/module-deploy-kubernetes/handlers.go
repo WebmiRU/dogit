@@ -54,6 +54,12 @@ type deployRequest struct {
 		Body       string `json:"body"`
 	} `json:"manifests"`
 
+	// Preface is what the image's own run did before this deployment began, as lines
+	// under the phases the plan gives them. Recorded with the deployment rather than
+	// said again to whoever was watching the build: they were there, and a record read
+	// next week was not.
+	Preface []deploy.LogLine `json:"preface,omitempty"`
+
 	Pre  []jobRequest `json:"pre"`
 	Post []jobRequest `json:"post"`
 
@@ -281,6 +287,7 @@ func (c *coreClient) deployOne(ctx context.Context, request deployRequest, place
 	pullSecret := pullSecretOf(request.Registry)
 
 	return deployer.Run(ctx, deploy.Request{
+		Preface:        request.Preface,
 		Progress:       deploy.ClosingPhases(say),
 		Project:        request.Project,
 		PullSecret:     pullSecret,

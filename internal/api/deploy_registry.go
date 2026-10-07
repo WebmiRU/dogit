@@ -359,29 +359,98 @@ func (s *Server) placesRegistry(ctx context.Context, project *models.Project,
 		return ""
 	}
 
-	for _, row := range rows {
-		var name string
-		if err := json.Unmarshal(row["name"], &name); err != nil || strings.TrimSpace(name) != place {
-			continue
-		}
-		address, ok := row[placeRegistryField]
-		if !ok {
-			return ""
-		}
-		var text string
-		if err := json.Unmarshal(address, &text); err != nil {
-			if log != nil {
-				log("  registry:   the registry of place %q is not an address\n", place)
-			}
-			return ""
-		}
-		return registryAddressOf(text)
+	// The first row that carries the field, and not the first row with this place's name:
+	// a project that has written its own row for a place it inherited says the name and
+	// little else, and a lookup that gave up there would answer "this place has named no
+	// registry" about a place that has one three lines up.
+	address, said := placeField(rows, place, placeRegistryField)
+	if !said {
+		return ""
 	}
-	return ""
+
+	var text string
+	if err := json.Unmarshal(address, &text); err != nil {
+		if log != nil {
+			log("  registry:   the registry of place %q is not an address\n", place)
+		}
+		return ""
+	}
+	return registryAddressOf(text)
 }
 
 // placeRegistryField is the field, inside a place's row, that names its registry.
 const placeRegistryField = "registry"
+
+// placeNamespaceField is the field, inside a place's row, that names the namespace the
+// place deploys into.
+const placeNamespaceField = "default_namespace"
+
+// placeField is one field of one place's own row, out of the module's list of them.
+//
+// The first row that carries the field, and not the first row with the place's name: a
+// project that has written its own row for a place it inherited says the name and little
+// else, and a lookup that gave up there would answer "this place has named no registry"
+// about a place that has one three lines up. A field that is there and cannot be read stops
+// the search and comes back anyway, because that is an answer the caller has to reject
+// rather than an absence it may look past.
+//
+// False means no row carries the field at all, which is an absence and not a verdict: what
+// an absence means is the caller's to say.
+func placeField(rows []map[string]json.RawMessage, place, field string) (json.RawMessage, bool) {
+	place = strings.TrimSpace(place)
+	if place == "" || field == "" {
+		return nil, false
+	}
+	for _, row := range rows {
+		name, _ := stringValue(row["name"])
+		if strings.TrimSpace(name) != place {
+			continue
+		}
+		if raw, said := row[field]; said {
+			return raw, true
+		}
+	}
+	return nil, false
+}
+
+// placeNamespaceIn is the namespace a place deploys into, as its own row says it.
+//
+// Empty when the row says nothing, and empty when it cannot be read: a namespace nobody
+// wrote down is one the module decides, and a card told the place and no namespace makes no
+// claim about one — the same rule the module's own lines are held to.
+func placeNamespaceIn(rows []map[string]json.RawMessage, place string) string {
+	raw, said := placeField(rows, place, placeNamespaceField)
+	if !said {
+		return ""
+	}
+	namespace, ok := stringValue(raw)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(namespace)
+}
+
+// placeRows is this project's list of a deployment module's places, as this project has it.
+//
+// Empty when the module keeps its places somewhere else, and empty when the list cannot be
+// read: a core that could not read the list knows no places, and every question asked of it
+// is then answered by the caller's own default rather than by an error here.
+func (s *Server) placeRows(ctx context.Context, project *models.Project,
+	module *models.Integration) []map[string]json.RawMessage {
+
+	if project == nil || module == nil {
+		return nil
+	}
+	projectID := project.ID
+	settings, err := s.store.Integrations().SettingsFor(ctx, module.ID,
+		project.GroupID, &projectID, module.Capabilities.Settings)
+	if err != nil {
+		s.log.Warn("could not read the places of a module",
+			"project", projectPath(project), "module", module.Name, "error", err)
+		return nil
+	}
+	return placesOf(settings)
+}
 
 // registryAddressOf strips what an address is written with rather than what it is.
 //

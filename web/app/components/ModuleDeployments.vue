@@ -225,9 +225,22 @@ function finishOperation() {
   activePhases.value = []
   runningSince.value = 0
   running.value = null
+  operationJobs.value = []
 }
 
 const activePhases = ref<string[]>([])
+
+/**
+ * The jobs this card has been spoken to by, which is how it tells one run from another.
+ *
+ * Two runs are under way at once more often than not: a push builds while a tag is being
+ * rolled out, and every one of them says when it is over. A card that took every ending as
+ * its own closed its log in the middle of a rollout because a build somewhere else had
+ * finished — the log went, the clock restarted, and the steps before the one under way
+ * went with them. So the ending is matched against the jobs that spoke, and an ending
+ * about a job this card has never heard of is somebody else's news.
+ */
+const operationJobs = ref<number[]>([])
 
 /**
  * Whether anything is under way right now, which is not the same as whether a
@@ -1286,6 +1299,11 @@ async function load() {
 function noteOperation(payload: Record<string, unknown>) {
   if (typeof payload.message !== 'string' || !payload.message) return
 
+  const jobID = Number(payload.job_id ?? 0)
+  if (jobID && !operationJobs.value.includes(jobID)) {
+    operationJobs.value = [...operationJobs.value, jobID]
+  }
+
   const said: DeployProgress = {
     phase: String(payload.phase ?? ''),
     message: payload.message,
@@ -1315,7 +1333,14 @@ function noteOperation(payload: Record<string, unknown>) {
   // its last word is not waiting for a second one that will never come, and an arrow
   // left on it would be claiming work that is over.
   if (said.phase) {
-    const others = activePhases.value.filter((one) => one !== said.phase)
+    // A phase the next one replaces is over, whether or not anybody said so.
+    //
+    // The module closes its phases itself — that is what its last line is — but the
+    // runner announces a build and a push and never says "that was the end of it", so
+    // a card that waited to be told kept both open and pointed at the build for the
+    // whole rollout: an arrow on step one of seven while step six is what is happening.
+    const others = activePhases.value.filter((one) => one !== said.phase &&
+      !(buildPhases.includes(one) && !buildPhases.includes(said.phase)))
     activePhases.value = said.finished ? others : [...others, said.phase]
   }
 
@@ -1474,10 +1499,23 @@ onMounted(async () => {
   })
 
   // The history, once, when something ends.
+  //
+  // All of it in onEvent rather than in onChange, because the question "was that this
+  // place?" can only be asked with the payload in hand — and onChange is told nothing
+  // about what arrived.
   stopHistory = watchEvents({
     kinds: ['deploy.history'],
     project: () => props.projectPath,
-    onChange: () => {
+    onEvent: (event) => {
+      // About this place, and only this place.
+      //
+      // A project with two places has two deployments, and they do not end together: a
+      // place that is switched off ends in a millisecond, long before the other has read
+      // a manifest. Taking that ending as this card's own closed the card watching the
+      // rollout that was still going, and took its log with it — the build's lines among
+      // them — which is a log that comes apart under the reader halfway through.
+      if (!mineToSay(event.payload?.deployment)) return
+
       // Finished: whatever was under way is not any more.
       finishOperation()
       void load()
@@ -1503,6 +1541,20 @@ onMounted(async () => {
     kinds: ['pipeline.updated'],
     project: () => props.projectPath,
     onEvent: (event) => {
+      // A finished job is not a finished run.
+      //
+      // Both send this line, and the core is the only one that can tell them apart: a run
+      // of three jobs says it is over when each of its jobs says so, so the build ending
+      // is a line this handler used to read as the run ending — and a card watching a
+      // place closed on the build's own ending and opened again a second later, over the
+      // rollout that had not begun yet. So the question is asked rather than guessed at,
+      // and a line about a job in a run with work left in it closes nothing.
+      if (event.payload?.run_finished !== true) return
+
+      // Not this card's run. Another run's ending is another run's news, and treating it
+      // as this one closed the log over a rollout that was only beginning.
+      if (!operationJobs.value.includes(Number(event.payload?.job_id ?? 0))) return
+
       const status = String(event.payload?.status ?? '')
       if (!endedStatuses.includes(status)) return
 
