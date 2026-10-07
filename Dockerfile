@@ -40,6 +40,10 @@ FROM alpine:3.21
 
 # git is required at runtime: all repository operations shell out to it.
 # openssh-server provides the SSH front end for git traffic.
+# openssh-client is git's own transport out: a runner checks the code out over SSH
+# with the key the core minted for that one job, and `GIT_SSH_COMMAND` runs ssh from
+# PATH. Without it the clone fails with "ssh: not found", which reads like a
+# credential problem and is a missing package.
 # The docker client is here for the runner module only. What runs the containers is
 # the daemon on the host, reached through its socket — which is exactly why a
 # runner can be a module: it needs a command line and a socket, and nothing about
@@ -47,6 +51,7 @@ FROM alpine:3.21
 RUN apk add --no-cache \
         git \
         openssh-server \
+        openssh-client \
         ca-certificates \
         docker-cli \
         tzdata \

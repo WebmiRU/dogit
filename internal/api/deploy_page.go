@@ -285,6 +285,23 @@ func (s *Server) handleProjectDeployCurrent(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// A place this project has switched off is answered here rather than asked about.
+	//
+	// The switch is this project's own row of the clusters list, so the core holds the
+	// answer and the module would only refuse — correctly, and with a sentence worth
+	// showing. But a refusal arrives as a failed request, and this question is asked
+	// about four times a second by a card that already shows the switch as off: the
+	// browser's console fills with a 400 that says nothing the page does not, and the
+	// reason the card wanted is lost inside it.
+	if cluster := query.Get("cluster"); cluster != "" &&
+		!s.placeInUse(r.Context(), project, r.URL.Query().Get("target"), cluster) {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{
+			"known": false, "asked": "nothing",
+			"reason": cluster + " is switched off for this project",
+		})
+		return
+	}
+
 	body, err := s.callDeployModule(r.Context(), module, http.MethodGet, "/current?"+query.Encode(), nil)
 	if err != nil {
 		s.writeError(w, r, err)

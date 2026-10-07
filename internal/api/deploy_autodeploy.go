@@ -85,6 +85,47 @@ func (s *Server) autodeployAllowed(ctx context.Context, project *models.Project,
 	return true
 }
 
+// placeInUse is whether this project has switched a place on, and whether there was a row
+// to ask about at all.
+//
+// The same question `autodeployAllowed` asks and the opposite answer, kept apart because
+// they are asked at different moments and mean different things: that one is "may a push
+// deploy here by itself", this one is "may this project deploy here at all".
+//
+// A place nobody has written down, and a project with no row for it, are both in use —
+// nothing is stopped unless somebody stopped it. So this answers "yes" whenever it cannot
+// read an answer, and the only "no" it ever gives is a row that says `enabled: false`.
+func (s *Server) placeInUse(ctx context.Context, project *models.Project,
+	target, place string) bool {
+
+	place = strings.TrimSpace(place)
+	if place == "" || project == nil {
+		return true
+	}
+
+	integration, err := s.deployModule(ctx, strings.TrimSpace(target))
+	if err != nil || integration == nil {
+		return true
+	}
+	id := project.ID
+	settings, err := s.store.Integrations().SettingsFor(ctx, integration.ID,
+		project.GroupID, &id, integration.Capabilities.Settings)
+	if err != nil {
+		s.log.Warn("could not read the places for the in-use switch",
+			"project", projectPath(project), "place", place, "error", err)
+		return true
+	}
+
+	for _, row := range placesOf(settings) {
+		name, _ := stringValue(row["name"])
+		if strings.TrimSpace(name) != place {
+			continue
+		}
+		return flagOf(row, switchField, true)
+	}
+	return true
+}
+
 // placesOf is the clusters setting as a list of rows.
 //
 // The core does not know what a place is: it knows that this setting is where the places

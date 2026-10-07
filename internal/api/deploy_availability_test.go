@@ -383,6 +383,13 @@ func newFakeDeployModule(t *testing.T) *fakeDeployModule {
 }
 
 func (f *fakeDeployModule) serve(w http.ResponseWriter, r *http.Request) {
+	// What is running in a place: a place the core has not already answered for reaches
+	// here, so the fake has to answer it or the question never gets that far.
+	if strings.HasSuffix(r.URL.Path, "/current") {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"known":true,"asked":"the cluster","desired":1}`))
+		return
+	}
 	if !strings.HasSuffix(r.URL.Path, "/images-availability") {
 		http.NotFound(w, r)
 		return
@@ -440,4 +447,56 @@ func (f *fakeDeployModule) last(t *testing.T) []byte {
 		t.Fatal("the module was not asked anything")
 	}
 	return all[len(all)-1]
+}
+
+// A place this project has switched off is answered by the core, which is where the switch
+// lives, and answered as a fact: the module would refuse, and a refusal that arrives as a
+// failed request is a fact the page cannot show and the browser can only log.
+func TestAPlaceThatIsSwitchedOffIsAnsweredRatherThanRefused(t *testing.T) {
+	f := newAvailabilityFixture(t)
+	f.setPlace(t, map[string]string{"registry": "192.168.1.103:8091"})
+	// The project's own row says the place is off, which is where a project's switch is
+	// kept: the module's row says the place exists, the project's row says this project
+	// may not deploy to it.
+	if _, err := f.store.Pool().Exec(t.Context(),
+		`INSERT INTO integration_settings (integration_id, scope_type, scope_id, key, value)
+		 VALUES ($1, 'project', $2, 'clusters', $3)`, f.deployer.ID, f.project.ID,
+		`[{"name":"local-k3s","enabled":false}]`); err != nil {
+		t.Fatalf("write the project's own row: %v", err)
+	}
+
+	code, body := f.askCurrent(t, "local-k3s")
+	if code != http.StatusOK {
+		t.Fatalf("a place that is switched off: %d %s, want an answer, not a refusal", code, body)
+	}
+	if !strings.Contains(body, "switched off for this project") {
+		t.Errorf("the answer does not say why nothing is known: %s", body)
+	}
+	// And the module was never asked: the switch is the core's own fact and asking
+	// somebody else about it is asking a question the core can answer.
+	if len(f.module.asked(t)) != 0 {
+		t.Errorf("the module was asked about a place the core knows is off: %s", f.module.last(t))
+	}
+
+	// A place that is on is asked about as before, because there is nothing to answer
+	// without asking.
+	code, body = f.askCurrent(t, "deploy2")
+	if code != http.StatusOK {
+		t.Fatalf("a place that is in use: %d %s", code, body)
+	}
+}
+
+// askCurrent is the question a card asks about what is running in one place.
+func (f *availabilityFixture) askCurrent(t *testing.T, cluster string) (int, string) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/projects/"+f.project.Path+
+			"/deploy-current?target=kubernetes&cluster="+cluster, nil)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: f.session})
+
+	recorder := httptest.NewRecorder()
+	f.router.ServeHTTP(recorder, request)
+	return recorder.Code, recorder.Body.String()
 }
