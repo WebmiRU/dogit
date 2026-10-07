@@ -90,7 +90,41 @@ func main() {
 		"how often to ask for work")
 	flag.BoolVar(&cfg.claim, "claim", envBool("DOGIT_RUNNER_CLAIM", false),
 		"ask for work. Off by default: a claim that cannot be finished strands the job.")
+
+	// A one-shot build, for proving the builder path without the job loop.
+	//
+	// Here because the loop cannot be used for that: claiming is off until there is an
+	// executor, and turning it on to test a build would take a job out of the queue that
+	// nothing here can finish. This is how the builder was tested before the runner existed
+	// and it is how it will be tested after the job loop grows a shape — a mode that reaches
+	// the builder without reaching into the queue.
+	buildOnce := flag.Bool("build-once", false,
+		"build one image from -build-context and print the digest, then exit")
+	buildContext := flag.String("build-context", env("DOGIT_BUILD_CONTEXT", ""),
+		"the checkout to build from, for -build-once")
+	buildDockerfile := flag.String("build-dockerfile", env("DOGIT_BUILD_DOCKERFILE", "Dockerfile"),
+		"the Dockerfile inside that checkout, for -build-once")
+	buildImage := flag.String("build-image", env("DOGIT_BUILD_IMAGE", ""),
+		"where to put the result, for -build-once")
+	buildTarget := flag.String("build-target", env("DOGIT_BUILD_TARGET", ""),
+		"a stage to stop at, for -build-once")
+	buildPush := flag.Bool("build-push", envBool("DOGIT_BUILD_PUSH", false),
+		"push the result, for -build-once")
+	buildServerName := flag.String("buildkit-server-name", env("DOGIT_BUILDKIT_SERVER_NAME", ""),
+		"the name in the builder's certificate, when it is not the address")
+	buildRegistry := flag.String("build-registry", env("DOGIT_BUILD_REGISTRY", ""),
+		"registry host the credential below is for, for -build-once")
+	buildUser := flag.String("build-user", env("DOGIT_BUILD_USER", ""),
+		"user to push as, for -build-once")
+	buildPassword := flag.String("build-password", os.Getenv("DOGIT_BUILD_PASSWORD"),
+		"token to push with, for -build-once")
 	flag.Parse()
+
+	if *buildOnce {
+		buildAndExit(cfg, *buildContext, *buildDockerfile, *buildImage, *buildTarget,
+			*buildPush, *buildServerName, *buildRegistry, *buildUser, *buildPassword)
+		return
+	}
 
 	if cfg.instance == "" {
 		log.Fatal("no registration token: set DOGIT_REGISTRATION_TOKEN or -registration-token")
@@ -260,6 +294,74 @@ func ask(ctx context.Context, cfg *config, client *core.Client) {
 	// nothing to do with it is the failure this whole decision was arranged to avoid.
 	lastWorkAt.Store(time.Now().UnixNano())
 	log.Printf("runner: claimed job %d (%s) and cannot run it yet — the executor is not written", answer.Job.ID, answer.Job.Name)
+}
+
+// buildAndExit is one build and out, for proving the path to the builder and to the registry
+// without going near the job queue.
+//
+// Everything it does comes from flags, including the credential, and that is the one thing it
+// must not do forever: the token a real build pushes with is minted per project by the core
+// and lives for two hours, and a flag on a command line is a token in a process list.
+func buildAndExit(cfg config, contextDir, dockerfile, image, target string, push bool,
+	serverName, registryHost, user, password string) {
+
+	if contextDir == "" || image == "" {
+		log.Fatal("-build-once needs -build-context and -build-image")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	client, err := builder.Connect(connectCtx, cfg.buildkitHost, serverName,
+		cfg.buildkitCA, cfg.buildkitCert, cfg.buildkitKey)
+	cancel()
+	if err != nil {
+		log.Fatalf("runner: %v", err)
+	}
+	defer client.Close()
+
+	request := builder.Request{
+		ContextDir: contextDir,
+		Dockerfile: dockerfile,
+		Target:     target,
+		Image:      image,
+		Push:       push,
+	}
+	if registryHost != "" && user != "" && password != "" {
+		request.Registry = &builder.Credential{
+			Server: registryHost, Username: user, Token: password,
+		}
+	} else if push {
+		// Said out loud rather than discovered at the push: a build with no credential
+		// spends its whole time compiling and then fails on the last step, which is the
+		// most expensive way to hear "you forgot".
+		log.Print("runner: no -build-registry/-build-user/-build-password, so the push will fail at the end")
+	}
+
+	started := time.Now()
+	result, err := client.Build(ctx, request, func(progress builder.Progress) {
+		switch {
+		case progress.Failed:
+			log.Printf("runner: FAILED %s", progress.Step)
+		case progress.Line != "":
+			log.Printf("runner: %s | %s", progress.Step, progress.Line)
+		default:
+			note := ""
+			if progress.Cached {
+				note = " (cached)"
+			}
+			log.Printf("runner: done %s%s", progress.Step, note)
+		}
+	})
+
+	if err != nil {
+		log.Fatalf("runner: %v", err)
+	}
+
+	log.Printf("runner: built %s in %s, %d steps (%d cached)",
+		result.Digest, time.Since(started).Round(time.Millisecond), result.Steps, result.Cached)
+	log.Print(result.Digest)
 }
 
 // builderWord is what the runner can say about the builder right now.

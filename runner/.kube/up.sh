@@ -18,6 +18,32 @@ export KUBECONFIG
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# The runner image, resolved to a digest, and pod.yaml written out with it in place of the tag.
+#
+# imagePullPolicy: Always is not enough on its own, and finding that out cost a deploy. It
+# means "pull when a container starts" — and with a tag in the template, a push under that tag
+# changes nothing in the manifest, so no pod is recreated, so no container starts, so nothing
+# is pulled. The pod then reports itself ready and the panel fills in from the previous build,
+# which is the worst combination available: healthy and wrong.
+#
+# A digest in the template changes the template, which is what makes the rollout happen. The
+# file on disk keeps the tag so it stays readable and appliable by hand; what goes to kubectl
+# is the rendered form.
+runner_image="${RUNNER_IMAGE:-yudole/runner:dev}"
+
+pin_runner() {
+  local digest
+  digest="$(docker buildx imagetools inspect "$runner_image" --format '{{.Manifest.Digest}}' 2>/dev/null |
+    tr -d '\n\r')"
+  if [ -z "$digest" ]; then
+    echo "could not ask the registry what ${runner_image} is; applying it unpinned" >&2
+    return 0
+  fi
+  say "раннер закреплён на ${digest}"
+  sed "s|${runner_image}|${runner_image%:*}@${digest}|g" "$here/pod.yaml" | kubectl apply -f - >/dev/null
+  kubectl -n buildkit rollout status deploy/buildkit --timeout=240s
+}
+
 # A CA, a certificate for the daemon, and one for the client.
 #
 # Mutual TLS, and the reason is not fussiness. BuildKit's README says it directly: with the
@@ -71,37 +97,49 @@ IP:127.0.0.1\n' >"$certs/tls.ext"
   say "  готово в ${certs}"
 }
 
-# The daemon's half of the certificates. The client's stays on the machine that runs
-# buildctl and is never put in the cluster, which is the entire point of having two.
-certs_publish() {
-  say "кладю сертификаты демона в секрет"
+# The certificates, split by who holds them, which is two secrets rather than one.
+#
+# The daemon gets the CA and its own certificate; the runner gets the CA and the client
+# certificate it presents. Kept apart so that the builder's container has no copy of the
+# private key that would let anything holding it drive the builder. The threat model is that
+# a RUN step from somebody else's Dockerfile can reach the daemon's API — not that the daemon
+# itself is the attacker — and two documents state that boundary better than one comment
+# argues it.
+#
+# An executor container does share the daemon's filesystem, so this is a tidy-up rather than a
+# wall. What it buys is exactness: the key is not in the builder's mount list.
+publish_certs() {
+  say "кладю сертификаты"
   kubectl -n buildkit create secret generic buildkit-certs \
     --from-file=ca.pem="$certs/ca.crt" \
     --from-file=tls.crt="$certs/tls.crt" \
     --from-file=tls.key="$certs/tls.key" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n buildkit create secret generic runner-certs \
+    --from-file=ca.pem="$certs/ca.crt" \
+    --from-file=client.crt="$certs/client.crt" \
+    --from-file=client.key="$certs/client.key" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 }
 
 case "${1:-all}" in
   certs)
     certs_make
-    certs_publish
+    publish_certs
     ;;
   apply)
     kubectl apply -f "$here/namespace.yaml"
-    certs_publish
+    publish_certs
     # pvc.yaml is deliberately not in this list. The builder mounts an emptyDir, because
     # this project holds to having no host filesystem paths, and on k3s a claim is one. The
     # file says what to do when that is worth revisiting.
-    kubectl apply -f "$here/buildkit.yaml"
-    kubectl apply -f "$here/service.yaml"
+    pin_runner
     ;;
   all)
     certs_make
     kubectl apply -f "$here/namespace.yaml"
-    certs_publish
-    kubectl apply -f "$here/buildkit.yaml"
-    kubectl apply -f "$here/service.yaml"
+    publish_certs
+    pin_runner
     say "готово"
     ;;
   *)

@@ -12,7 +12,11 @@
 FROM golang:1.27-alpine AS build
 
 WORKDIR /src
-COPY go.mod ./
+# go.mod and go.sum together, and go.sum is not optional. Copying only go.mod leaves the build
+# inside the image resolving the dependency tree from scratch, which fails on checksums it has
+# no file for — and it fails at the end of a build that has already spent minutes compiling,
+# with a message about a checksum. Cost one build to learn.
+COPY go.mod go.sum ./
 COPY cmd ./cmd
 COPY internal ./internal
 
