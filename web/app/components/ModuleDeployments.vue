@@ -226,9 +226,30 @@ function finishOperation() {
   runningSince.value = 0
   running.value = null
   operationJobs.value = []
+  startedHere.value = false
+  refusalNoted = false
+  // The rows are read once the operation is over and they have settled — see the note at
+  // the read. While it was running they were left alone on purpose, and nothing else in
+  // this page fetches them, so without this they would stay as they were until somebody
+  // changed tabs.
+  void loadImages()
 }
 
 const activePhases = ref<string[]>([])
+
+/**
+ * Whether an operation is under way on this place, and so whether this page may begin
+ * another one.
+ *
+ * One answer read from every sign of it rather than three fields consulted in a template,
+ * because the three disagree: `busy` covers the request, `running` the record the module
+ * wrote, `active` the lines it is saying. A button that asked only the first was live
+ * again a fraction of a second after the click, while the place was still busy — and the
+ * click it accepted then had to be refused, having already been answered "yes, putting
+ * it back".
+ */
+const underWay = computed(() => busy.value || startedHere.value ||
+  running.value !== null || active.value !== null)
 
 /**
  * The jobs this card has been spoken to by, which is how it tells one run from another.
@@ -256,6 +277,12 @@ const deployBusy = computed(() => verdict.value.tone === 'working')
 const plan = ref<{ key: string; label: string }[]>([])
 /** Whether that list is a rollback's, remembered because a run can change it under a page. */
 const planIsRevert = ref(false)
+/** What the operation on the page is, once it has said. Empty until one has started. */
+const planKind = ref('')
+/** Whether a refusal has already been said, so the same failure is not announced twice. */
+let refusalNoted = false
+/** That this page started an operation, which has not been heard to finish yet. */
+const startedHere = ref(false)
 const activeSeen = ref<DeployProgress[]>([])
 
 /**
@@ -1271,7 +1298,11 @@ async function load() {
     // steps: the deployment's seven, drawn beside a log about one image going back on
     // a workload, is a page claiming a build and a push while somebody watches pods.
     const wasRevert = answer.deployments?.[0]?.state === 'reverted'
-    await loadPlan(wasRevert)
+    // From the operation on the page when it has named itself, and only then from the
+    // newest on record. The list is the right answer about the past and the wrong answer
+    // about the present: an operation being written is not in it yet, so reading the plan
+    // from there during a rollback gives the rollback's steps away to the run before it.
+    await loadPlan(planKind.value ? planKind.value === 'revert' : wasRevert)
 
     if (answer.reason === 'no_deploy_module') {
       deployments.value = []
@@ -1366,6 +1397,21 @@ function noteOperation(payload: Record<string, unknown>) {
     const kind = record?.kind
     if (kind === 'revert' && !planIsRevert.value) void loadPlan(true)
     else if (kind === 'deploy' && planIsRevert.value) void loadPlan(false)
+
+    // What this operation is, kept. The list of operations behind it cannot answer while
+    // it is being written: it is not in the list yet, so a page that re-reads the plan
+    // from there in those seconds decides it from the operation before it, and the steps
+    // swap wholesale in the middle of a rollback that has only just finished.
+    if (kind) planKind.value = kind
+
+    // A refusal said once. Warning and not error: nothing was broken and nothing is
+    // red in the cluster — the place was busy, the operation simply did not happen, and
+    // the next attempt may well work. Red would read as a fault to go and look at, which
+    // is not what a busy place is. Yellow says it plainly: this is not done.
+    if (said.failed && !refusalNoted) {
+      refusalNoted = true
+      notify(said.message, { type: 'warning', timer: 0 })
+    }
   }
 
   // The phase joins the list of those under way, or leaves it. A phase that has said
@@ -1450,10 +1496,18 @@ async function revertTo(deployment: PlacedImage) {
         deployment_id: deployment.id,
       },
     )
-    notify(`${shortImage(image)} is being put back`, { type: 'success' })
-    finishOperation()
+    // Said as a beginning and not as an outcome, because that is all this answer is: the
+    // request was accepted, and nothing has been put back yet. Told as a success it is a
+    // green toast on an operation that is about to be refused — the place is busy — and
+    // the refusal arrives afterwards as an event that no longer has a toast to change.
+    notify(`${shortImage(image)} is being put back`, { type: 'info' })
+    // The place is taken from the moment this is accepted, and the clearing that used to
+    // follow it is what let a second click through while the first was still running.
+    // What ends it now is the operation's own ending, from the module's own last word.
+    startedHere.value = true
     await load()
   } catch (caught) {
+    startedHere.value = false
     const message = caught instanceof ApiError ? caught.message : 'the request failed'
     error.value = message
     // Said where it is being looked for: a refusal that only appears somewhere else on
@@ -1615,7 +1669,12 @@ onMounted(async () => {
   })
 
   await load()
-  void loadImages()
+  // Not while something is being done here. Every row in this list is a place to click,
+  // and a list that reorders itself between two clicks of a person deciding quickly is a
+  // list that puts back what they did not choose: the second click lands on whichever row
+  // slid into the space, and the notice afterwards names that row's image, correctly and
+  // uselessly. One read, when the operation is over and the rows have settled.
+  if (!underWay.value) void loadImages()
 
   // The clock behind "4 minutes ago" and behind the running timer. Nothing is fetched —
   // the list is already here and both figures are arithmetic — but without it they are
@@ -2102,8 +2161,10 @@ watch(() => props.module.id, load)
                       v-else-if="props.canManage && image.live"
                       class="btn btn-small"
                       type="button"
-                      :disabled="busy || !!revertBlocked(image.name)"
-                      :title="revertBlocked(image.name) || 'Put this image back on the workload'"
+                      :disabled="underWay || !!revertBlocked(image.name)"
+                      :title="revertBlocked(image.name)
+                        || (underWay && !busy ? 'Another operation is under way on this place' : '')
+                        || 'Put this image back on the workload'"
                       @click="revertTo(image.live)"
                     >
                       Revert to this

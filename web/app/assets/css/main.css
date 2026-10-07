@@ -15,6 +15,10 @@
   --green: #3fb950;
   --red: #f85149;
   --yellow: #d29922;
+  /* The blue a badge uses for "Available", and the blue an informational notice is
+     drawn in, so that a thing which is merely the case and a thing that is settled both
+     read as calm rather than as two different accents. */
+  --info: #9ec7f0;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
 }
@@ -340,7 +344,7 @@ label {
    Using the same colour for both makes a quiet queue look like a pile of trouble. */
 .badge-blue {
   background: #23384f;
-  color: #9ec7f0;
+  color: var(--info);
 }
 
 .btn-danger {
@@ -783,11 +787,11 @@ label {
 }
 
 .notification--info {
-  border-left-color: var(--accent);
+  border-left-color: var(--info);
 }
 
 .notification--info .progress {
-  background-color: var(--accent);
+  background-color: var(--info);
 }
 
 /* The close button is drawn rather than typed: a glyph would sit differently at
