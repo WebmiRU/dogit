@@ -115,10 +115,31 @@ publish_certs() {
     --from-file=tls.crt="$certs/tls.crt" \
     --from-file=tls.key="$certs/tls.key" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # registration.token holds the instance's own token, which is the one credential that can
+  # introduce a new module. It goes in here rather than in an environment variable because an
+  # environment variable cannot be withdrawn: it stays in /proc/1/environ for the life of the
+  # process, and job scripts run in the runner's container. The init container copies this
+  # into a tmpfs and the runner reads it and deletes it.
+  local token=""
+  if [ -f "$certs/registration.token" ]; then
+    token="$(cat "$certs/registration.token")"
+  else
+    token="$(kubectl -n dogit get secret dogit-module-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
+    if [ -n "$token" ]; then
+      printf '%s' "$token" >"$certs/registration.token"
+      chmod 0400 "$certs/registration.token"
+      say "  instance token taken from the stand's secret and kept in ${certs}/registration.token"
+    fi
+  fi
+  if [ -z "$token" ]; then
+    echo "no registration token: put one in ${certs}/registration.token" >&2
+    return 1
+  fi
   kubectl -n buildkit create secret generic runner-certs \
     --from-file=ca.pem="$certs/ca.crt" \
     --from-file=client.crt="$certs/client.crt" \
     --from-file=client.key="$certs/client.key" \
+    --from-literal=registration.token="$token" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 }
 

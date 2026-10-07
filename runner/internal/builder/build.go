@@ -20,6 +20,8 @@ import (
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
 	"github.com/tonistiigi/fsutil"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 // Credential is what the core minted for one build: a project, a registry and a token that
@@ -93,16 +95,17 @@ type Client struct {
 	inner *client.Client
 }
 
-// Connect opens a client, with the client certificate this runner holds.
+// Connect opens a client, with the credential this runner holds in memory.
 //
-// The server name is not taken from the address. A certificate is issued for names, and the
-// one here is issued for the service's name and for 127.0.0.1 — and the point of passing it
-// explicitly is that the right answer changes with where the daemon is, while the wrong one
-// fails as a certificate error rather than as a name mismatch, which is a worse afternoon.
-func Connect(ctx context.Context, address, serverName, ca, cert, key string) (*Client, error) {
+// The transport credentials are assembled here and handed over as a gRPC dial option rather
+// than as BuildKit's WithCredentials, which takes a file path and reads it on every dial. That
+// is the whole reason the key can be deleted after startup: there is nothing left for the
+// client to go back and read.
+func Connect(ctx context.Context, address, serverName string, credential *Credentials) (*Client, error) {
 	inner, err := client.New(ctx, "tcp://"+address,
-		client.WithCredentials(cert, key),
-		client.WithServerConfig(serverName, ca),
+		client.WithGRPCDialOption(
+			grpc.WithTransportCredentials(credentials.NewTLS(credential.TLSConfig(serverName))),
+		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to the builder at %s: %w", address, err)

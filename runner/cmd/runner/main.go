@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -47,7 +48,7 @@ var startedAt = time.Now()
 
 type config struct {
 	coreURL      string
-	instance     string
+	instanceFile string
 	endpoint     string
 	name         string
 	buildkit     string
@@ -55,6 +56,7 @@ type config struct {
 	buildkitCA   string
 	buildkitCert string
 	buildkitKey  string
+	serverName   string
 	concurrency  int
 	poll         time.Duration
 	workspace    string
@@ -66,8 +68,11 @@ func main() {
 
 	flag.StringVar(&cfg.coreURL, "core", env("DOGIT_CORE_URL", "http://app:8080"),
 		"the dogit core to talk to")
-	flag.StringVar(&cfg.instance, "registration-token", os.Getenv("DOGIT_REGISTRATION_TOKEN"),
-		"the instance's registration token, which is how a module introduces itself")
+	flag.StringVar(&cfg.instanceFile, "registration-token-file", env("DOGIT_REGISTRATION_TOKEN_FILE", ""),
+		"a file holding the instance's registration token, which is how a module introduces "+
+			"itself. A file and not the token itself, because an environment variable cannot "+
+			"be taken back once set: it stays in /proc/1/environ for the life of the process, "+
+			"and a job script running in this container can read that")
 	flag.StringVar(&cfg.endpoint, "endpoint", env("DOGIT_ENDPOINT", "http://runner:8092"),
 		"the address the core and an operator will reach this runner at")
 	flag.StringVar(&cfg.name, "name", env("DOGIT_RUNNER_NAME", "buildkit"),
@@ -82,6 +87,8 @@ func main() {
 		"this runner's certificate, presented to the builder")
 	flag.StringVar(&cfg.buildkitKey, "buildkit-key", env("DOGIT_BUILDKIT_KEY", "/certs/client.key"),
 		"the key for that certificate")
+	flag.StringVar(&cfg.serverName, "buildkit-server-name", env("DOGIT_BUILDKIT_SERVER_NAME", ""),
+		"the name in the builder's certificate, when it is not simply the address it is reached at")
 	flag.StringVar(&cfg.workspace, "workspace", env("DOGIT_RUNNER_WORKSPACE", "/data/work"),
 		"where checkouts live")
 	flag.IntVar(&cfg.concurrency, "concurrency", envInt("DOGIT_RUNNER_CONCURRENCY", 1),
@@ -110,8 +117,6 @@ func main() {
 		"a stage to stop at, for -build-once")
 	buildPush := flag.Bool("build-push", envBool("DOGIT_BUILD_PUSH", false),
 		"push the result, for -build-once")
-	buildServerName := flag.String("buildkit-server-name", env("DOGIT_BUILDKIT_SERVER_NAME", ""),
-		"the name in the builder's certificate, when it is not the address")
 	buildRegistry := flag.String("build-registry", env("DOGIT_BUILD_REGISTRY", ""),
 		"registry host the credential below is for, for -build-once")
 	buildUser := flag.String("build-user", env("DOGIT_BUILD_USER", ""),
@@ -122,12 +127,20 @@ func main() {
 
 	if *buildOnce {
 		buildAndExit(cfg, *buildContext, *buildDockerfile, *buildImage, *buildTarget,
-			*buildPush, *buildServerName, *buildRegistry, *buildUser, *buildPassword)
+			*buildPush, *buildRegistry, *buildUser, *buildPassword)
 		return
 	}
 
-	if cfg.instance == "" {
-		log.Fatal("no registration token: set DOGIT_REGISTRATION_TOKEN or -registration-token")
+	var token string
+	if cfg.instanceFile != "" {
+		read, err := readAndRemove(cfg.instanceFile)
+		if err != nil {
+			log.Fatalf("no registration token: %v", err)
+		}
+		token = read
+	}
+	if token == "" {
+		log.Fatal("no registration token: set -registration-token-file")
 	}
 	if cfg.concurrency < 1 {
 		cfg.concurrency = 1
@@ -136,6 +149,17 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Read once, and the files go away. Job scripts run in this container, so a key left on
+	// disk is a key a build script can read, and a client certificate is precisely what must
+	// not be readable by the Dockerfile being built.
+	credential, credentialErr := builder.LoadCredentials(cfg.buildkitCert, cfg.buildkitKey, cfg.buildkitCA)
+	if credentialErr != nil {
+		// Not fatal. A runner that cannot reach the builder is still a runner that should
+		// say so on its heartbeat and wait for somebody to fix the volume — exiting would
+		// turn a fixable problem into a crash loop whose log is a mount path.
+		log.Printf("runner: no builder credential: %v", credentialErr)
+	}
 
 	// Cached here so that a core which goes away does not take the registration token down
 	// with it: registering is the only call that needs that token, and re-registering is the
@@ -150,7 +174,7 @@ func main() {
 	defer ticker.Stop()
 
 	for {
-		beat(ctx, &cfg, &registered)
+		beat(ctx, &cfg, &registered, credential, token)
 		// One attempt straight away, rather than after the first tick: a runner that has just
 		// started and has work waiting should not sit for a poll interval looking idle.
 		if mayClaim.Load() {
@@ -168,10 +192,10 @@ func main() {
 // beat keeps the core informed, and re-registers when the credential is refused.
 var self measure.Self
 
-func beat(ctx context.Context, cfg *config, registered *atomic.Value) {
+func beat(ctx context.Context, cfg *config, registered *atomic.Value, credential *builder.Credentials, token string) {
 	existing, _ := registered.Load().(*core.Client)
 	if existing == nil {
-		existing = register(ctx, cfg, registered)
+		existing = register(ctx, cfg, registered, token)
 		if existing == nil {
 			return
 		}
@@ -208,7 +232,7 @@ func beat(ctx context.Context, cfg *config, registered *atomic.Value) {
 	stats.Extra["workspace"] = cfg.workspace
 	stats.Extra["queue"] = queueWord()
 	stats.Extra["jobs"] = fmt.Sprintf("0 of %d running", cfg.concurrency)
-	stats.Extra["builder"] = builderWord(ctx, cfg)
+	stats.Extra["builder"] = builderWord(ctx, cfg, credential)
 	stats.Extra["claiming"] = fmt.Sprint(mayClaim.Load())
 	if at := lastWorkAt.Load(); at > 0 {
 		stats.Extra["last_work"] = time.Since(time.Unix(0, at)).Round(time.Second).String() + " ago"
@@ -231,13 +255,17 @@ func beat(ctx context.Context, cfg *config, registered *atomic.Value) {
 	registered.Store((*core.Client)(nil))
 }
 
-func register(ctx context.Context, cfg *config, registered *atomic.Value) *core.Client {
-	token, err := core.New(cfg.coreURL, "").Register(ctx, cfg.instance, runnerKind, cfg.name, cfg.endpoint, manifest())
+func register(ctx context.Context, cfg *config, registered *atomic.Value, token string) *core.Client {
+	issued, err := core.New(cfg.coreURL, "").Register(ctx, token, runnerKind, cfg.name, cfg.endpoint, manifest())
 	if err != nil {
 		log.Printf("runner: register: %v", err)
 		return nil
 	}
-	client := core.New(cfg.coreURL, token)
+	// The registration token has done its one job. Left in the environment it is readable by
+	// every job script that runs in this container, and it is the one credential here that
+	// can introduce a new module to the instance — a script that exfiltrates it is not
+	// reading a build token with an expiry, it is holding the door key.
+	client := core.New(cfg.coreURL, issued)
 	registered.Store(client)
 	log.Printf("runner: registered as %s", runnerKind)
 	return client
@@ -303,7 +331,7 @@ func ask(ctx context.Context, cfg *config, client *core.Client) {
 // must not do forever: the token a real build pushes with is minted per project by the core
 // and lives for two hours, and a flag on a command line is a token in a process list.
 func buildAndExit(cfg config, contextDir, dockerfile, image, target string, push bool,
-	serverName, registryHost, user, password string) {
+	registryHost, user, password string) {
 
 	if contextDir == "" || image == "" {
 		log.Fatal("-build-once needs -build-context and -build-image")
@@ -312,10 +340,12 @@ func buildAndExit(cfg config, contextDir, dockerfile, image, target string, push
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	client, err := builder.Connect(connectCtx, cfg.buildkitHost, serverName,
-		cfg.buildkitCA, cfg.buildkitCert, cfg.buildkitKey)
-	cancel()
+	credential, err := builder.LoadCredentials(cfg.buildkitCert, cfg.buildkitKey, cfg.buildkitCA)
+	if err != nil {
+		log.Fatalf("runner: %v", err)
+	}
+
+	client, err := builder.Connect(ctx, cfg.buildkitHost, cfg.serverName, credential)
 	if err != nil {
 		log.Fatalf("runner: %v", err)
 	}
@@ -371,16 +401,14 @@ func buildAndExit(cfg config, contextDir, dockerfile, image, target string, push
 // stopped being true. The wording says what was checked, not just that something answered:
 // a runner that reported "connected" after dialling a TCP port would be right in exactly the
 // case where the certificate was wrong.
-func builderWord(ctx context.Context, cfg *config) string {
+func builderWord(ctx context.Context, cfg *config, credential *builder.Credentials) string {
+	if credential == nil {
+		return "no credential loaded"
+	}
 	ping, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
-	answer, err := builder.Address{
-		Addr: cfg.buildkitHost,
-		CA:   cfg.buildkitCA,
-		Cert: cfg.buildkitCert,
-		Key:  cfg.buildkitKey,
-	}.Ping(ping)
+	answer, err := credential.Ping(ping, cfg.buildkitHost, cfg.buildkitServerName())
 	if err != nil {
 		return "unreachable: " + err.Error()
 	}
@@ -405,6 +433,14 @@ func env(name, fallback string) string {
 	}
 	return fallback
 }
+
+// buildkitServerName is the name to verify the builder's certificate against.
+//
+// Empty means "whatever host we dial", which is right for loopback — the certificate carries
+// 127.0.0.1 as a name of its own. It is a flag rather than a constant because the day the
+// daemon moves behind a Service the right answer stops being the address, and getting that
+// wrong surfaces as a certificate error rather than as a name mismatch.
+func (cfg config) buildkitServerName() string { return cfg.serverName }
 
 // pointer, because every measurement in a Stats is a pointer on purpose: a module that did
 // not measure something has to be able to say so, and there is no way to say so with a zero.
@@ -449,4 +485,25 @@ func humanBytes(value int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(value)/float64(div), "KMGT"[exp])
+}
+
+// readAndRemove reads a file and deletes it, and the deletion is the reason this function
+// exists rather than os.ReadFile.
+//
+// A credential in this container is readable by any job script that runs here, and the one
+// below is the instance's registration token — the key that can introduce a new module. The
+// volume it arrives on is a tmpfs, so there is nothing on disk to clean up afterwards; what
+// has to be cleaned up is the file, so that the only thing it can be read by in the seconds
+// between startup and the first job is this process.
+func readAndRemove(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := os.Remove(path); err != nil {
+		// Not fatal — the value is already in memory — but the operator should hear it,
+		// because a file that outlived its reading is a file a job script can open.
+		log.Printf("runner: warning: could not remove %s: %v", path, err)
+	}
+	return strings.TrimSpace(string(raw)), nil
 }

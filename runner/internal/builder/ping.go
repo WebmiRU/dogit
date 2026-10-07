@@ -1,85 +1,44 @@
-// Package builder is this runner's side of BuildKit.
+// Checking that the builder is there, and who it is.
 //
-// For now it is one question: can the runner reach the daemon, with a client certificate, and
-// is the daemon presenting a certificate this runner's CA vouches for. That is worth asking
-// separately from "can it build", because the two fail for unrelated reasons and the panel
-// should be able to say which one broke.
+// Deliberately less than a BuildKit RPC. The full check belongs to the client that will do the
+// building, and a runner that reported "connected" after dialling a TCP port would be right in
+// exactly the case where the certificate was wrong — which is the case worth catching.
+
 package builder
 
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net"
-	"os"
 	"time"
 )
 
-// Address is the daemon, and the three files that make a client out of this process.
-type Address struct {
-	// Addr is host:port. Loopback in the pod this runs in, which is not the same as safe:
-	// rootless BuildKit executes `RUN` steps in the daemon's own network namespace, so a
-	// Dockerfile's script can reach this address too. That is what the client certificate is
-	// for, and it is why this type has no way to be built without one.
-	Addr string
-	CA   string
-	Cert string
-	Key  string
-}
-
-// Ping opens a TLS connection with the client certificate and verifies the daemon against the
-// CA, then says what it found.
+// Ping opens a TLS connection with the credential in hand and checks what the far end says it
+// is.
 //
-// A handshake and nothing more, deliberately. The full check is a BuildKit RPC, and that
-// belongs with the client that will do the building; until then the honest question is
-// "does the credential work and is the far end who it claims to be", because a runner that
-// reports "connected" when it only dialled a TCP port is the kind of green light that costs
-// an afternoon.
-func (a Address) Ping(ctx context.Context) (string, error) {
-	certificate, err := tls.LoadX509KeyPair(a.Cert, a.Key)
-	if err != nil {
-		// Said this way round because it is the more useful of the two: a certificate the
-		// runner cannot load is a volume that is not readable by uid 1000, and no amount of
-		// reading about TLS will say so.
-		return "", fmt.Errorf("load the client certificate (%s, %s): %w", a.Cert, a.Key, err)
-	}
-
-	authority, err := os.ReadFile(a.CA)
-	if err != nil {
-		return "", fmt.Errorf("read the CA (%s): %w", a.CA, err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(authority) {
-		return "", fmt.Errorf("the CA at %s is not a certificate this program can use", a.CA)
-	}
-
+// A handshake and nothing more, said plainly in the result it returns: "tls1.3 to
+// 127.0.0.1:1234, the daemon's certificate is for buildkit.buildkit.svc". A word like
+// "connected" on its own is a claim the code has not earned.
+func (c *Credentials) Ping(ctx context.Context, address, serverName string) (string, error) {
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: 5 * time.Second},
-		Config: &tls.Config{
-			Certificates: []tls.Certificate{certificate},
-			RootCAs:      pool,
-			// No InsecureSkipVerify anywhere in this file, and there will not be one: a
-			// connection to the builder that does not check who is on the other end is a
-			// connection to whoever answered.
-			MinVersion: tls.VersionTLS12,
-		},
+		Config:    c.TLSConfig(serverName),
 	}
 
-	connection, err := dialer.DialContext(ctx, "tcp", a.Addr)
+	connection, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
-		return "", fmt.Errorf("reach %s: %w", a.Addr, err)
+		return "", fmt.Errorf("reach %s: %w", address, err)
 	}
 	defer connection.Close()
 
 	state := connection.(*tls.Conn).ConnectionState()
 	if len(state.PeerCertificates) == 0 {
-		return "", fmt.Errorf("%s completed a handshake without presenting a certificate", a.Addr)
+		return "", fmt.Errorf("%s completed a handshake without presenting a certificate", address)
 	}
-	peer := state.PeerCertificates[0]
 
-	return fmt.Sprintf("tls%s to %s, certificate for %s",
-		tlsVersionName(state.Version), a.Addr, peer.Subject.CommonName), nil
+	return fmt.Sprintf("tls%s to %s, the daemon's certificate is for %s",
+		tlsVersionName(state.Version), address, state.PeerCertificates[0].Subject.CommonName), nil
 }
 
 func tlsVersionName(version uint16) string {
