@@ -254,7 +254,27 @@ const deployBusy = computed(() => verdict.value.tone === 'working')
 
 /** The steps the core said this deployment goes through, in order. */
 const plan = ref<{ key: string; label: string }[]>([])
+/** Whether that list is a rollback's, remembered because a run can change it under a page. */
+const planIsRevert = ref(false)
 const activeSeen = ref<DeployProgress[]>([])
+
+/**
+ * Read the step list for the kind of operation this page is showing.
+ *
+ * Its own function rather than a line in the fetch, because a run can start while the page
+ * is already open — and then the list on it belongs to whatever this place did before this
+ * run rather than to this one. Nothing about that looks wrong on the page: the steps are
+ * real steps, drawn under a log that is going along perfectly well, and the only sign is
+ * that the list is not the one the log is telling.
+ */
+async function loadPlan(wasRevert: boolean) {
+  const stepList = await api.get<{ steps?: { key: string; label: string }[] }>(
+    `/projects/${props.projectId}/deploy-plan${wasRevert ? '?kind=revert' : ''}`,
+  )
+  if (!Array.isArray(stepList.steps) || stepList.steps.length === 0) return
+  plan.value = stepList.steps
+  planIsRevert.value = wasRevert
+}
 
 /**
  * The place being asked about, if one was named.
@@ -1251,12 +1271,7 @@ async function load() {
     // steps: the deployment's seven, drawn beside a log about one image going back on
     // a workload, is a page claiming a build and a push while somebody watches pods.
     const wasRevert = answer.deployments?.[0]?.state === 'reverted'
-    const stepList = await api.get<{ steps?: { key: string; label: string }[] }>(
-      `/projects/${props.projectId}/deploy-plan${wasRevert ? '?kind=revert' : ''}`,
-    )
-    if (Array.isArray(stepList.steps) && stepList.steps.length > 0) {
-      plan.value = stepList.steps
-    }
+    await loadPlan(wasRevert)
 
     if (answer.reason === 'no_deploy_module') {
       deployments.value = []
@@ -1339,6 +1354,18 @@ function noteOperation(payload: Record<string, unknown>) {
     running.value = payload.deployment as NonNullable<DeployProgress['deployment']>
     const record = running.value
     if (record?.image) lastOut.value = { image: record.image, tags: record.tags }
+
+    // The operation's own kind, named by the core, decides whose steps these are. A run
+    // that has just begun makes the list on the page belong to whatever this place did
+    // before it, and nothing about that looks wrong: the steps are real steps, drawn under
+    // a log that is going along perfectly well. Read again here rather than at the next
+    // reload, because the whole of this run is the part where it was wrong.
+    //
+    // A record that does not say is left alone. An older core sends no kind, and swapping
+    // the list on a guess is the thing this was fixing.
+    const kind = record?.kind
+    if (kind === 'revert' && !planIsRevert.value) void loadPlan(true)
+    else if (kind === 'deploy' && planIsRevert.value) void loadPlan(false)
   }
 
   // The phase joins the list of those under way, or leaves it. A phase that has said

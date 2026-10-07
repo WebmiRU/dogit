@@ -558,12 +558,19 @@ func (s *Server) carryOutRevert(ctx context.Context, module *models.Integration,
 		place := map[string]any{
 			"cluster": request.Cluster, "namespace": request.Namespace,
 			"workload": request.Workload,
+			// Which operation this is, because nothing downstream can work it out. The
+			// module's own record does not say — a revert and a deployment both begin by
+			// putting an image on a workload — and a page left to guess draws a
+			// rollback's three steps under a deployment's log, or the deployment's seven
+			// under a rollback, and both look entirely plausible while being wrong.
+			// Naming it here costs one field and settles it at the only place that knows.
+			"kind": "revert",
 		}
 		if len(bytes.TrimSpace(line)) == 0 {
 			return
 		}
 		s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation,
-			relayOf(line, 0, place))
+			relayOf(line, 0, place, ""))
 	})
 	if err != nil {
 		s.log.Warn("a rollback did not finish", "project", project.Path,

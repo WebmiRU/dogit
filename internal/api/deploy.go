@@ -388,7 +388,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// field every time a module learns to say something. What belongs here
 				// is routing, not editing: who is allowed to hear it, and where it goes.
 				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation,
-					relayOf([]byte(trimmed), job.ID, progress.Deployment))
+					relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy"))
 
 				if stepDelay > 0 {
 					time.Sleep(stepDelay)
@@ -455,7 +455,7 @@ type deployProgress struct {
 // the module cannot: which job this is about, and which record it is about — the latter
 // carried on every line so that a page listening from the first of them has the image
 // and the workload from the first, rather than a race with its own first paint.
-func relayOf(line []byte, jobID int64, record map[string]any) map[string]any {
+func relayOf(line []byte, jobID int64, record map[string]any, kind string) map[string]any {
 	payload := map[string]any{}
 	if len(line) > 0 {
 		// A line that is not an object is the module's own to explain; it is relayed as
@@ -474,6 +474,17 @@ func relayOf(line []byte, jobID int64, record map[string]any) map[string]any {
 	if record != nil {
 		if _, said := payload["deployment"]; !said {
 			payload["deployment"] = record
+		}
+	}
+	// Which operation this is, stamped on whichever record is going out.
+	//
+	// After the choice above and not before it, because the module's record is the one that
+	// travels in a rollback, and stamping only the core's own would have named the
+	// operation on a map that is then thrown away — the field would arrive on deployments
+	// and never on rollbacks, which is precisely the half that needed it.
+	if carried, ok := payload["deployment"].(map[string]any); ok && kind != "" {
+		if _, said := carried["kind"]; !said {
+			carried["kind"] = kind
 		}
 	}
 	return payload

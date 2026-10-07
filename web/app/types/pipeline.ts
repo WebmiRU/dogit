@@ -224,6 +224,15 @@ export interface DeployProgress {
     image?: string
     workload?: string
     place?: string
+    /**
+     * Which operation this is — `deploy` or `revert`.
+     *
+     * Named by the core, because it is the only party that knows: the module's own
+     * record cannot tell a rollback from a deployment, since both begin by putting an
+     * image on a workload. A page guessing draws the wrong set of steps under a log
+     * that is going perfectly well, and there is nothing on the page to notice by.
+     */
+    kind?: 'deploy' | 'revert' | string
     tags?: string[]
     commit?: string
     state?: string
