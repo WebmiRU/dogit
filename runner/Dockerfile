@@ -6,9 +6,10 @@
 # worth having in the image would be something to keep up to date on every rebuild, and there
 # is nothing here that needs it yet.
 #
-# git and ssh are the obvious next additions and are not here: they are needed to clone a
-# job's repository, which is the executor's business, and adding them before anything uses
-# them is a package with a CVE list and no caller.
+# git and ssh are here now, and they are here because a runner cannot clone a job's repository
+# without them. The earlier version of this file said they were not needed until something used
+# them, which was the right instinct and the wrong timing: the executor is what uses them, and
+# the runner that discovers this at the moment a job arrives has already claimed it.
 FROM golang:1.27-alpine AS build
 
 WORKDIR /src
@@ -30,7 +31,7 @@ FROM alpine:3.21
 # ca-certificates, and not for decoration: the core is reached over HTTPS by name, and a
 # binary that cannot verify a certificate either fails or — worse, depending on what someone
 # added to make it work — does not fail.
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache ca-certificates git openssh-client \
  && adduser -u 1000 -S -G users -h /home/runner -s /bin/sh runner
 
 COPY --from=build /out/runner /usr/local/bin/runner

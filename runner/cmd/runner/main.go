@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -24,7 +25,9 @@ import (
 
 	"github.com/ewolf/runner/internal/builder"
 	"github.com/ewolf/runner/internal/core"
+	"github.com/ewolf/runner/internal/jobs"
 	"github.com/ewolf/runner/internal/measure"
+	"github.com/ewolf/runner/internal/settings"
 )
 
 // The kind this runner registers under. A different word from `runner:docker` on purpose:
@@ -32,6 +35,10 @@ import (
 // and this one cannot execute a job yet, so a shared kind would have it stealing work from a
 // runner that can.
 const runnerKind = "runner:buildkit"
+
+// The account machines act as. The core names its registry credential to this, so that a push
+// at three in the morning is attributed to a machine rather than to whoever pressed the button.
+const builderName = "builder"
 
 // The job field this runner understands. Set from -claim.
 var mayClaim atomic.Bool
@@ -46,6 +53,12 @@ var (
 
 var startedAt = time.Now()
 
+// runnerSlots is this runner's capacity, read by the heartbeat to say how busy it is. A plain
+// variable because it is set once, before any goroutine exists that could read it, and
+// because len() of a channel is the answer already — counting the same slots separately would
+// be a second answer that can disagree with the first.
+var runnerSlots chan struct{}
+
 type config struct {
 	coreURL      string
 	instanceFile string
@@ -58,6 +71,7 @@ type config struct {
 	buildkitKey  string
 	serverName   string
 	concurrency  int
+	jobLimit     time.Duration
 	poll         time.Duration
 	workspace    string
 	claim        bool
@@ -93,6 +107,8 @@ func main() {
 		"where checkouts live")
 	flag.IntVar(&cfg.concurrency, "concurrency", envInt("DOGIT_RUNNER_CONCURRENCY", 1),
 		"how many jobs at once")
+	flag.DurationVar(&cfg.jobLimit, "job-timeout", envDuration("DOGIT_RUNNER_JOB_TIMEOUT", time.Hour),
+		"how long one job may run before it is stopped")
 	flag.DurationVar(&cfg.poll, "poll", envDuration("DOGIT_RUNNER_POLL", 3*time.Second),
 		"how often to ask for work")
 	flag.BoolVar(&cfg.claim, "claim", envBool("DOGIT_RUNNER_CLAIM", false),
@@ -170,15 +186,25 @@ func main() {
 	log.Printf("runner %q starting: core %s, builder %s, %d at a time, claiming %v",
 		cfg.name, cfg.coreURL, cfg.buildkit, cfg.concurrency, cfg.claim)
 
+	// The channel is a counter, not the limit. The limit is a number somebody can change while
+	// jobs are running, and a channel sized once would freeze it at whatever it was at
+	// startup — which is the same "the panel says something false" bug as a setting nobody
+	// reads, wearing a different hat.
+	slots := make(chan struct{}, 64)
+	runnerSlots = slots
+
+	module := &settings.Settings{}
+	module.Seed(cfg.concurrency, cfg.jobLimit)
+
 	ticker := time.NewTicker(cfg.poll)
 	defer ticker.Stop()
 
 	for {
-		beat(ctx, &cfg, &registered, credential, token)
+		beat(ctx, &cfg, &registered, credential, token, module)
 		// One attempt straight away, rather than after the first tick: a runner that has just
 		// started and has work waiting should not sit for a poll interval looking idle.
 		if mayClaim.Load() {
-			ask(ctx, &cfg, registered.Load().(*core.Client))
+			ask(ctx, &cfg, registered.Load().(*core.Client), slots, module, credential)
 		}
 		select {
 		case <-ctx.Done():
@@ -192,7 +218,7 @@ func main() {
 // beat keeps the core informed, and re-registers when the credential is refused.
 var self measure.Self
 
-func beat(ctx context.Context, cfg *config, registered *atomic.Value, credential *builder.Credentials, token string) {
+func beat(ctx context.Context, cfg *config, registered *atomic.Value, credential *builder.Credentials, token string, module *settings.Settings) {
 	existing, _ := registered.Load().(*core.Client)
 	if existing == nil {
 		existing = register(ctx, cfg, registered, token)
@@ -200,6 +226,16 @@ func beat(ctx context.Context, cfg *config, registered *atomic.Value, credential
 			return
 		}
 	}
+
+	// Read before reporting, so that what the panel shows about this machine is what it is
+	// doing rather than what it was doing.
+	if err := module.Read(ctx, existing); err != nil {
+		log.Printf("runner: read settings: %v", err)
+	}
+	// A setting the core holds that this build does not act on is reported rather than
+	// ignored: somebody believes they have set it, and silence is the one answer that leaves
+	// them believing it.
+	unapplied := module.UnknownKeys()
 
 	host := measure.ReadHost()
 	stats := core.Stats{
@@ -231,6 +267,13 @@ func beat(ctx context.Context, cfg *config, registered *atomic.Value, credential
 	}
 	stats.Extra["workspace"] = cfg.workspace
 	stats.Extra["queue"] = queueWord()
+	// The limits actually in force, not the ones this process was started with. A panel
+	// showing a stale number is the same lie as one showing a setting nobody applied.
+	stats.Extra["at once"] = fmt.Sprint(module.Concurrency.Load())
+	stats.Extra["keep checkouts"] = fmt.Sprint(module.KeepCheckout.Load())
+	if len(unapplied) > 0 {
+		stats.Extra["settings not applied"] = strings.Join(unapplied, " ")
+	}
 	stats.Extra["jobs"] = fmt.Sprintf("0 of %d running", cfg.concurrency)
 	stats.Extra["builder"] = builderWord(ctx, cfg, credential)
 	stats.Extra["claiming"] = fmt.Sprint(mayClaim.Load())
@@ -290,22 +333,46 @@ func manifest() map[string]any {
 		"settings": []map[string]any{
 			{
 				"key": "concurrency", "label": "Jobs at once", "type": "int", "default": 1,
-				"description": "How many jobs this runner takes together. One until the executor is finished, because a claim taken and not finished is a job stuck at running for ever.",
+				"description": "How many jobs this runner takes together. Takes effect straight away; " +
+					"jobs already running are left to finish.",
 			},
 			{
 				"key": "job_timeout", "label": "Job timeout", "type": "int", "default": 3600,
-				"description": "Seconds a single job may run before it is stopped.",
+				"description": "Seconds a single job may run before it is stopped. A job that will " +
+					"not end is holding a slot, and a queue stops draining while it does.",
+			},
+			{
+				"key": "keep_checkout", "label": "Keep working copies", "type": "bool", "default": true,
+				"description": "Leave each project's checkout in place between jobs, so the next job " +
+					"of the same project fetches one commit instead of the whole history. Turn it off " +
+					"to keep the disk from growing with the number of projects, at the price of a wait " +
+					"on every build.",
 			},
 		},
 	}
 }
 
-func ask(ctx context.Context, cfg *config, client *core.Client) {
+func ask(ctx context.Context, cfg *config, client *core.Client, slots chan struct{},
+	module *settings.Settings, credential *builder.Credentials) {
 	if client == nil {
 		return
 	}
+	// Read the limit before the slot, and check it against what is already running. Checking
+	// and taking are two steps, and only this goroutine does both — the releasing happens in
+	// the goroutines jobs run on, which is safe because len() of a channel is always a
+	// truthful count of what is in it.
+	if int64(len(slots)) >= module.Concurrency.Load() {
+		return
+	}
+	select {
+	case slots <- struct{}{}:
+	default:
+		return
+	}
+
 	answer, err := client.Claim(ctx, nil)
 	if err != nil {
+		<-slots
 		if !errors.Is(err, core.ErrUnauthorized) {
 			log.Printf("runner: asking for work: %v", err)
 		}
@@ -316,12 +383,250 @@ func ask(ctx context.Context, cfg *config, client *core.Client) {
 		queueKnown.Store(true)
 	}
 	if answer.Job == nil {
+		<-slots
 		return
 	}
-	// Not here yet, and said so rather than claimed quietly. Taking the job and then having
-	// nothing to do with it is the failure this whole decision was arranged to avoid.
+
 	lastWorkAt.Store(time.Now().UnixNano())
-	log.Printf("runner: claimed job %d (%s) and cannot run it yet — the executor is not written", answer.Job.ID, answer.Job.Name)
+	go func() {
+		defer func() { <-slots }()
+		runJob(ctx, cfg, client, answer, module, credential)
+	}()
+}
+
+// runJob carries one claimed job all the way to finished.
+//
+// The job is finished here rather than inside the executor or the builder, because the job is
+// both: a build job is a script and an image, and the core has to be told it is done only once
+// the second half is in the registry. An earlier version finished it when the script ended,
+// which meant the deploy stage started while the image was still being pushed, asked the
+// registry for a tag that was not there yet, and deployed by tag instead of by digest — so a
+// rollback would have brought back whatever else that name pointed at.
+//
+// A finish in a defer, over the whole of it, so that no path out of here leaves a job at
+// "running" on a runner that has moved on. That is the one state a queue cannot recover from
+// by itself.
+func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.Claim,
+	module *settings.Settings, credential *builder.Credentials) {
+	started := time.Now()
+	claimed := answer.Job
+	log.Printf("runner: job %d (%s, %s) on %s", claimed.ID, claimed.Name, claimed.Stage, claimed.ProjectPath)
+
+	job := &jobs.Job{
+		ID:          claimed.ID,
+		Stage:       claimed.Stage,
+		Name:        claimed.Name,
+		ProjectPath: claimed.ProjectPath,
+		Script:      claimed.Script,
+		Variables:   claimed.Variables,
+	}
+	// From the answer, not from the job. See the note on core.Job.
+	if answer.Registry != nil {
+		job.Registry = &jobs.Registry{
+			URL:   answer.Registry.URL,
+			Image: answer.Registry.Image,
+			Token: answer.Registry.Token,
+		}
+	}
+
+	executor := jobs.New(cfg.workspace, "", time.Duration(module.JobTimeout.Load()), client,
+		module.KeepCheckout.Load())
+	finish := func(status, reason string) {
+		if err := client.FinishJob(context.WithoutCancel(ctx), job.ID, status,
+			time.Since(started), reason); err != nil {
+			// Nothing useful to do about it, and saying so here would be the last line of a
+			// job whose whole point was to be reported accurately.
+			log.Printf("runner: job %d could not be finished: %v", job.ID, err)
+		}
+	}
+
+	result := executor.Run(ctx, job)
+	if result.Status != jobs.StatusSuccess {
+		log.Printf("runner: job %d failed after %s: %s", job.ID, result.Took, result.Reason)
+		finish(jobs.StatusFailed, result.Reason)
+		return
+	}
+	log.Printf("runner: job %d script finished in %s, %d steps", job.ID, result.Took, result.Steps)
+
+	if len(claimed.Build) == 0 {
+		finish(jobs.StatusSuccess, "")
+		return
+	}
+	if err := buildImage(ctx, cfg, client, job, claimed, credential); err != nil {
+		log.Printf("runner: job %d: build failed: %s", job.ID, err)
+		finish(jobs.StatusFailed, "the image this job builds did not build: "+err.Error())
+		return
+	}
+	finish(jobs.StatusSuccess, "")
+}
+
+// buildImage builds the image a job asked for and pushes it, then says what it made.
+//
+// Only reached once the script has succeeded. A build on top of a failed script would be a
+// second failure with a more expensive cause, and a pipeline page would show an image for a
+// commit whose own checks did not pass.
+//
+// The tag comes from the project's own configuration, with $VARIABLES expanded from what the
+// core recorded — and if there is no tag, the short commit. Never nothing: an image with no
+// tag is a dangling manifest in a registry, and the deploy side addresses images by digest,
+// so a build nobody can name is a build nobody can deploy.
+func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs.Job,
+	claimed *core.Job, credential *builder.Credentials) error {
+	build := claimed.Build
+
+	contextDir := "."
+	if value, ok := build["context"].(string); ok && value != "" {
+		contextDir = value
+	}
+	dockerfile := "Dockerfile"
+	if value, ok := build["dockerfile"].(string); ok && value != "" {
+		dockerfile = value
+	}
+
+	// A project's tag is a template, and the core recorded the variables for exactly this.
+	// The name is in the build itself, written onto the job by the core when the run was
+	// filed — `image: registry.f220.ru/test/versions` — and the runner is not asked to work
+	// it out. The tag is separate, and a job whose `tag` came out empty is normal: the
+	// project's own CI says "the tag when there is one, the short commit otherwise", and a
+	// push to a branch is not a push to a tag. So the fallback is the short commit, which is
+	// what the project asked for and what the deploy side addresses by digest anyway.
+	image, _ := build["image"].(string)
+	if image == "" && job.Registry != nil {
+		image = job.Registry.Image
+	}
+	tag := ""
+	if value, ok := build["tag"].(string); ok {
+		tag = expand(value, claimed.Variables)
+	}
+	if tag == "" {
+		tag = claimed.Variables["CI_COMMIT_TAG"]
+	}
+	if tag == "" {
+		tag = claimed.Variables["CI_COMMIT_SHORT_SHA"]
+	}
+
+	// Said and failed, not skipped: see runJob on why a build that produced nothing is worse
+	// than a build that failed.
+	if job.Registry == nil || job.Registry.Token == "" {
+		_ = client.JobProgress(ctx, job.ID, "failed", "no registry credential for the push")
+		_ = client.JobLog(ctx, job.ID, "stderr",
+			"this job asks for an image, but the core offered no credential to push it with\n")
+		return errors.New("the core offered no registry credential for this job's image")
+	}
+	if image == "" || tag == "" {
+		_ = client.JobProgress(ctx, job.ID, "failed", "no name for the image")
+		_ = client.JobLog(ctx, job.ID, "stderr",
+			"this job asks for an image, but there is nothing to call it: no tag, no commit\n")
+		return errors.New("this job's image has no name to be pushed under")
+	}
+
+	image = image + ":" + tag
+	_ = client.JobProgress(ctx, job.ID, "build", "building "+image)
+
+	// The credential this process already read at startup, from memory. Not a re-read of the
+	// file, because there is no file: it was deleted on purpose so that a job script running
+	// in this container cannot read it, and that leaves exactly one copy, which is here.
+	if credential == nil {
+		_ = client.JobProgress(ctx, job.ID, "failed", "no builder credential")
+		_ = client.JobLog(ctx, job.ID, "stderr", "this runner has no builder credential\n")
+		return errors.New("this runner has no credential for the builder")
+	}
+	built, err := builder.Connect(ctx, cfg.buildkitHost, cfg.serverName, credential)
+	if err != nil {
+		return failBuild(ctx, client, job, "cannot reach the builder: "+err.Error())
+	}
+	defer built.Close()
+
+	_ = client.JobProgress(ctx, job.ID, "build", "pushing "+image)
+	result, err := built.Build(ctx, builder.Request{
+		ContextDir: filepath.Join(jobs.Directory(cfg.workspace, job.ProjectPath), contextDir),
+		Dockerfile: filepath.Join(contextDir, dockerfile),
+		Target:     stringOf(build, "target"),
+		Args:       buildArgs(build, claimed.Variables),
+		Image:      image,
+		Push:       true,
+		Registry: &builder.Credential{
+			Server:   hostOf(job.Registry.URL),
+			Username: builderName,
+			Token:    job.Registry.Token,
+		},
+	}, func(progress builder.Progress) {
+		switch {
+		case progress.Failed:
+			_ = client.JobLog(ctx, job.ID, "stderr", "FAILED "+progress.Step+"\n")
+		case progress.Line != "":
+			_ = client.JobLog(ctx, job.ID, "stdout", progress.Step+" | "+progress.Line+"\n")
+		default:
+			_ = client.JobLog(ctx, job.ID, "stdout", "done "+progress.Step+"\n")
+		}
+	})
+	if err != nil {
+		return failBuild(ctx, client, job, err.Error())
+	}
+
+	log.Printf("runner: job %d built %s in %s, %d steps (%d cached)",
+		job.ID, result.Digest, result.Duration().Round(time.Millisecond), result.Steps, result.Cached)
+	// The step is closed here, and it says what it closed over: the name the image was
+	// pushed under. Not the digest — that is in the log line below, and a page that
+	// showed both would say the same thing twice about one push.
+	_ = client.JobProgress(ctx, job.ID, "done", "pushed "+image)
+
+	// In the log rather than only in the feed, because the feed is only watched live and
+	// this is what somebody reads in a month asking what went out. No leading newline: the
+	// core takes this text as lines, and a leading one arrives as an empty line in the
+	// middle of a build's output for no reason a reader could account for.
+	_ = client.JobLog(ctx, job.ID, "stdout", "built "+result.Digest+"\n")
+	return nil
+}
+
+// failBuild says a build failed and hands the reason back, so that the caller closes the job
+// as failed. The alternative is the worst state this program can produce: a pipeline whose
+// build stage is green, whose deploy stage then looks for an image that was never pushed, and
+// whose page shows a run that succeeded. A build that failed has to be a failed build.
+func failBuild(ctx context.Context, client *core.Client, job *jobs.Job, reason string) error {
+	_ = client.JobProgress(ctx, job.ID, "failed", reason)
+	_ = client.JobLog(ctx, job.ID, "stderr", "the build did not finish: "+reason+"\n")
+	return errors.New(reason)
+}
+
+// expand fills $VARIABLE and ${VARIABLE} from what the core recorded.
+//
+// Written here rather than pulled in as a library for six lines: the alternative is a
+// dependency that would be asked to do nothing else, in a program that is trying to have as
+// few as possible.
+func expand(template string, variables map[string]string) string {
+	out := template
+	for name, value := range variables {
+		out = strings.ReplaceAll(out, "${"+name+"}", value)
+		out = strings.ReplaceAll(out, "$"+name, value)
+	}
+	return strings.TrimSpace(out)
+}
+
+func stringOf(values map[string]any, key string) string {
+	if text, ok := values[key].(string); ok {
+		return text
+	}
+	return ""
+}
+
+func buildArgs(build map[string]any, variables map[string]string) map[string]string {
+	arguments := map[string]string{}
+	if raw, ok := build["args"].(map[string]any); ok {
+		for name, value := range raw {
+			arguments[name] = expand(fmt.Sprint(value), variables)
+		}
+	}
+	return arguments
+}
+
+func hostOf(address string) string {
+	address = strings.TrimPrefix(address, "https://")
+	address = strings.TrimPrefix(address, "http://")
+	if at := strings.Index(address, "/"); at >= 0 {
+		address = address[:at]
+	}
+	return address
 }
 
 // buildAndExit is one build and out, for proving the path to the builder and to the registry

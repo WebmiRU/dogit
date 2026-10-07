@@ -70,13 +70,13 @@ type Registry struct {
 // zero value — so anything unlisted below is something to add deliberately, with the field's
 // real type in front of you.
 type Job struct {
-	ID            int64             `json:"id"`
-	Name          string            `json:"name"`
-	Stage         string            `json:"stage"`
-	ProjectPath   string            `json:"project_path"`
-	Script        []string          `json:"script"`
-	Build         map[string]any    `json:"build"`
-	Registry      *Registry         `json:"registry"`
+	ID          int64          `json:"id"`
+	Name        string         `json:"name"`
+	Stage       string         `json:"stage"`
+	ProjectPath string         `json:"project_path"`
+	Script      []string       `json:"script"`
+	Build       map[string]any `json:"build"`
+	// Where the image goes is deliberately NOT here.
 	CloneURL      string            `json:"clone_url"`
 	Variables     map[string]string `json:"variables"`
 	CommitSHA     string            `json:"commit_sha"`
@@ -99,11 +99,18 @@ type CloneKey struct {
 
 // Claim is the core's answer to "is there anything for me".
 type Claim struct {
-	Job      *Job      `json:"job"`
-	Waiting  *int      `json:"waiting"`
-	CloneURL string    `json:"clone_url"`
-	Key      *CloneKey `json:"key"`
-	LogKey   string    `json:"log_key"`
+	Job *Job `json:"job"`
+	// Waiting is how many jobs were still queued at the core after this one was taken. A
+	// pointer because the core says "not known" by leaving it out, and a runner that cannot
+	// count the queue must say so rather than report a confident zero.
+	Waiting *int `json:"waiting"`
+	// Registry is the push address and the credential for it, and it is here rather than on
+	// the job because the core mints it per build — it lives for two hours and is scoped to
+	// one project. Naming it on Job instead would have compiled, unmarshalled to nil, and read
+	// as "this job builds no image", which is a lie the runner then reports to a person. That
+	// is exactly what happened: the field was on Job, decoded to nil every time, and the
+	// runner said "no registry to push to" while the core was handing one over.
+	Registry *Registry `json:"registry,omitempty"`
 }
 
 // Register introduces this runner to an instance and returns the credential it will use from
@@ -194,21 +201,121 @@ func (c *Client) Heartbeat(ctx context.Context, stats Stats) (time.Duration, err
 	return interval, nil
 }
 
+// JobKey is the credential to clone one job with, and where to clone from.
+//
+// Asked at the moment the clone is about to happen rather than when the job was claimed. A
+// runner may hold a job for minutes before it begins — a slot was busy, or a build ahead of
+// it took a while — and a key whose short life was measured from the claim would be dead
+// before the machine was ready. It is the one credential in this program that is read-only
+// and scoped to one project.
+func (c *Client) JobKey(ctx context.Context, jobID int64) (cloneURL, privateKey, fingerprint string, err error) {
+	var answer struct {
+		CloneURL string `json:"clone_url"`
+		Key      struct {
+			PrivateKey  string `json:"private_key"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"key"`
+	}
+	if err := c.post(ctx, jobPath(jobID, "key"), map[string]any{}, &answer); err != nil {
+		return "", "", "", err
+	}
+	return answer.CloneURL, answer.Key.PrivateKey, answer.Key.Fingerprint, nil
+}
+
+// JobLog appends part of a job's output, tagged with which stream it came from.
+//
+// Sent as it arrives rather than in one piece at the end, because the log is the only thing
+// that says what a build is doing while it is doing it. Sent too often it is its own problem,
+// so callers batch.
+func (c *Client) JobLog(ctx context.Context, jobID int64, stream, text string) error {
+	if text == "" {
+		return nil
+	}
+	return c.post(ctx, jobPath(jobID, "log"), map[string]string{"stream": stream, "text": text}, nil)
+}
+
+// JobProgress says which part of the work the runner is on.
+//
+// Best effort by design. A progress message that fails to arrive costs a page a step it would
+// have shown a moment later; failing the job over it would let the core's event feed break a
+// build, which is the wrong way round.
+func (c *Client) JobProgress(ctx context.Context, jobID int64, phase, message string) error {
+	if phase == "" || message == "" {
+		return nil
+	}
+	return c.post(ctx, jobPath(jobID, "progress"),
+		map[string]string{"phase": phase, "message": message}, nil)
+}
+
+// FinishJob says how a job ended, for good.
+//
+// Status is one of the core's own words — success, failed, canceled — and anything else is
+// refused there rather than here, so that the two ends of this cannot drift apart quietly.
+func (c *Client) FinishJob(ctx context.Context, jobID int64, status string, took time.Duration, reason string) error {
+	return c.post(ctx, jobPath(jobID, "finish"), map[string]any{
+		"status":      status,
+		"duration_ms": took.Milliseconds(),
+		"error":       reason,
+	}, nil)
+}
+
+// Settings is this module's own configuration, as the core holds it.
+//
+// Read, and acted on. The runner in dogit declares three settings and reads none of them, so
+// an administrator changes a number in a panel and nothing happens — which is worse than not
+// offering the number, because a panel is read as a statement about the machine. The schema
+// comes back with the values so that a setting this build has never heard of is reported
+// rather than silently ignored.
+func (c *Client) Settings(ctx context.Context) (effective map[string]any, schema []map[string]any, err error) {
+	var answer struct {
+		Effective map[string]any   `json:"effective"`
+		Schema    []map[string]any `json:"schema"`
+	}
+	// A GET, and not a POST with an empty body: the core's router answers a GET here and
+	// refuses a POST with a 405, which arrived as a settings read failing three times a
+	// minute until it was looked at.
+	if err := c.get(ctx, "/api/v1/module/settings", &answer); err != nil {
+		return nil, nil, err
+	}
+	return answer.Effective, answer.Schema, nil
+}
+
+func jobPath(jobID int64, leaf string) string {
+	return fmt.Sprintf("/api/v1/module/runner/jobs/%d/%s", jobID, leaf)
+}
+
 func (c *Client) post(ctx context.Context, path string, body any, out any) error {
 	return c.postAs(ctx, path, body, c.token, out)
 }
 
+// get is a POST-shaped call that is not one. The core's module routes are mostly POSTs
+// because they are commands, but a few are questions, and the router answers those with a
+// 405 for a POST — so the verb is a property of the endpoint and not of this client.
+func (c *Client) get(ctx context.Context, path string, out any) error {
+	return c.do(ctx, http.MethodGet, path, nil, c.token, out)
+}
+
 func (c *Client) postAs(ctx context.Context, path string, body any, token string, out any) error {
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
+	return c.do(ctx, http.MethodPost, path, body, token, out)
+}
+
+func (c *Client) do(ctx context.Context, method, path string, body any, token string, out any) error {
+	var reader io.Reader
+	if body != nil {
+		payload, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode %s: %w", path, err)
+		}
+		reader = bytes.NewReader(payload)
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
 		return fmt.Errorf("build request for %s: %w", path, err)
 	}
-	request.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
