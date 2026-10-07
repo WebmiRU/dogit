@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -64,8 +65,16 @@ func main() {
 		"the docker binary")
 	flag.DurationVar(&cfg.poll, "poll", 3*time.Second, "how often to ask for work")
 	flag.DurationVar(&cfg.heartbeat, "heartbeat", 30*time.Second, "heartbeat interval")
+	flag.StringVar(&cfg.workspaceVolume, "workspace-volume",
+		envOr("DOGIT_RUNNER_WORKSPACE_VOLUME", ""),
+		"the Docker volume this runner's workspace is in, when it is in one")
+	flag.StringVar(&cfg.workspaceMount, "workspace-mount",
+		envOr("DOGIT_RUNNER_WORKSPACE_MOUNT", ""),
+		"where that volume is mounted in this container, which the job is given too")
 	flag.StringVar(&cfg.workspace, "workspace", envOr("DOGIT_RUNNER_WORKSPACE", "/data/work"),
 		"where checkouts are made")
+	flag.IntVar(&cfg.clonePort, "clone-port", envInt("DOGIT_RUNNER_SSH_PORT", 22),
+		"the SSH port this runner connects to, from where this runner is")
 	flag.StringVar(&cfg.sshHost, "ssh-host", envOr("DOGIT_SSH_HOST", "localhost"),
 		"the instance's SSH host, for cloning over git-over-ssh")
 	flag.Parse()
@@ -181,9 +190,19 @@ type config struct {
 	poll              time.Duration
 	heartbeat         time.Duration
 	workspace         string
-	// sshHost is the instance's SSH host: the runner clones over git-over-ssh,
-	// because that is how repositories are served.
+	// workspaceVolume is the Docker volume this runner's workspace lives in, and
+	// workspaceMount is where that volume is mounted in this container. Both are asked
+	// for because the job's container has to be given the same view this runner has, and
+	// the pair is what says what that view is. See whereTheJobLooks.
+	workspaceVolume string
+	workspaceMount  string
+	// sshHost is the instance's SSH host as the outside world is given it: the address a
+	// person clones from. It is not what this runner clones from — see cloneAddress.
 	sshHost string
+	// clonePort is the SSH port to connect to, from where this runner is. Twenty-two,
+	// because that is what an sshd inside a container listens on, and the port published
+	// to the outside is not that port in any deployment that maps one onto the other.
+	clonePort int
 }
 
 // manifest is what this runner says it can do.
@@ -350,6 +369,39 @@ func (cfg config) tags() []string {
 	return []string{"docker"}
 }
 
+// whereTheJobLooks is what a job's container is given to see its checkout, and where it is
+// told to work.
+//
+// Two ways, and which one is right depends on where the daemon is. A job's container is
+// created by the same docker this runner talks to, so a path in `-v` is resolved by the
+// daemon on its own machine — which, whenever this runner is itself a container, is not this
+// machine. The runner's /data/work is then a path the daemon has never heard of: docker
+// makes a directory of that name on the host and mounts the empty one, and the job's script
+// runs in a checkout that is not there. Nothing says so; `test -f k8s/Dockerfile` simply
+// exits 1.
+//
+// So when the workspace is a Docker volume, the job is given that volume mounted exactly
+// where this runner has it, and works where the checkout is. Both halves are asked for,
+// because mounting it somewhere else is not a near miss: a volume mounted one level higher
+// puts the checkout at a path one level shorter, the working directory does not exist, and
+// the job's script fails on the first line with nothing in its log but its own echo.
+func whereTheJobLooks(cfg config, workspace string) ([]runner.Volume, string) {
+	volume := strings.TrimSpace(cfg.workspaceVolume)
+	mount := strings.TrimRight(strings.TrimSpace(cfg.workspaceMount), "/")
+	if volume != "" && mount != "" {
+		return []runner.Volume{{
+			Name:   "checkout",
+			Source: volume,
+			Target: mount,
+		}}, workspace
+	}
+	return []runner.Volume{{
+		Name:   "checkout",
+		Source: workspace,
+		Target: "/build",
+	}}, "/build"
+}
+
 // runJob runs one job and reports what happened.
 //
 // The order matters: the log goes up as it is produced, so a runner that dies
@@ -380,20 +432,16 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	workspace := fmt.Sprintf("%s/%s/job-%d", strings.TrimRight(cfg.workspace, "/"),
 		strings.ReplaceAll(job.ProjectPath, "/", "-"), job.ID)
 
+	volumes, workingDir := whereTheJobLooks(cfg, workspace)
 	spec := runner.JobSpec{
 		ID:          job.ID,
 		Name:        job.Name,
 		Image:       runner.ImageTag(job.Image),
 		Script:      job.Script,
 		Environment: jobEnvironment(job, answer.Registry),
-		WorkingDir:  "/build",
+		WorkingDir:  workingDir,
 		Timeout:     cfg.jobTimeout(),
-		Volumes: []runner.Volume{{
-			Name:     "checkout",
-			Source:   workspace,
-			Target:   "/build",
-			ReadOnly: false,
-		}},
+		Volumes:     volumes,
 	}
 
 	// The checkout happens on this machine rather than inside the job's container:
@@ -538,6 +586,97 @@ func jobEnvironment(job *job, registry map[string]any) map[string]string {
 	return environment
 }
 
+// What this host's docker build understands, asked once and remembered.
+//
+// Both flags this build passes beyond the plain ones are BuildKit's: --progress is what
+// makes a build narrate itself line by line, and --provenance is how a build record is
+// turned off. A host with only the legacy builder refuses the whole command over the first
+// of them — "unknown flag: --progress", exit 125, no build started — and what it says names
+// a flag rather than the thing that is actually missing, which is the buildx component that
+// host does not have.
+//
+// So it is asked, from the builder's own help, and a flag this host has never heard of is
+// not passed. That is the whole answer for an older docker: it builds what it can, which is
+// the image, and narrates it in fewer lines.
+var builderFlags struct {
+	once    sync.Once
+	known   map[string]bool
+	checked bool
+}
+
+func buildFlagKnown(cfg config, flag string) bool {
+	builderFlags.once.Do(func() {
+		builderFlags.known = map[string]bool{}
+		out, err := exec.CommandContext(context.Background(),
+			cfg.dockerBinary, "build", "--help").CombinedOutput()
+		if err != nil {
+			// A docker that cannot be asked will be asked again by the build itself, and
+			// its own refusal is a better sentence than a guess made here.
+			return
+		}
+		builderFlags.checked = true
+		for _, flag := range []string{"--progress", "--provenance"} {
+			if strings.Contains(string(out), flag) {
+				builderFlags.known[flag] = true
+			}
+		}
+	})
+	if !builderFlags.checked {
+		// Nothing was learned, so nothing is claimed: pass no BuildKit flag, because a
+		// flag passed blind is the failure this avoids.
+		return false
+	}
+	return builderFlags.known[flag]
+}
+
+// cloneAddress is where this runner clones from, and it is not the address the core gives
+// out.
+//
+// The core's address is written for a person: the host it is published under, on the port
+// the outside world is given. A runner is usually not where that address points — it is a
+// machine on the same network as the core, or across the world, and either way "the host
+// the core publishes itself under" is not an answer about the host this runner can reach.
+//
+// So the host comes from where this runner already talks to the core, which it knows works,
+// and the port is this runner's own to say. The default is twenty-two, because that is what
+// an sshd in a container listens on: the port published to the outside is a different port
+// whenever a deployment maps one onto the other, and naming that one here leaves every
+// runner inside a network connecting to a port nothing is listening on.
+func cloneAddress(cfg config) string {
+	host := hostOf(cfg.coreURL)
+	if host == "" {
+		// No address to the core, which a runner cannot work at all; the host it was
+		// configured with is the only thing left to try.
+		host = cfg.sshHost
+	}
+	port := cfg.clonePort
+	if port <= 0 {
+		port = 22
+	}
+	if port == 22 {
+		return "ssh://git@" + host
+	}
+	return fmt.Sprintf("ssh://git@%s:%d", host, port)
+}
+
+// hostOf is the host out of an address, without the scheme, the port or anything after it.
+func hostOf(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return ""
+	}
+	if scheme, rest, found := strings.Cut(address, "://"); found && scheme != "" {
+		address = rest
+	}
+	if slash := strings.IndexByte(address, '/'); slash >= 0 {
+		address = address[:slash]
+	}
+	if host, _, found := strings.Cut(address, ":"); found {
+		address = host
+	}
+	return address
+}
+
 func tokenOf(registry map[string]any) string {
 	value, _ := registry["token"].(string)
 	return value
@@ -550,7 +689,9 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 	// The key is asked for here, at the moment it is needed. The core may already
 	// hold one for this job from an earlier attempt; if so it says so rather than
 	// minting a second, and the private half the runner has is the one that works.
-	cloneURL, privateKey, err := answer.core.jobKey(ctx, answer.Job.ID)
+	// The address the core offers is not taken: it is the one a person clones from. The key
+	// is the part of the answer a build cannot do without.
+	_, privateKey, err := answer.core.jobKey(ctx, answer.Job.ID)
 	if err != nil {
 		return fmt.Errorf("ask for a project key: %w", err)
 	}
@@ -564,17 +705,13 @@ func checkout(ctx context.Context, cfg config, answer claim, workspace string) e
 		return err
 	}
 
-	// The core serves the repository over its own HTTP API, which is how a runner
-	// outside the deployment network gets at code that lives nowhere else. The
-	// credential goes in the URL because git has nowhere else to put it, and it is
-	// Over SSH, with a key the core minted for this job alone. The key is written to
-	// a file with the permissions ssh insists on and removed with the workspace: it
-	// belongs to one build and outlives nothing.
-	if cloneURL == "" {
-		cloneURL = "ssh://git@" + cfg.sshHost
-	}
-
-	command := exec.CommandContext(ctx, "git", "clone", cloneURL+"/"+
+	// Over SSH, with a key the core minted for this job alone. The key is written to a
+	// file with the permissions ssh insists on and removed with the workspace: it belongs
+	// to one build and outlives nothing.
+	//
+	// The address is this runner's to work out rather than the core's to hand out, because
+	// the core's address is the one a person uses. See cloneAddress.
+	command := exec.CommandContext(ctx, "git", "clone", cloneAddress(cfg)+"/"+
 		url.PathEscape(projectPath)+".git", workspace)
 
 	environment := os.Environ()
@@ -783,12 +920,15 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 
 	// The build itself is plain docker: this is the machine that is allowed to run
 	// it, which is the whole reason this process exists as its own binary.
-	// Plain progress, asked for rather than inferred: docker decides between lines
-	// and a spinner by whether it has a terminal, and what we want here is lines.
 	// One build, every name it will be known by. Building twice would be faster to
 	// write and wrong: two builds of the same sources can differ, and a release whose
 	// two names point at different images is a release nobody can reason about.
-	args := []string{"build", "--progress=plain"}
+	args := []string{"build"}
+	// Plain progress, asked for rather than inferred: docker decides between lines
+	// and a spinner by whether it has a terminal, and what we want here is lines.
+	if buildFlagKnown(cfg, "--progress") {
+		args = append(args, "--progress=plain")
+	}
 	for _, name := range names {
 		args = append(args, "-t", image+":"+name)
 	}
@@ -800,7 +940,9 @@ func buildAndPush(ctx context.Context, cfg config, workspace string,
 	// not always the one being pushed, and the client then asks the registry for a
 	// credential for that name as well. It is a build record, not part of the image,
 	// and nothing here consumes it — so it is turned off rather than fought with.
-	args = append(args, "--provenance=false")
+	if buildFlagKnown(cfg, "--provenance") {
+		args = append(args, "--provenance=false")
+	}
 	if contextPath != "." {
 		args[len(args)-1] = filepathJoin(workspace, contextPath)
 	}

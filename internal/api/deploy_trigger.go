@@ -122,6 +122,23 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 		return
 	}
 
+	// A place this project has switched off is not a failure. It is a place this project
+	// may not deploy to, and the job is recorded as skipped so the run carries on.
+	//
+	// The module refuses such a deployment, correctly, and in words worth reading. Letting
+	// that refusal stand would fail the run over a switch somebody flipped on purpose: a
+	// project with two places and one of them off would deploy to neither, because the
+	// first failure skips the rest of the run. The switch is the core's own knowledge — it
+	// is this project's row of the places list — so the core reads it here rather than
+	// recognising a refusal after the fact.
+	if spec := deploySpecForJob(job, config); spec.Present &&
+		!s.placeInUse(ctx, project, spec.Module, spec.Target) {
+		reason := fmt.Sprintf("%s is switched off for this project", spec.Target)
+		s.writeDeployLog(ctx, job, reason+", so nothing was deployed here.\n")
+		finish(store.JobSkipped, reason)
+		return
+	}
+
 	repoDir := s.repos.PathFor(project)
 	err = s.runDeployJob(ctx, job, run, project, repoDir, config)
 	switch {

@@ -156,7 +156,11 @@ func (d *Docker) Prepare(ctx context.Context, spec JobSpec) (Handle, error) {
 	d.handles[name] = handle
 	d.mu.Unlock()
 
-	d.log.Debug("job environment prepared", "job", spec.Name, "container", name)
+	// The whole command, because "the job failed with nothing in its log" is the one
+	// failure this package cannot explain on its own: what it was given, where it was
+	// told to work and what was mounted are the three things that decide it.
+	d.log.Debug("job environment prepared", "job", spec.Name, "container", name,
+		"command", strings.Join(args, " "))
 	return handle, nil
 }
 

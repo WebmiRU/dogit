@@ -212,12 +212,24 @@ services:
       DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
       DOGIT_RUNNER_CONCURRENCY: ${DOGIT_RUNNER_CONCURRENCY:-1}
       DOGIT_RUNNER_WORKSPACE: /data/work
+      # The volume that workspace is in and where that volume is mounted here, so that
+      # the job's own container can be given the same view: the daemon is the host's, so a
+      # path is not an answer about where this runner keeps its checkouts, and a volume
+      # mounted anywhere else is a checkout one level out of reach.
+      DOGIT_RUNNER_WORKSPACE_VOLUME: dogit-runner-work
+      DOGIT_RUNNER_WORKSPACE_MOUNT: /data
       DOGIT_DOCKER_BINARY: /usr/bin/docker
     # The socket's group, so the client inside the container is allowed to talk to
     # it. Running as root is the other way and is how a build ends up able to do
     # anything at all; a group id is the smallest thing that works.
     group_add:
       - "${DOCKER_GID:-999}"
+    # The label, off, for the reason the runner service above gives: the host's Docker
+    # socket is labelled for containers rather than for the daemon's clients, and a
+    # container that mounts it cannot stat it. This is the service that builds, so it is
+    # the one that cannot do without.
+    security_opt:
+      - label=disable
     volumes:
       - dogit-runner-work:/data
       # The socket, because this is the machine that runs the jobs. A runner without
@@ -338,6 +350,20 @@ services:
       DOGIT_S3_BUCKET: ${DOGIT_S3_BUCKET:-}
       DOGIT_S3_REGION: ${DOGIT_S3_REGION:-us-east-1}
       DOGIT_OBJECTS_PREFIX: ${DOGIT_OBJECTS_PREFIX:-dogit}
+    # The host's Docker socket carries the label `container_var_run_t`, which denies the
+    # container itself: with SELinux enforcing, a service that mounts the socket cannot
+    # even stat it, and the failure is "permission denied" on a socket the service was
+    # given on purpose. Relabelling the socket to `docker_var_run_t` would be the narrower
+    # fix, but the daemon recreates that socket on every restart and the label goes with it,
+    # so the label has to be put back by something that runs after the daemon — a policy
+    # change on the host, which is not a thing a compose file may quietly do.
+    #
+    # Turning the label off for these two services is the smaller concession, and it is
+    # small: a container holding the Docker socket is already root on the host, whatever
+    # SELinux says about it, so confining it buys nothing that handing it the socket did
+    # not already give away.
+    security_opt:
+      - label=disable
     volumes:
       - dogit-data:/data
       # Jobs run in containers; the runner needs access to the Docker socket,
@@ -359,4 +385,9 @@ volumes:
   dogit-registry:
   # Checkouts a runner makes. Its own volume, so that a runner can be replaced
   # without losing the workspace it was in the middle of using.
+  #
+  # Named, rather than left to whatever the compose project is called: the job's own
+  # container is handed this volume by name, and a name that changes with the directory
+  # the compose file happens to sit in is a name that quietly stops matching.
   dogit-runner-work:
+    name: dogit-runner-work
