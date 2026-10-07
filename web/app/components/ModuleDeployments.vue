@@ -1392,9 +1392,16 @@ function noteOperation(payload: Record<string, unknown>) {
     // a log that is going along perfectly well. Read again here rather than at the next
     // reload, because the whole of this run is the part where it was wrong.
     //
-    // A record that does not say is left alone. An older core sends no kind, and swapping
-    // the list on a guess is the thing this was fixing.
-    const kind = record?.kind
+    // A record that does not say is left alone — except for a stage of the build, which is
+    // enough on its own.
+    //
+    // The record that names the operation arrives with the deploy module's own first line,
+    // which is after the whole build: twenty seconds after the run began. A page that waits
+    // for it spends those twenty seconds drawing a rollback's three steps under a build
+    // that is plainly going the other way. These stage names are the core's own vocabulary,
+    // so hearing one is hearing that a deployment has started — and an older core that
+    // names nothing still swaps nothing, which is the thing being avoided.
+    const kind = record?.kind ?? (buildPhases.includes(said.phase) ? 'deploy' : '')
     if (kind === 'revert' && !planIsRevert.value) void loadPlan(true)
     else if (kind === 'deploy' && planIsRevert.value) void loadPlan(false)
 
