@@ -90,7 +90,9 @@ case "${1:-all}" in
   apply)
     kubectl apply -f "$here/namespace.yaml"
     certs_publish
-    kubectl apply -f "$here/pvc.yaml"
+    # pvc.yaml is deliberately not in this list. The builder mounts an emptyDir, because
+    # this project holds to having no host filesystem paths, and on k3s a claim is one. The
+    # file says what to do when that is worth revisiting.
     kubectl apply -f "$here/buildkit.yaml"
     kubectl apply -f "$here/service.yaml"
     ;;
@@ -98,7 +100,6 @@ case "${1:-all}" in
     certs_make
     kubectl apply -f "$here/namespace.yaml"
     certs_publish
-    kubectl apply -f "$here/pvc.yaml"
     kubectl apply -f "$here/buildkit.yaml"
     kubectl apply -f "$here/service.yaml"
     say "готово"

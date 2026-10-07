@@ -77,7 +77,8 @@ fragments, which is why the fix for the failure above is not written down anywhe
 
 **What is actually established about the exposure, and what is not.** Established, by
 measurement: the pod is not privileged, it has no Kubernetes token, and the only thing of the
-node's filesystem mounted into it is its own cache PVC. Not established, and deliberately not
+node's filesystem mounted into it is its own cache volume, and that volume is an emptyDir
+rather than a claim. Not established, and deliberately not
 claimed here: how far a `RUN` step can reach *inside* the worker without the process
 sandbox. What BuildKit's own documentation says is that the daemon cannot kill a process that
 refuses to exit, and that an `ExecOp` container can kill and possibly `ptrace` arbitrary
@@ -134,7 +135,7 @@ and are worth not learning again:
   probe.sh           the smallest thing that proves the builder builds
   build-project.sh   builds a real project and pushes it to the registry
   namespace.yaml     buildkit's own namespace, and why it is not the runner's
-  pvc.yaml           the cache, which is the only thing here that grows
+  pvc.yaml           the cache on a volume, NOT applied — see below
   buildkit.yaml      the builder
   service.yaml       how a client reaches it
 ```
