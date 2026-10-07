@@ -23,6 +23,7 @@ import (
 
 	"github.com/ewolf/runner/internal/builder"
 	"github.com/ewolf/runner/internal/core"
+	"github.com/ewolf/runner/internal/measure"
 )
 
 // The kind this runner registers under. A different word from `runner:docker` on purpose:
@@ -131,6 +132,8 @@ func main() {
 }
 
 // beat keeps the core informed, and re-registers when the credential is refused.
+var self measure.Self
+
 func beat(ctx context.Context, cfg *config, registered *atomic.Value) {
 	existing, _ := registered.Load().(*core.Client)
 	if existing == nil {
@@ -140,10 +143,35 @@ func beat(ctx context.Context, cfg *config, registered *atomic.Value) {
 		}
 	}
 
+	host := measure.ReadHost()
 	stats := core.Stats{
-		UptimeSeconds: pointer(int64(time.Since(startedAt).Seconds())),
-		Extra:         map[string]string{},
+		UptimeSeconds:        pointer(int64(time.Since(startedAt).Seconds())),
+		ProcessCPUPercent:    self.ProcessCPUPercent(),
+		ProcessMemoryBytes:   self.ProcessMemoryBytes(),
+		HostMemoryTotalBytes: host.MemoryTotalBytes,
+		HostMemoryUsedBytes:  host.MemoryUsedBytes,
+		HostLoad1:            host.Load1,
+		Extra:                map[string]string{},
 	}
+
+	// The module's own storage is the workspace, and the workspace is the only thing here a
+	// job fills up. A path that does not exist yet — before the first checkout — comes back
+	// absent rather than as an empty disk, so the panel says "not reported" and not "0 of 0".
+	disk := measure.ReadDisk(cfg.workspace)
+	stats.StorageTotalBytes, stats.StorageUsedBytes = disk.TotalBytes, disk.UsedBytes
+
+	// The node's cores, and this container's own ceiling beside them. On cgroup v2 the file
+	// behind that number is per container rather than per pod, so it is labelled as what it
+	// is: a pod capped below the node is a fact the node's own numbers do not contain, and a
+	// builder and a runner sharing 4 GB with Traefik is the sort of thing somebody looks at
+	// when a build is slow.
+	if host.Cores != nil {
+		stats.Extra["cores"] = fmt.Sprint(*host.Cores)
+	}
+	if host.CgroupLimitBytes != nil {
+		stats.Extra["memory_limit"] = humanBytes(*host.CgroupLimitBytes)
+	}
+	stats.Extra["workspace"] = cfg.workspace
 	stats.Extra["queue"] = queueWord()
 	stats.Extra["jobs"] = fmt.Sprintf("0 of %d running", cfg.concurrency)
 	stats.Extra["builder"] = builderWord(ctx, cfg)
@@ -304,4 +332,19 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return value
+}
+
+// humanBytes in the units a person reads, because a limit stated in bytes is a number nobody
+// compares against anything.
+func humanBytes(value int64) string {
+	const unit = 1024
+	if value < unit {
+		return fmt.Sprintf("%d B", value)
+	}
+	div, exp := int64(unit), 0
+	for size := value / unit; size >= unit && exp < 3; size /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(value)/float64(div), "KMGT"[exp])
 }
