@@ -75,13 +75,21 @@ Upstream has not caught up here: `examples/kubernetes/pod.rootless.yaml` still s
 rootless image and the flag. This configuration is one the documentation describes only in
 fragments, which is why the fix for the failure above is not written down anywhere.
 
-**What the remaining exposure actually is.** The daemon runs as uid 1000 with no host mounts
-but its cache PVC, and it has no Kubernetes token. So the worst a Dockerfile can do is reach
-inside the builder's own container: kill `buildkitd`, which fails the build and restarts the
-pod, or leak memory into the 2 GB ceiling, which OOMKills it. On a single-replica builder
-that is a stalled queue, not a host. It is a smaller thing than the flag's warning sounds
-like, and it is the thing to weigh against `privileged: true`, which would restore the
-sandbox and give up the reason for the pod.
+**What is actually established about the exposure, and what is not.** Established, by
+measurement: the pod is not privileged, it has no Kubernetes token, and the only thing of the
+node's filesystem mounted into it is its own cache PVC. Not established, and deliberately not
+claimed here: how far a `RUN` step can reach *inside* the worker without the process
+sandbox. What BuildKit's own documentation says is that the daemon cannot kill a process that
+refuses to exit, and that an `ExecOp` container can kill and possibly `ptrace` arbitrary
+processes in the daemon's container. Whether that holds in full on this runtime, and what
+else is reachable from there, has not been tried — so treat the isolation inside the worker
+as reduced and uncharacterised rather than as bounded.
+
+The reason it was accepted anyway is not that the risk is known to be small. It is that the
+alternative being weighed is `privileged: true`, which is root on the node, and the whole
+reason for running a builder as a pod rather than through a Docker socket was to stop
+depending on that. The flag is kept with its warning intact, in the manifest and in
+BuildKit's log, so the trade is visible to whoever reads it later rather than settled here.
 
 If the sandbox ever does need to come back, the options are `privileged: true` on this
 cluster, or a different runtime — the refusal is a mount-namespace restriction, not a
