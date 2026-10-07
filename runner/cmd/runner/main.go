@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ewolf/runner/internal/builder"
 	"github.com/ewolf/runner/internal/core"
 )
 
@@ -44,15 +45,19 @@ var (
 var startedAt = time.Now()
 
 type config struct {
-	coreURL     string
-	instance    string
-	endpoint    string
-	name        string
-	buildkit    string
-	concurrency int
-	poll        time.Duration
-	workspace   string
-	claim       bool
+	coreURL      string
+	instance     string
+	endpoint     string
+	name         string
+	buildkit     string
+	buildkitHost string
+	buildkitCA   string
+	buildkitCert string
+	buildkitKey  string
+	concurrency  int
+	poll         time.Duration
+	workspace    string
+	claim        bool
 }
 
 func main() {
@@ -68,6 +73,14 @@ func main() {
 		"what this runner calls itself when it asks for work")
 	flag.StringVar(&cfg.buildkit, "buildkit", env("DOGIT_BUILDKIT_ADDR", "tcp://127.0.0.1:1234"),
 		"the builder. Loopback, because it is in this pod: the runner and the daemon share a network namespace, and so does every RUN step the daemon executes — which is why the listener is still asked for a client certificate.")
+	flag.StringVar(&cfg.buildkitHost, "buildkit-host", env("DOGIT_BUILDKIT_HOST", "127.0.0.1:1234"),
+		"the builder's host:port, for the reachability check")
+	flag.StringVar(&cfg.buildkitCA, "buildkit-ca", env("DOGIT_BUILDKIT_CA", "/certs/ca.pem"),
+		"the authority that vouches for the builder")
+	flag.StringVar(&cfg.buildkitCert, "buildkit-cert", env("DOGIT_BUILDKIT_CERT", "/certs/client.crt"),
+		"this runner's certificate, presented to the builder")
+	flag.StringVar(&cfg.buildkitKey, "buildkit-key", env("DOGIT_BUILDKIT_KEY", "/certs/client.key"),
+		"the key for that certificate")
 	flag.StringVar(&cfg.workspace, "workspace", env("DOGIT_RUNNER_WORKSPACE", "/data/work"),
 		"where checkouts live")
 	flag.IntVar(&cfg.concurrency, "concurrency", envInt("DOGIT_RUNNER_CONCURRENCY", 1),
@@ -133,7 +146,7 @@ func beat(ctx context.Context, cfg *config, registered *atomic.Value) {
 	}
 	stats.Extra["queue"] = queueWord()
 	stats.Extra["jobs"] = fmt.Sprintf("0 of %d running", cfg.concurrency)
-	stats.Extra["builder"] = cfg.buildkit
+	stats.Extra["builder"] = builderWord(ctx, cfg)
 	stats.Extra["claiming"] = fmt.Sprint(mayClaim.Load())
 	if at := lastWorkAt.Load(); at > 0 {
 		stats.Extra["last_work"] = time.Since(time.Unix(0, at)).Round(time.Second).String() + " ago"
@@ -219,6 +232,29 @@ func ask(ctx context.Context, cfg *config, client *core.Client) {
 	// nothing to do with it is the failure this whole decision was arranged to avoid.
 	lastWorkAt.Store(time.Now().UnixNano())
 	log.Printf("runner: claimed job %d (%s) and cannot run it yet — the executor is not written", answer.Job.ID, answer.Job.Name)
+}
+
+// builderWord is what the runner can say about the builder right now.
+//
+// Asked on every heartbeat rather than once at startup, because a builder that comes up after
+// the runner is a normal race and a one-shot check would report a failure that has since
+// stopped being true. The wording says what was checked, not just that something answered:
+// a runner that reported "connected" after dialling a TCP port would be right in exactly the
+// case where the certificate was wrong.
+func builderWord(ctx context.Context, cfg *config) string {
+	ping, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	answer, err := builder.Address{
+		Addr: cfg.buildkitHost,
+		CA:   cfg.buildkitCA,
+		Cert: cfg.buildkitCert,
+		Key:  cfg.buildkitKey,
+	}.Ping(ping)
+	if err != nil {
+		return "unreachable: " + err.Error()
+	}
+	return answer
 }
 
 // queueWord is the core's last answer, or a statement that there has not been one.
