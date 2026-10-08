@@ -557,7 +557,20 @@ func (d *Deployer) runJob(ctx context.Context, substitution k8s.Substitution,
 	return nil
 }
 
-// wait waits for a workload to become ready.
+// wait waits for the workload's pods to be running the image this deployment put there.
+//
+// On the image, and not on the Deployment's own ready count. Those are two different questions
+// and only one of them is the one being asked: `status.readyReplicas` counts every ready pod the
+// Deployment owns, including the ones from the revision it is replacing. A rollout whose new pods
+// cannot pull their image — a registry the cluster does not trust, a credential that was never
+// created — leaves the old pods serving, the old pods are ready, and the Deployment reports three
+// of three while the thing that was deployed has never started. That deployment reported itself
+// finished in half a minute, on a stand, with its pods in ImagePullBackOff, and every number on
+// the card said it had worked.
+//
+// Counting the pods that are on the new image is the same question the numbers shown to a watcher
+// are counted from, so the verdict and the evidence can no longer disagree: a deployment cannot
+// report ready pods it has not got.
 func (d *Deployer) wait(ctx context.Context, request Request) error {
 	within := request.Timeout
 	if within <= 0 {
@@ -566,12 +579,12 @@ func (d *Deployer) wait(ctx context.Context, request Request) error {
 
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
-		rollout, err := d.client.Rollout(ctx, request.Namespace, request.Rollout)
+		counts, err := d.client.Counts(ctx, request.Namespace, request.Rollout, request.Image)
 		if err != nil {
 			return err
 		}
-		if rollout.Done {
-			d.logf("rollout finished: %d/%d ready", rollout.Ready, rollout.Desired)
+		if counts.Desired > 0 && counts.Ready >= counts.Desired {
+			d.logf("rollout finished: %d/%d pods on the new image", counts.Ready, counts.Desired)
 			return nil
 		}
 		select {
@@ -582,8 +595,14 @@ func (d *Deployer) wait(ctx context.Context, request Request) error {
 	}
 
 	// What it said last, which is what a person needs rather than "it timed out".
-	last, err := d.client.Rollout(ctx, request.Namespace, request.Rollout)
-	if err == nil {
+	// What it said last, about the image, for the same reason the loop above asked about the
+	// image. A reason taken from the Deployment here would read "3 of 3 updated, 3 ready" on a
+	// rollout where none of the new pods is running — true, and the reason the deployment failed.
+	if counts, err := d.client.Counts(ctx, request.Namespace, request.Rollout, request.Image); err == nil {
+		return fmt.Errorf("the rollout did not finish in %s: %d of %d pods are running the new image",
+			within, counts.Ready, counts.Desired)
+	}
+	if last, err := d.client.Rollout(ctx, request.Namespace, request.Rollout); err == nil && last.Reason != "" {
 		return fmt.Errorf("the rollout did not finish in %s: %s", within, last.Reason)
 	}
 	return fmt.Errorf("the rollout did not finish in %s", within)

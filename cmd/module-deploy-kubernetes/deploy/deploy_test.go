@@ -37,6 +37,9 @@ type fakeClient struct {
 	setImageFails string
 	// pullSecrets is what was written into the namespace, in order.
 	pullSecrets []k8s.PullSecret
+	// counts is what the pods say, when a test needs them to say something other than
+	// "one of one, all right". Set, it replaces the usual answer entirely.
+	counts *k8s.RolloutCounts
 }
 
 func newFake() *fakeClient {
@@ -135,6 +138,9 @@ func (f *fakeClient) Revisions(_ context.Context, _, _ string) ([]k8s.Revision, 
 // Counts answers what the watching code asks, so a test sees the same numbers a page
 // would: no pods yet, none of the old ones left.
 func (f *fakeClient) Counts(_ context.Context, _, _, _ string) (k8s.RolloutCounts, error) {
+	if f.counts != nil {
+		return *f.counts, nil
+	}
 	return k8s.RolloutCounts{Ready: 1, Desired: 1}, nil
 }
 
@@ -729,5 +735,56 @@ func TestARevertToTheImageAlreadyRunningIsRefused(t *testing.T) {
 
 	if _, err := deployer.Revert(context.Background(), RevertRequest{ID: deployed.ID}); err == nil {
 		t.Fatal("putting back the image already running was reported as done")
+	}
+}
+
+// A deployment whose new pods never start is not a finished deployment.
+//
+// The shape this was written for, and it is not a rare one: the old pods are still serving, so
+// the Deployment's own count of ready replicas is the number it always was, and the pods of the
+// revision just applied are sitting in ImagePullBackOff because the cluster cannot pull the
+// image. Asked whether the workload is "done", the answer is yes, and it is a lie told with the
+// cluster's own numbers.
+//
+// So the wait is about the image rather than about the workload's readiness, and this pins it:
+// a Deployment reporting three of three updated and three ready, with nothing at all running the
+// new image, must not come back as a deployment that worked.
+func TestARolloutWithNoPodsOnTheNewImageIsNotFinished(t *testing.T) {
+	client := newFake()
+	// What the cluster says about the Deployment: updated and ready, exactly as it does
+	// while the old pods are up and the new ones are failing to pull.
+	client.rollouts["app"] = k8s.Rollout{Desired: 3, Updated: 3, Ready: 3, Done: true}
+	// What the pods say: three wanted, none of them on this image.
+	client.counts = &k8s.RolloutCounts{Desired: 3, Ready: 0, OldUp: 3}
+
+	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
+
+	err := deployer.wait(context.Background(), Request{
+		Namespace: "versions-dev", Rollout: "app", Image: "registry.test/versions@sha256:new",
+		Timeout: 3 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("a rollout with no pod on the new image was reported as finished")
+	}
+	// And it says why in terms of the image, because that is the question that was not
+	// answered — a reason about readiness would restate the thing that was never wrong.
+	if !strings.Contains(err.Error(), "new image") {
+		t.Errorf("the reason does not mention the image: %v", err)
+	}
+}
+
+// The ordinary case: every pod is on the new image, and the wait is over.
+func TestARolloutWithEveryPodOnTheNewImageIsFinished(t *testing.T) {
+	client := newFake()
+	client.rollouts["app"] = k8s.Rollout{Desired: 3, Updated: 3, Ready: 3, Done: true}
+	client.counts = &k8s.RolloutCounts{Desired: 3, Ready: 3}
+
+	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
+
+	if err := deployer.wait(context.Background(), Request{
+		Namespace: "versions-dev", Rollout: "app", Image: "registry.test/versions@sha256:new",
+		Timeout: 3 * time.Second,
+	}); err != nil {
+		t.Fatalf("a finished rollout was reported as unfinished: %v", err)
 	}
 }
