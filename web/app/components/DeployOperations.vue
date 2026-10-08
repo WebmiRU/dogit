@@ -34,6 +34,12 @@ interface DeployOperation {
   running: boolean
   /** Waiting its turn: asked for, not started, and not over. */
   queued: boolean
+  /**
+   * What this operation had last said about itself, when the core was keeping it. Absent for
+   * one that has not begun, and for one that began before the core did — and a page told
+   * nothing can say so, which is different from a page told zero.
+   */
+  progress?: Record<string, unknown>
 }
 
 interface OperationsAnswer {
@@ -97,6 +103,27 @@ const operations = ref<DeployOperation[]>([])
  * its list underneath it, which is what happens every time a deployment ends.
  */
 const putAway = ref<Record<number, true>>({})
+
+/**
+ * Operations this reader watched happen, rather than found already in the list.
+ *
+ * The distinction decides what a card is allowed to become. A card the reader watched from its
+ * first line to its last keeps the shape it had while it was running — the steps, the log
+ * streaming under them — and the reader can put it away. A card that was already in the list when
+ * the page opened is an ordinary entry in a history: a badge, a line about when, and a log
+ * folded away. It is not the reader's card, so it gets no cross, and it does not pretend to be
+ * something they watched.
+ *
+ * Recorded by operation, and set the moment a line arrives about an operation this page had not
+ * heard of. A page that was open when a deployment started has it; a page opened afterwards does
+ * not, and draws the other thing — which is the honest answer, because it is the other thing.
+ */
+const caught = ref<Record<number, true>>({})
+
+/** Whether this card is one the reader watched, and may put away. */
+function isCaught(operation: DeployOperation): boolean {
+  return operation.running || Boolean(caught.value[operation.job_id])
+}
 const reason = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -145,6 +172,13 @@ async function load() {
     reason.value = answer.reason ?? ''
     reorder(answer)
     error.value = ''
+    // The log of anything under way that this page did not watch. One request per operation,
+    // once, on arrival: a rollout says many lines a minute and the socket is carrying the ones
+    // from here on, so this is not a stream being duplicated — it is the part of the account
+    // that happened before anybody was looking.
+    for (const one of operations.value) {
+      if (one.running && !caught.value[one.job_id]) void askLog(one.job_id)
+    }
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
@@ -246,6 +280,9 @@ function note(payload: Record<string, unknown>) {
   // it without waiting for a reload. The start moment is the line's own: the core's answer will
   // replace it with the real one a moment later, and a card that moved once on load is better than
   // a deployment that did not appear until a reload.
+  if (!caught.value[jobID]) {
+    caught.value = { ...caught.value, [jobID]: true }
+  }
   if (!operations.value.some((one) => one.job_id === jobID)) {
     operations.value = [
       ...operations.value,
@@ -353,6 +390,24 @@ function openPhases(operation: DeployOperation): string[] {
 /** When a line was said, to the second — enough to place it, short enough not to shout. */
 function clockOf(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, { hour12: false })
+}
+
+/**
+ * The one line that says what happened, for a card that did not go well.
+ *
+ * A refusal gets the module's own sentence, in its own words, and it is put where it cannot be
+ * missed: a card that says "Declined" in grey and keeps the reason under a folded log has told
+ * the reader nothing they would act on. A failure gets the same sentence, because the module
+ * wrote it either way, and the two differ in what they mean rather than in who said it.
+ */
+function verdictOf(operation: DeployOperation): string {
+  if (operation.status === 'refused' || operation.status === 'skipped') {
+    return operation.error || 'nothing was deployed here'
+  }
+  if (operation.status === 'failed') {
+    return operation.error || 'the deployment did not finish'
+  }
+  return ''
 }
 
 /**
@@ -496,6 +551,49 @@ async function loadPlan() {
   }
 }
 
+/**
+ * What a page that arrived late knows about an operation that is under way.
+ *
+ * The core keeps the fields of the last line each deployment said, and hands them over with the
+ * list. That is what puts a mark on the step a rollout is on: without it a page opened halfway
+ * through draws the plan — which it has, the steps are the same for every deployment of this
+ * kind — with nothing under it, and every step in the colour of a step not yet reached. A reader
+ * opening a deployment in progress was told it had not begun.
+ *
+ * Only the newest line, and only its fields. The account of how it got there is in the log, which
+ * is fetched for this card like any other; this is here to answer where it is now, which is the
+ * one thing a reader opening the page is asking.
+ */
+function lateProgress(operation: DeployOperation): Watching | null {
+  if (isCaught(operation) || operation.queued) return null
+  const said = operation.progress
+  if (!said || typeof said !== 'object') return null
+
+  const progress: DeployProgress = {
+    phase: String(said.phase ?? ''),
+    message: String(said.message ?? ''),
+    ready: Number(said.ready ?? 0),
+    desired: Number(said.desired ?? 0),
+    step: Number(said.step ?? 0),
+    of: Number(said.of ?? 0),
+    finished: said.finished === true,
+    failed: said.failed === true,
+  }
+  return {
+    progress,
+    // No lines and no clock: this card was not watched, and inventing a start time for it would
+    // put a duration on the page that nothing observed.
+    seen: [],
+    phases: progress.phase ? [progress.phase] : [],
+    since: 0,
+  }
+}
+
+/** What this card knows about its own operation: what it watched, or what it was told. */
+function knows(operation: DeployOperation): Watching | null {
+  return watched(operation.job_id) ?? lateProgress(operation)
+}
+
 /** The core announcing a plan on the socket, which it does as well as over HTTP. */
 watchEvents({
   onEvent: (event) => {
@@ -539,10 +637,17 @@ watchEvents({
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
-          <!-- Put away by the reader, and only by the reader. A deployment does not take its own
-               card off the page when it ends: it goes from yellow to green and stays, because
-               the moment it finished is usually the moment somebody starts reading why. -->
+          <span class="spacer" />
+
+          <!-- Put away by the reader, and only by the reader — and only on a card the reader
+               watched. A deployment does not take its own card off the page when it ends: it
+               goes from yellow to green and stays as it was, because the moment it finished is
+               usually the moment somebody starts reading why.
+
+               Top right and visible, not a small mark in the middle of a row. It is the one
+               control on the card, and a control nobody can find is not a control. -->
           <button
+            v-if="isCaught(operation)"
             class="put-away"
             type="button"
             title="Put this card away. It comes back when you open the page again."
@@ -552,8 +657,6 @@ watchEvents({
             ×
           </button>
 
-          <span class="spacer" />
-
           <span v-if="when(operation)" class="muted small">{{ when(operation) }}</span>
           <!-- Only when it took something. A duration of zero is a card saying "0s" beside
                "3 days ago", which reads as a machine that has just run rather than one that
@@ -561,52 +664,61 @@ watchEvents({
           <span v-if="took(operation)" class="muted small mono">took {{ took(operation) }}</span>
         </div>
 
-        <!-- The steps, from the core's plan rather than from what has arrived, and marked off by
-             the lines about *this* operation — which is the only thing on the page that can tell
-             two of them apart. Drawn for a card that is running even before the first line: an
-             operation that has begun and said nothing yet is still an operation with steps, and a
-             card that shows none of them until the first pod moves is a card that looks idle. -->
+        <!-- The steps, from the core's plan, marked off by what is known about this operation.
+             Drawn for a card the reader is watching and for one they watched: those are the two
+             cards that have a beginning, and a card the reader saw the end of should not lose
+             its steps on the way there. -->
         <DeploySteps
-          v-if="operation.running"
-          :progress="watched(operation.job_id)?.progress ?? null"
-          :seen="watched(operation.job_id)?.seen ?? []"
-          :live="true"
+          v-if="isCaught(operation) && knows(operation)"
+          :progress="knows(operation)!.progress"
+          :seen="knows(operation)!.seen"
+          :live="operation.running"
           :plan="planOf(operation.job_id)"
           :active-phases="openPhases(operation)"
         />
 
-        <!-- The log of an operation under way, streaming, under its steps. Not asked for: these
-             lines are arriving, and a request for what has already been said would be a request
-             for a slower copy of the same thing. -->
+        <!-- The log. Two sources and one shape: the lines a card the reader watched arrived on,
+             and the lines a card that was already under way are asked for once. A card the
+             reader watched keeps the log it streamed — it is the one they were reading, and
+             replacing it with a fetched copy of the same thing is a card changing under the
+             reader's hand. -->
         <DeployLog
-          v-if="operation.running"
+          v-if="isCaught(operation) && watched(operation.job_id)"
           :lines="logLines(operation.job_id)"
           :plan="planOf(operation.job_id)"
         />
+        <div v-else-if="isCaught(operation)" class="operation-log-wrap">
+          <ul v-if="logOf(operation.job_id)?.length" class="operation-log">
+            <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
+              <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
+              <span>{{ entry.text }}</span>
+            </li>
+          </ul>
+          <p v-else class="muted small">
+            {{ logLabel(operation.job_id) }}
+          </p>
+        </div>
 
-        <!-- The log of an operation that is over, and only of an operation that is over. -->
-        <!-- Open, not folded. A deployment that has just finished is being read precisely
-             because it finished, and the account of it is the whole reason the card exists; a
-             reader who has to click each of ten of them to find out what happened has been
-             given a page that hides its own contents behind ten clicks. -->
-        <details v-if="!operation.running" class="log" open @toggle="askLog(operation.job_id)">
-          <!-- Says what it knows before it has looked. "Nothing was recorded" on a log that
-               has not been asked for yet is a claim made without having checked, and it is
-               the wrong claim on the deployments that are the most interesting to look at. -->
+        <!-- An ordinary entry in the history: a badge, when, and the account folded away. Not
+             the reader's card — they did not watch it happen — so no cross, and nothing here
+             claiming they did. -->
+        <details v-if="!isCaught(operation)" class="log" @toggle="askLog(operation.job_id)">
           <summary class="muted small">{{ logLabel(operation.job_id) }}</summary>
           <ul v-if="logOf(operation.job_id)?.length" class="operation-log">
-            <li
-              v-for="(entry, index) in logOf(operation.job_id)"
-              :key="index"
-              :class="entry.stream"
-            >
+            <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
               <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
               <span>{{ entry.text }}</span>
             </li>
           </ul>
         </details>
 
-        <p v-if="operation.error" class="alert alert-error small">{{ operation.error }}</p>
+        <!-- Why, and near the top. A refused deployment is the one card on the page whose
+             reason is the whole of it, and the reason was at the bottom, under a log the reader
+             has to open — which is how "1 declined" came and went without anybody noticing it.
+             A refusal is not a fault, so it is not drawn as an alert either. -->
+        <p v-if="verdictOf(operation)" class="why" :class="{ bad: operation.status === 'failed' }">
+          {{ verdictOf(operation) }}
+        </p>
       </div>
     </section>
   </div>
@@ -669,16 +781,17 @@ watchEvents({
    does not take the eye before the badge has been read. */
 .put-away {
   flex: 0 0 auto;
-  margin-left: 4px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: 4px;
+  background: var(--bg);
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: 17px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0.85;
 }
 
 .put-away:hover,
@@ -686,6 +799,29 @@ watchEvents({
   opacity: 1;
   color: var(--text);
   background: var(--bg-inset);
+  border-color: var(--text-muted);
+}
+
+/* Why a deployment did not go well, above the log rather than under it. Not an alert: an alert
+   is a fault, and a refusal is somebody declining to do a thing — the place was busy, the
+   deployment was switched off. It reads as a verdict with the reason attached. */
+.why {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--border-strong, var(--border));
+  border-radius: 0 3px 3px 0;
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.why.bad {
+  border-left-color: var(--red);
+}
+
+.operation-log-wrap {
+  margin-top: 4px;
 }
 
 .place-chip {

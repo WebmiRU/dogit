@@ -92,6 +92,11 @@ func deployOperationView(one store.DeployOperation) map[string]any {
 		"finished_at": millisOf(one.FinishedAt),
 		"running":     one.Running(),
 		"queued":      one.Queued(),
+		// What the operation had last said about itself, so that a page opened halfway
+		// through it draws the step it is on rather than seven steps not yet reached. Absent
+		// rather than empty when nothing is known, because a page cannot tell an empty object
+		// from a deployment that has not said anything.
+		"progress": one.Progress,
 	}
 }
 

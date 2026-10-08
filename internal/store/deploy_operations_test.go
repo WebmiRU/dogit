@@ -312,3 +312,91 @@ func TestABuildIsNotADeployment(t *testing.T) {
 		t.Errorf("a build job was listed as a deployment: %+v", found)
 	}
 }
+
+// A page opened halfway through a deployment is told where it got to.
+//
+// The lines a deployment says arrive on the socket, and a page that was not open when they were
+// said has seen none of them. It has the plan — the steps come from the core and are the same
+// for every deployment of that kind — and nothing to put under it, so it draws seven steps in
+// the colour of steps not yet reached on a deployment that is on its fourth. A reader opening a
+// rollout in progress is told it has not begun.
+//
+// The fields are kept as fields rather than taken out of the log's sentences: a line is
+// `out| <ms>| <what the module said>`, and "3 of 4" inside a sentence is a number two people have
+// to keep in step for two different readers.
+func TestAProgressRememberedIsHandedToALatePage(t *testing.T) {
+	st := dbtest.Open(t)
+	project := dbtest.NewProject(t, st, "ops-progress", nil)
+
+	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
+	id := anOperation(t, st, project.ID, "in flight", "local-k3s", "dogit-dev", &began, nil, "running")
+
+	// Nothing said yet: the page is told nothing is known, and can say so.
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("read %d operations, want 1", len(found))
+	}
+	if found[0].Progress != nil {
+		t.Errorf("a deployment that has said nothing came back with progress: %#v", found[0].Progress)
+	}
+
+	said := `{"phase":"rollout","message":"every pod is running the new image (3 of 4)",
+	          "ready":3,"desired":4,"step":6,"of":7,"finished":false}`
+	if err := st.Pipelines().RememberDeployProgress(context.Background(), id, []byte(said)); err != nil {
+		t.Fatalf("write down the progress: %v", err)
+	}
+
+	found, err = st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
+	if err != nil {
+		t.Fatalf("list operations again: %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("read %d operations, want 1", len(found))
+	}
+	got := found[0].Progress
+	if got == nil {
+		t.Fatal("the progress was written down and did not come back")
+	}
+	if got["phase"] != "rollout" {
+		t.Errorf("the phase came back as %v, want rollout", got["phase"])
+	}
+	// The counts are the whole of what a reader wants from a page that arrived late: how far
+	// along, and out of how much.
+	if got["ready"] != float64(3) || got["desired"] != float64(4) {
+		t.Errorf("the counts came back as %v of %v, want 3 of 4", got["ready"], got["desired"])
+	}
+	if got["step"] != float64(6) {
+		t.Errorf("the step came back as %v, want 6", got["step"])
+	}
+}
+
+// One note per operation, overwritten: the log is the record of them, and this is about the
+// moment a page arrives at.
+func TestTheProgressKeptIsTheLatestOneSaid(t *testing.T) {
+	st := dbtest.Open(t)
+	project := dbtest.NewProject(t, st, "ops-latest", nil)
+
+	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
+	id := anOperation(t, st, project.ID, "in flight", "local-k3s", "dogit-dev", &began, nil, "running")
+
+	for _, line := range []string{
+		`{"phase":"prepare","message":"preparing 3 manifest(s)"}`,
+		`{"phase":"rollout","message":"3 of 4","ready":3,"desired":4}`,
+		`{"phase":"rollout","message":"4 of 4","ready":4,"desired":4}`,
+	} {
+		if err := st.Pipelines().RememberDeployProgress(context.Background(), id, []byte(line)); err != nil {
+			t.Fatalf("write down %q: %v", line, err)
+		}
+	}
+
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if got := found[0].Progress["message"]; got != "4 of 4" {
+		t.Errorf("the progress kept is %v, want the last thing said", got)
+	}
+}

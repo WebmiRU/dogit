@@ -46,6 +46,12 @@ type DeployOperation struct {
 
 	// Error is the reason a failed operation gives, in the words of whoever wrote it.
 	Error string
+
+	// Progress is what this operation had last said about itself, as the module's own fields.
+	// Empty for an operation that has not begun, and for one that began before the core kept
+	// this — a page is told "nothing is known" rather than shown a plan with no marks on it and
+	// no way to tell that from a deployment that has not started.
+	Progress map[string]any
 }
 
 // Running reports whether this operation is still under way.
@@ -126,7 +132,8 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 	}
 
 	rows, err := r.s.pool.Query(ctx, `
-		SELECT j.id, j.status, j.name, j.started_at, j.finished_at, j.deploy, j.error
+		SELECT j.id, j.status, j.name, j.started_at, j.finished_at, j.deploy, j.error,
+		       j.deploy_progress
 		FROM jobs j
 		JOIN pipelines p ON p.id = j.pipeline_id
 		WHERE p.project_id = $1 AND j.deploy IS NOT NULL
@@ -156,12 +163,14 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 	operations := []DeployOperation{}
 	for rows.Next() {
 		var (
-			op      DeployOperation
-			started *time.Time
-			ended   *time.Time
-			deploy  []byte
+			op       DeployOperation
+			started  *time.Time
+			ended    *time.Time
+			deploy   []byte
+			progress []byte
 		)
-		if err := rows.Scan(&op.JobID, &op.Status, &op.Name, &started, &ended, &deploy, &op.Error); err != nil {
+		if err := rows.Scan(&op.JobID, &op.Status, &op.Name, &started, &ended, &deploy,
+			&op.Error, &progress); err != nil {
 			return nil, fmt.Errorf("scan a deploy operation: %w", err)
 		}
 		op.StartedAt, op.FinishedAt = started, ended
@@ -171,6 +180,9 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		op.Cluster, _ = described["Cluster"].(string)
 		op.Namespace, _ = described["Namespace"].(string)
 		op.Place = placeOf(described, op.Cluster)
+		if len(progress) > 0 {
+			decodeJSONB(progress, &op.Progress)
+		}
 		operations = append(operations, op)
 	}
 	return operations, rows.Err()
@@ -210,4 +222,22 @@ func placeOf(record map[string]any, cluster string) string {
 	}
 	target, _ := record["Target"].(string)
 	return target
+}
+
+// RememberDeployProgress writes down what a deployment has most recently said about itself.
+//
+// One row, overwritten: this is a note about a moment and not a record of them. The record is
+// the job's log, which every line is appended to and which a reader opens when they want the
+// account of what happened. This exists for the page that arrived after the lines did, and the
+// only question it has to answer is where the operation is now.
+func (r *PipelineRepo) RememberDeployProgress(ctx context.Context, jobID int64, progress []byte) error {
+	if len(progress) == 0 {
+		return nil
+	}
+	_, err := r.s.pool.Exec(ctx,
+		`UPDATE jobs SET deploy_progress = $2::jsonb WHERE id = $1`, jobID, progress)
+	if err != nil {
+		return fmt.Errorf("write down a deployment's progress: %w", err)
+	}
+	return nil
 }
