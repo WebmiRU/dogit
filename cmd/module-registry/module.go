@@ -271,3 +271,16 @@ func writeJSON(w http.ResponseWriter, body any) {
 }
 
 var _ = fmt.Sprintf
+
+// clientEndpoint is the address a client is told to fetch tokens from.
+//
+// The core reaches this module on one address and clients reach it on another, and only the
+// second one goes into a challenge. An installation with a single address sets the same value
+// twice; an installation with a public registry sets a public one, and the clients that cannot
+// resolve the internal name are exactly the ones that need it.
+func clientEndpoint(internal, public string) string {
+	if public != "" {
+		return public
+	}
+	return internal
+}

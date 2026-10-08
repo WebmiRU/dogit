@@ -99,10 +99,16 @@ func main() {
 
 	go heartbeat(ctx, core, cfg.interval, register)
 
-	// One registry for both halves of this module. The proxy and the channel consult the same
-	// policy — a resolve answered over the socket and the same resolve answered over HTTP must
-	// reach the same conclusion about who may pull what — and two objects would be two policies.
-	registry := newRegistry(core, cfg.endpoint)
+	// The address a client is told to fetch tokens from has to be one the client can
+	// resolve. The address the core uses is the internal one, which a docker client
+	// on somebody's laptop cannot reach; an installation that has both sets both.
+	//
+	// Read here rather than where it is used, because the registry is built once and the
+	// token address is baked into its challenge at that moment. Built from the internal address
+	// instead, every job container — every push, on a machine outside the cluster — is sent to a
+	// name that resolves nowhere it stands, and fails with a DNS error that says nothing about
+	// credentials.
+	registry := newRegistry(core, clientEndpoint(cfg.endpoint, cfg.publicURL))
 
 	// The channel to the core, and what it changes: the core can ask this module a question
 	// without holding a request open against an endpoint it has to be able to reach.
@@ -114,14 +120,6 @@ func main() {
 		Token: core.token,
 		Log:   channelLog{},
 	}, registry)
-
-	// The address a client is told to fetch tokens from has to be one the client can
-	// resolve. The address the core uses is the internal one, which a docker client
-	// on somebody's laptop cannot reach; an installation that has both sets both.
-	public := cfg.publicURL
-	if public == "" {
-		public = cfg.endpoint
-	}
 
 	server := &http.Server{
 		Addr:              cfg.listen,

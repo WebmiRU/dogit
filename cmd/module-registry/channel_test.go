@@ -197,3 +197,28 @@ func TestAQuietRegistryIsNotAnsweredWithNothing(t *testing.T) {
 		t.Errorf("a refusal still carried the digest %q", answer.Digest)
 	}
 }
+
+// The address in the challenge is the one clients can reach, not the one the core can.
+//
+// A docker client pushing from a machine outside the cluster is sent to fetch its token from
+// whatever the challenge names. Naming the internal address sends every such push to a hostname
+// that resolves nowhere it stands, and it fails as a DNS error — which says nothing at all about
+// credentials, and is the reason a stand that has always worked can stop working after a deploy
+// for no visible cause.
+func TestTheChallengeNamesTheAddressClientsCanReach(t *testing.T) {
+	reg := newRegistry(&coreClient{baseURL: "http://core.invalid"},
+		clientEndpoint("http://module-registry:8091", "https://registry.example.test"))
+
+	want := `Bearer realm="https://registry.example.test/v2/token",service="dogit-registry"`
+	if got := reg.challenge(); got != want {
+		t.Errorf("the challenge names\n  %s\nwant\n  %s", got, want)
+	}
+}
+
+// An installation with one address sets the same value twice, and the internal one is used — a
+// module that invented a public address out of nothing would hand out a realm nobody can fetch.
+func TestOneAddressMeansTheInternalOne(t *testing.T) {
+	if got := clientEndpoint("http://module-registry:8091", ""); got != "http://module-registry:8091" {
+		t.Errorf("with no public address the client was sent to %q", got)
+	}
+}
