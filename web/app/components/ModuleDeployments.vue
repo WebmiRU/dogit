@@ -204,14 +204,6 @@ const active = ref<DeployProgress | null>(null)
 const runningSince = ref(0)
 
 /**
- * The phases happening right now, which is not one.
- *
- * A rollout brings the new pods up and sends the old ones away at the same time, and a
- * single arrow cannot say that: it has to be on one step or the other, so one of them is
- * drawn as finished work that is still going. Each phase is here from the moment it is
- * first mentioned until the module says it is finished with it.
- */
-/**
  * The operation under way is over, however this page found out.
  *
  * One place, because it used to be three copies of the same four assignments and they
@@ -235,6 +227,14 @@ function finishOperation() {
   void loadImages()
 }
 
+/**
+ * The phases happening right now, which is not one.
+ *
+ * A rollout brings the new pods up and sends the old ones away at the same time, and a
+ * single arrow cannot say that: it has to be on one step or the other, so one of them is
+ * drawn as finished work that is still going. Each phase is here from the moment it is
+ * first mentioned until the module says it is finished with it.
+ */
 const activePhases = ref<string[]>([])
 
 /**
@@ -262,16 +262,6 @@ const underWay = computed(() => busy.value || startedHere.value ||
  * about a job this card has never heard of is somebody else's news.
  */
 const operationJobs = ref<number[]>([])
-
-/**
- * Whether anything is under way right now, which is not the same as whether a
- * deployment finished.
- *
- * The place rows on the finished card are built from the last deployment that
- * completed, so a badge reading that deployment's outcome sits beside a card about the
- * one running — unless it is asked what is happening now.
- */
-const deployBusy = computed(() => verdict.value.tone === 'working')
 
 /** The steps the core said this deployment goes through, in order. */
 const plan = ref<{ key: string; label: string }[]>([])
@@ -430,152 +420,6 @@ function when(iso?: string): string {
   return new Date(iso).toLocaleString()
 }
 
-/**
- * How long ago something happened, in the few words people actually use.
- *
- * Not a formatted date: "3 minutes ago" is read without effort and "2026-10-05
- * 18:53:11" is worked out. Precise times are still one click away — the operations
- * list below has them in a column — so this is the summary, not the record.
- */
-function ago(iso?: string, now?: number): string {
-  if (!iso) return ''
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ''
-
-  const seconds = Math.max(0, Math.floor(((now ?? Date.now()) - then) / 1000))
-  // Seconds, straight away, with no "just now" for the first of them.
-  //
-  // "Just now" is a claim about a moment that stays on screen after the moment has
-  // passed: a card that says it for a minute reads as a run that is still going. A
-  // number that keeps counting is never stale and never has to be taken on trust.
-  if (seconds < 60) return `${seconds} second${seconds === 1 ? '' : 's'} ago`
-
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`
-
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
-
-  const days = Math.round(hours / 24)
-  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`
-
-  const months = Math.round(days / 30)
-  if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`
-
-  const years = Math.round(months / 12)
-  return `${years} year${years === 1 ? '' : 's'} ago`
-}
-
-/**
- * How long the last operation took, as a clock.
- *
- * A clock rather than a phrase — "2 min" beside a duration that is already counting
- * seconds invites reading the two as different things, and "took 2 min" beside a
- * figure ticking to 2:34 looks like one of them is stale. Same notation on both ends:
- * if one is a clock, the other should be too.
- */
-function span(one: Deployment): string {
-  if (!one.started_at || !one.finished_at) return ''
-  const ms = new Date(one.finished_at).getTime() - new Date(one.started_at).getTime()
-  if (Number.isNaN(ms) || ms < 0) return ''
-
-  const total = Math.max(0, Math.round(ms / 1000))
-  const hours = Math.floor(total / 3600)
-  const minutes = Math.floor((total % 3600) / 60)
-  const rest = total % 60
-
-  // Under an hour it is m:ss, and a leading zero would only make it harder to read;
-  // from an hour on it is h:mm:ss, padded so the clock does not change width as it
-  // counts.
-  if (hours === 0) return `${minutes}:${String(rest).padStart(2, '0')}`
-  return `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
-}
-
-/**
- * When the last operation ran, as one line.
- *
- * Both ends and the length between them, because any one alone leaves a question
- * open: the start without the end reads as something still going, and the end
- * without the start says nothing about how long the cluster was in this state.
- */
-/**
- * A minute that passes, so "4 minutes ago" does not go on claiming to be four.
- *
- * Nothing is fetched: the list is already here and the time is arithmetic. The
- * alternative is a line that is correct when it is drawn and quietly wrong afterwards,
- * which is worse than one that is never drawn — a person reads a stale "just now" as
- * "this just happened", and that is exactly the mistake this line exists to prevent.
- *
- * A minute rather than a second, because a second is a redraw nobody asked for and the
- * coarsest reading it produces is "just now"; nothing changes for a reader in under a
- * minute anyway.
- */
-const tick = ref(Date.now())
-let stopTick: ReturnType<typeof setInterval> | undefined
-
-/**
- * How long the operation under way has been going, as a clock.
- *
- * Hours, minutes and seconds rather than a rounded figure, because the whole question
- * this answers is "how long has it been stuck on this step" — and a rounded number is
- * exactly the thing that hides a step which has been sitting there for forty seconds.
- */
-const runningFor = computed(() => {
-  const began = runningSince.value
-  if (!began) return ''
-
-  const seconds = Math.max(0, Math.floor((tick.value - began) / 1000))
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const rest = seconds % 60
-
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
-  }
-  return `${minutes}:${String(rest).padStart(2, '0')}`
-})
-
-const whenRun = computed(() => {
-  // Read so that the timer below is a real dependency rather than a hint.
-  void tick.value
-
-  const last = deployments.value[0]
-  if (!last?.started_at) return ''
-
-  const started = ago(last.started_at, tick.value)
-  if (!started) return ''
-
-  // No end yet means it is still going, and saying so is the honest reading of a
-  // missing time rather than leaving the reader to notice the gap.
-  if (!last.finished_at) return `started ${started}, still going`
-
-  const took = span(last)
-  return `ran ${started}, took ${took}`
-})
-
-/**
- * The two ends of the last operation, in full.
- *
- * Both, on the card, because "how long ago" and "when exactly" are different questions
- * and the card is where they are both asked. Somebody checking a deployment against a
- * log or a release wants the clock, not "a while ago" — and the clock does not go stale
- * while it is being looked at, which "4 minutes ago" would.
- */
-const whenRunExact = computed(() => {
-  const last = deployments.value[0]
-  if (!last?.started_at) return ''
-
-  const from = new Date(last.started_at).toLocaleString()
-  if (!last.finished_at) return `from ${from}, still going`
-
-  const to = new Date(last.finished_at).toLocaleString()
-  const took = span(last)
-  // The end time alone rather than both full timestamps: they are seconds apart by
-  // nature, and repeating the date for each says the same thing twice.
-  const toTime = to.slice(to.indexOf(',') + 1).trim()
-  return took ? `${from} → ${toTime} · took ${took}` : `${from} → ${toTime}`
-})
-
 function badgeClass(state: string): string {
   switch (state) {
     case 'succeeded':
@@ -617,90 +461,11 @@ const places = computed(() => {
 })
 
 /**
- * What the operation under way is putting into the cluster.
+ * The record of the operation under way, once the module has written one down.
  *
- * From what has been applied so far rather than from the steps, because the steps say
- * what is happening and this says what the result is: the place, and the image that is
- * going to be running there. Empty until the module has said anything about applying,
- * which is the honest answer at that moment — the operation has started and nothing is
- * in the cluster yet.
- */
-/**
- * The steps to draw when nothing is deploying.
- *
- * The last operation's, worked out from what it ended as. Without this the steps are
- * only ever on screen while something is happening, which makes the list something you
- * have to catch rather than something you can read — and the times somebody wants to
- * read it are exactly the times nothing is happening.
- */
-/**
- * What the card's edge says: working, fine, or broken.
- *
- * Read from the operation itself rather than worked out for the edge, so the edge
- * and the steps under it cannot disagree — a green edge beside a red step leaves
- * the reader deciding which of the two to believe.
- */
-const cardState = computed(() => verdict.value.tone)
-
-/**
- * The log on show: what this operation has said so far, and when nothing is running,
- * what the last one said.
- *
- * The second case is the reason the module writes it down. A page opened between
- * deployments was never there for the lines, and a log that only exists while somebody
- * is watching is no use to whoever is trying to find out where it broke.
- */
-const lastLog = ref<LogLine[]>([])
-
-const shownLog = computed<LogLine[]>(() => {
-  if (active.value) {
-    return activeSeen.value.map((line) => ({
-      phase: line.phase,
-      message: line.message,
-      step: line.step,
-      of: line.of,
-    }))
-  }
-  return lastLog.value
-})
-
-const idleProgress = computed<DeployProgress | null>(() => {
-  const last = deployments.value[0]
-  if (!last || active.value) return null
-
-  const failed = last.state === 'failed' || last.state === 'abandoned'
-
-  // No phase, on purpose, when the last operation ended well.
-  //
-  // There is no step in progress and there has not been for some time. Naming one
-  // anyway — which is what this used to do, naming the rollout because that is where
-  // deployments usually get to — draws an arrow on a step that is finished and leaves
-  // everything after it blue for ever, which reads as a run that stalled one step from
-  // the end. It said so twice today before I looked properly.
-  //
-  // A failure is the other matter: there the step it died on is worth pointing at, and
-  // the module named it.
-  return {
-    phase: failed ? (last.phase || '') : '',
-    message: failed
-      ? (last.reason || 'the operation did not finish')
-      : `the last operation ${last.state} — ${last.workload || 'the workload'} ran ${shortImage(last.image)}`,
-    desired: 0,
-    ready: 0,
-  }
-})
-
-/**
- * What is in each place, as one row.
- *
- * While a deployment runs, its own record — the one the module wrote down when it
- * started, which carries the tags it went out under and the workload it touches. At
- * rest, the newest deployment that finished well, per place.
- *
- * Same shape either way on purpose: the card at rest is the reference, and a card
- * that changes its rows as well as its badge is a different card. Tags and image are
- * not decoration on this line; they are the answer to "which version is out there",
- * and they used to go missing for the entire duration of the rollout.
+ * The module's own, and kept verbatim: it carries the tags the image went out under and
+ * the workload being touched, and both of those are facts about the cluster that only
+ * the module was in a position to learn.
  */
 const running = ref<DeployProgress['deployment'] | null>(null)
 
@@ -714,69 +479,6 @@ const running = ref<DeployProgress['deployment'] | null>(null)
  * second behind its own last event.
  */
 const lastOut = ref<{ image: string; tags?: string[] } | null>(null)
-
-/** The row the module has opened and not yet closed, if there is one. */
-const newestRunning = computed(() =>
-  deployments.value.find((one) => one.state === 'running') ?? null)
-
-/** The names a record carries, each of them once. */
-function oneEach(names?: string[]): string[] {
-  return [...new Set((names ?? []).filter(Boolean))]
-}
-
-/**
- * A place, named the way the finished card names it: cluster and namespace.
- *
- * The record carries a name of its own as well — "dev", from the repository — but the
- * same place was on this card as "dev" during a deployment and as
- * "local-k3s/dogit-dev" a minute later, and a line that renames itself between two
- * states of one thing reads as two things happening.
- */
-function placeOf(one: { place?: string; cluster?: string; namespace?: string }): string {
-  return [one.cluster, one.namespace].filter(Boolean).join('/')
-    || (one.place ?? '').trim()
-    || '—'
-}
-
-const rows = computed(() => {
-  // `.value`, and this is not a detail: a computed is an object, and an object is
-  // always true. Written without it, the branch below was taken in every state,
-  // which left the card at rest showing the place and the workload it borrows and
-  // nothing else — no tag, no image, on a line whose whole job is to name what is
-  // deployed. The template unwraps refs on its own, which is why the same name read
-  // correctly there and wrongly here.
-  if (deployBusy.value) {
-    // Nothing to name yet is nothing to show.
-    //
-    // While an operation is under way these cells are about that operation, and until
-    // it has said what it is pushing there is no honest answer for the name and the
-    // image. Falling back to the last finished deployment put yesterday's tag next to
-    // today's rollout, and the tag then changed on its own several seconds in — a name
-    // swapping itself on a line that is supposed to be about one deployment, with no
-    // event to explain it. A gap that fills in when the answer arrives beats a wrong
-    // answer that corrects itself.
-    //
-    // The place and the workload are kept from the last deployment: they are where
-    // this repository sends things, which does not change between runs, and blanking
-    // them out for the first ten seconds of every deployment would say less about a
-    // page that is working than leaving them there does.
-    const record = running.value ?? newestRunning.value
-    const last = places.value[0]
-    return [{
-      place: record ? placeOf(record) : (last?.place ?? ''),
-      tags: oneEach(record?.tags),
-      image: record?.image ?? '',
-      workload: record?.workload ?? last?.deployment.workload ?? '',
-    }]
-  }
-
-  return places.value.map((one) => ({
-    place: one.place,
-    tags: oneEach(one.deployment.tags),
-    image: one.deployment.image,
-    workload: one.deployment.workload ?? '',
-  }))
-})
 
 /**
  * What this card says about itself: one word, one colour, one answer to "is it still
@@ -837,9 +539,6 @@ const verdict = computed<{ tone: 'working' | 'ok' | 'bad' | 'waiting'; word: str
   if (last.state === 'failed') return { tone: 'bad', word: 'failed', cls: 'badge-red' }
   return { tone: 'ok', word: last.state || 'unknown', cls: badgeClass(last.state) }
 })
-
-const stateBadge = computed(() => verdict.value.word)
-const stateBadgeClass = computed(() => verdict.value.cls)
 
 // To the row above, which draws it as a dot. Watched rather than sent at the moments
 // this card learns something: a verdict that is only sent when it is read is a verdict
@@ -967,7 +666,6 @@ const images = ref<KnownImage[]>([])
 const imagePages = ref(1)
 const imageTotal = ref(0)
 const imageHasMore = ref(false)
-
 
 /**
  * Goes to that image on the images tab and points at it.
@@ -1285,7 +983,6 @@ async function load() {
     hasMore.value = answer.has_more ?? false
     // The newest row carries what it said, so the log is there before anything is
     // watched rather than only for a run somebody stayed to see.
-    lastLog.value = answer.deployments?.[0]?.log ?? []
 
     // The step list, asked for rather than waited for.
     //
@@ -1682,19 +1379,9 @@ onMounted(async () => {
   // slid into the space, and the notice afterwards names that row's image, correctly and
   // uselessly. One read, when the operation is over and the rows have settled.
   if (!underWay.value) void loadImages()
-
-  // The clock behind "4 minutes ago" and behind the running timer. Nothing is fetched —
-  // the list is already here and both figures are arithmetic — but without it they are
-  // correct when drawn and quietly wrong afterwards, which is the failure they exist to
-  // prevent. A second, because a clock that counted in minutes would sit at "0:00" for
-  // a minute looking like something that had stopped.
-  stopTick = setInterval(() => {
-    tick.value = Date.now()
-  }, 1000)
 })
 
 onBeforeUnmount(() => {
-  if (stopTick) clearInterval(stopTick)
   stopRewake?.()
   stopPlan?.()
   stopHistory?.()
@@ -1795,7 +1482,6 @@ watch(() => props.module.id, load)
     <template v-if="!reason && !loading">
       <!-- Operations and images side by side: the first says what happened, the second
            says what could be put back, and the question is nearly always about both. -->
-
 
       <div class="columns">
         <section v-show="tab === 'operations'" class="block">
@@ -2167,34 +1853,6 @@ watch(() => props.module.id, load)
   background: var(--bg-inset);
 }
 
-/* The card of what is happening. Tinted so that it is visibly not part of the history
-   below it, and given a left edge so the eye finds it without reading anything. */
-.active-card {
-  margin-bottom: 22px;
-  border-left: 3px solid var(--accent);
-  background: var(--bg-inset);
-}
-
-/* The edge is the card's verdict, in the same three colours as the marks beside the
-   steps: yellow while something is moving, green when the last one ended well, red
-   when it did not. Read at a glance from across a page, which is what an edge is
-   for. */
-/* Yellow while it runs. Not green: green on this page means an operation ended well,
-   and a rollout that is still going has not ended at all — a card wearing success for
-   the two minutes everybody is waiting claims the answer before there is one. Red is
-   the other end. */
-.active-card.working {
-  border-left-color: var(--yellow);
-}
-
-.active-card.ok {
-  border-left-color: var(--green);
-}
-
-.active-card.bad {
-  border-left-color: var(--red);
-}
-
 /* The rollout's own number, big enough to read while watching and not so big that
    it becomes the thing the card is about. */
 .pods {
@@ -2227,14 +1885,6 @@ watch(() => props.module.id, load)
   transition: width 0.4s ease;
 }
 
-.place-chip {
-  font-size: 12px;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg);
-}
-
 .running-place {
   display: flex;
   flex-wrap: wrap;
@@ -2245,10 +1895,6 @@ watch(() => props.module.id, load)
 
 .running-place + .running-place {
   border-top: 1px solid var(--border);
-}
-
-.spacer {
-  flex: 1 1 auto;
 }
 
 /* The two lists are never on screen at once, so there is one column and no gap to
@@ -2440,10 +2086,6 @@ th {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 10px;
-}
-
-.log {
   margin-top: 10px;
 }
 

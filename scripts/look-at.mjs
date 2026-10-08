@@ -103,17 +103,30 @@ try {
   const clickText = process.argv.includes('--click-text')
     ? process.argv[process.argv.indexOf('--click-text') + 1]
     : null;
+  // Which of several equally-named things to click. A page with two places has two tabs of the
+  // same name, and refusing to choose between them is right — but then there has to be a way to
+  // say which one, or a page that repeats itself can never be clicked at all.
+  const clickNth = process.argv.includes('--click-nth')
+    ? Number(process.argv[process.argv.indexOf('--click-nth') + 1])
+    : 0;
   if (clickText) {
     // By the element's own text, and only an element whose whole text is that — so that asking
     // to open a disclosure cannot land on a switch two lines above it. An inspection that changes
     // what it is inspecting is worse than one that reports nothing.
-    const clicked = await page.evaluate((wanted) => {
+    //
+    // Refuses when the name is not unique, unless a position was named: a page with two places
+    // has two identically named tabs, and guessing between them is how an inspection reports on
+    // the wrong one.
+    const picked = process.argv.includes('--click-nth');
+    const clicked = await page.evaluate((wanted, nth, choose) => {
       const hits = [...document.querySelectorAll('summary, button, a, [role="button"]')]
         .filter((el) => (el.textContent ?? '').trim() === wanted);
-      if (hits.length !== 1) return hits.length;
-      hits[0].click();
+      if (!choose && hits.length !== 1) return hits.length;
+      const el = hits[nth];
+      if (!el) return hits.length;
+      el.click();
       return 1;
-    }, clickText);
+    }, clickText, clickNth, picked);
     if (clicked !== 1) {
       console.log(`click-text "${clickText}" matched ${clicked} elements; nothing was clicked`);
     } else {
