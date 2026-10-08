@@ -241,10 +241,41 @@ func (s *Server) handleGetModule(w http.ResponseWriter, r *http.Request) {
 // Read without the secret. This is a page that gets screenshotted, and a view of a database
 // is worth nothing that a password would add to it.
 func (s *Server) databaseView(ctx context.Context, integration *models.Integration) map[string]any {
+	// The slots this module asked for, each with what is in it and what could go in it.
+	//
+	// Answered as a list of slots rather than as a held resource and a list of free ones,
+	// because those are two answers to one question and they go out of step the moment a slot
+	// is filled — the page would show a slot as empty while the free list still offered it.
+	needs := integration.Capabilities.Needs()
+	slots := make([]map[string]any, 0, len(needs))
+	for _, need := range needs {
+		slot := map[string]any{
+			"key":      need.Key,
+			"kind":     need.Kind,
+			"software": need.Software,
+			"required": need.Required,
+			"held":     nil,
+			"free":     []any{},
+		}
+		if held, err := s.store.Resources().HeldSlot(ctx, integration.ID, need.Key); err == nil {
+			slot["held"] = held
+		} else if !errors.Is(err, store.ErrNotFound) {
+			s.log.Warn("a resource for a module's slot could not be read",
+				"kind", integration.Kind, "slot", need.Key, "error", err)
+		}
+		if free, err := s.store.Resources().FreeFor(ctx, need); err == nil {
+			slot["free"] = free
+		} else {
+			s.log.Warn("the free resources that could fill a module's slot could not be read",
+				"kind", integration.Kind, "slot", need.Key, "error", err)
+		}
+		slots = append(slots, slot)
+	}
 	view := map[string]any{
-		"wants_one": integration.Capabilities.Database,
+		"wants_one": integration.Capabilities.WantsDatabase(),
 		"name":      integration.DatabaseName,
 		"role":      integration.DatabaseRole,
+		"slots":     slots,
 	}
 
 	held, err := s.store.Resources().ByIDFor(ctx, integration.ID)

@@ -205,6 +205,11 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Get("/admin/users", s.handleListUsers)
 		authenticated.Get("/admin/runners", s.handleListRunners)
 		authenticated.Get("/modules/{integrationID}", s.handleGetModule)
+		// What a module's resources are, put and taken back. At the module's level because
+		// that is where the question is asked: a module with a database and an object store
+		// cannot say which is which from a list of resources.
+		authenticated.Post("/modules/{integrationID}/resources/attach", s.handleAttachResource)
+		authenticated.Post("/modules/{integrationID}/resources/{needKey}/detach", s.handleDetachResource)
 		authenticated.Put("/modules/{integrationID}/state", s.handleSetModuleState)
 		authenticated.Delete("/modules/{integrationID}", s.handleDeleteModule)
 		authenticated.Post("/modules/{integrationID}/uninstall", s.handleStartModuleUninstall)

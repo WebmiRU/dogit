@@ -49,7 +49,9 @@ func (s *Server) fillResourceSlots(ctx context.Context,
 	// empty list is an answer — it says every need below should be filled — and answering it
 	// on the strength of a failed read is how a module that already has a database is given a
 	// second one, with the first left orphaned and holding every deployment it ever ran.
-	own, err := s.store.Resources().ByModule(ctx, integration.ID)
+	// With the secret, because this list is about to become handovers. Reading it shut
+	// and handing the result to a module is how a module is given a database it cannot open.
+	own, err := s.store.Resources().ByModule(ctx, integration.ID, true)
 	if err != nil {
 		return nil, fmt.Errorf("read the resources this module holds: %w", err)
 	}

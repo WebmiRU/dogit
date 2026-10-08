@@ -29,6 +29,15 @@ interface ModuleResource {
   released_at?: string
 }
 
+interface ModuleSlot {
+  key: string
+  kind: string
+  software?: string
+  required: boolean
+  held?: ModuleResource | null
+  free?: ModuleResource[]
+}
+
 interface ModuleDatabase {
   /** Whether the module asked the core for a database when it registered. */
   wants_one: boolean
@@ -37,8 +46,8 @@ interface ModuleDatabase {
   role?: string
   /** The resource being held for it, absent when there is none. */
   resource?: ModuleResource
-  /** Resources somebody described for this kind of module that nothing holds yet. */
-  awaiting?: ModuleResource[]
+  /** One slot the module asked for, with what is in it and what could go in it. */
+  slots?: ModuleSlot[]
 }
 
 /** Whether this module is one that asks for a resource at all, from its own manifest. */
@@ -87,7 +96,7 @@ const tabNames = computed(() => [
   // form, because there is more to say about it than one line holds: what it is, where it
   // is, where it came from, what is waiting for it, and — the part that matters — that a
   // module which asked for a database and has none is a gap rather than a choice.
-  ...(wantsResource.value || database.value?.resource ? ['resources'] : []),
+  ...(wantsResource.value || database.value?.slots?.length ? ['resources'] : []),
   'removal',
 ])
 
@@ -412,11 +421,9 @@ const storageFraction = computed(() => {
       <!-- Where this module's data lives, and what is waiting for it. -->
       <section v-else-if="tab === 'resources'">
         <ModuleResources
-          :held="database?.resource ?? null"
-          :awaiting="database?.awaiting ?? []"
-          :wants-one="database?.wants_one ?? false"
-          :recorded-name="database?.name ?? ''"
-          :role="database?.role ?? ''"
+          :needs="database?.slots ?? []"
+          :wants-any="Boolean(database?.wants_one)"
+          @reload="load(true)"
         />
       </section>
 

@@ -390,3 +390,58 @@ func TestAModuleWithNoResourceBehindItsDatabaseNameHoldsNothing(t *testing.T) {
 		t.Fatal("a module holding a resource claims to hold nothing")
 	}
 }
+
+// The two ways of reading what a module holds differ in one thing, and it is the difference
+// between a module that can open its database and one that cannot.
+//
+// This was a real failure and it looked like nothing: the resource was in place, the page showed
+// it, and the module was refused registration with "no password" — because the list a handover
+// is built from had its secrets shut, which is right for a page and wrong for handing over. Both
+// callers were correct and they wanted opposite things, so the flag is named at the call rather
+// than chosen once here.
+func TestWhatAModuleHoldsIsReadWithTheSecretOnlyForAHandover(t *testing.T) {
+	st := dbtest.Open(t)
+	resources := st.Resources()
+
+	module, err := st.Integrations().Register(t.Context(), "deploy:kubernetes",
+		dbtest.Unique("secret"), "http://module-deploy:8094", []byte("hash"), models.Manifest{})
+	if err != nil {
+		t.Fatalf("register a module: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = st.Pool().Exec(t.Context(), `DELETE FROM integrations WHERE id = $1`, module.ID)
+	})
+
+	written, err := resources.Put(t.Context(), models.Resource{
+		Kind: "db", Name: "with a password", Origin: models.OriginManaged,
+		Parts: resource.Parts{"host": "postgres", "database_name": "d",
+			"username": "u", "password": "the-password"},
+	})
+	if err != nil {
+		t.Fatalf("write the resource down: %v", err)
+	}
+	if err := resources.Grant(t.Context(), written.ID, module.ID, "history"); err != nil {
+		t.Fatalf("give it to the module: %v", err)
+	}
+
+	closed, err := resources.ByModule(t.Context(), module.ID, false)
+	if err != nil {
+		t.Fatalf("read it for a page: %v", err)
+	}
+	if len(closed) != 1 {
+		t.Fatalf("a module holding one resource reads back %d", len(closed))
+	}
+	if closed[0].Secret["password"] != "" {
+		t.Fatalf("a page was handed a password: %v", closed[0].Secret)
+	}
+
+	opened, err := resources.ByModule(t.Context(), module.ID, true)
+	if err != nil {
+		t.Fatalf("read it for a handover: %v", err)
+	}
+	if opened[0].Secret["password"] != "the-password" {
+		t.Fatalf("a module would be given a password of %q, and refused registration for "+
+			"having none while the page showed it there all along",
+			opened[0].Secret["password"])
+	}
+}

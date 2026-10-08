@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -332,7 +333,13 @@ func (r *ResourceRepo) ByIDFor(ctx context.Context, integrationID uuid.UUID) (*m
 // A module may hold several, which is the whole reason this exists and the reason there is no
 // single-resource accessor beside it: a registry with a database and an object store is one
 // module holding two things, and a function returning "the resource" would have to pick.
-func (r *ResourceRepo) ByModule(ctx context.Context, integrationID uuid.UUID) ([]models.Resource, error) {
+//
+// withSecret is a parameter rather than a separate function because the two callers disagree
+// about it and neither is wrong: a settings page wants the facts without unsealing anything, and
+// a handover at registration needs the password or the module is given a resource it cannot
+// connect to.
+func (r *ResourceRepo) ByModule(ctx context.Context, integrationID uuid.UUID,
+	withSecret bool) ([]models.Resource, error) {
 	rows, err := r.s.pool.Query(ctx, `
 		SELECT `+resourceColumns+` FROM resources r
 		WHERE r.integration_id = $1 ORDER BY r.created_at`, integrationID)
@@ -343,13 +350,80 @@ func (r *ResourceRepo) ByModule(ctx context.Context, integrationID uuid.UUID) ([
 
 	out := []models.Resource{}
 	for rows.Next() {
-		one, err := r.scanResource(rows, false)
+		one, err := r.scanResource(rows, withSecret)
 		if err != nil {
 			return nil, fmt.Errorf("read a resource of %s: %w", integrationID, err)
 		}
 		out = append(out, *one)
 	}
 	return out, rows.Err()
+}
+
+// FreeFor lists the free resources that could answer this need.
+//
+// Matched on what the need asks for and on nothing else — not on which kind of module the
+// resource was described for. That is a deliberate difference from adoption at registration,
+// which does check: there, a resource written down for `deploy:kubernetes` is waiting for a
+// kubernetes module and handing it to a registry would be giving away somebody's database. Here
+// an administrator is looking at one module and saying "attach that one", which is the same
+// deliberate act as writing the resource down for that module in the first place.
+func (r *ResourceRepo) FreeFor(ctx context.Context, need models.ResourceNeed) ([]models.Resource, error) {
+	free, err := r.Free(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []models.Resource{}
+	for _, one := range free {
+		if one.Kind != need.Kind {
+			continue
+		}
+		if need.Software != "" && one.Software != "" && !strings.EqualFold(need.Software, one.Software) {
+			continue
+		}
+		out = append(out, one)
+	}
+	return out, nil
+}
+
+// HeldSlot reads what a module holds for one named slot.
+//
+// Asked per slot rather than read as a list and matched here, so that a module with several
+// resources is a question with one answer instead of a question this has to be careful about.
+func (r *ResourceRepo) HeldSlot(ctx context.Context,
+	integrationID uuid.UUID, needKey string) (*models.Resource, error) {
+	one, err := r.scanResource(r.s.pool.QueryRow(ctx, `
+		SELECT `+resourceColumns+` FROM resources r
+		WHERE r.integration_id = $1 AND r.need_key = $2`, integrationID, needKey), false)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("read the resource in the %q slot of %s: %w", needKey, integrationID, err)
+	}
+	return one, nil
+}
+
+// ReleaseSlot gives up whatever a module holds for one named slot, and says which it was.
+//
+// By slot and not by resource id, because the caller is a module's page saying "take that one
+// away" about a thing the page lists by slot, and an id is not on the page. ErrNotFound when
+// nothing was held for it, which is not a failure to report but the ordinary answer.
+func (r *ResourceRepo) ReleaseSlot(ctx context.Context,
+	integrationID uuid.UUID, needKey string) (*models.Resource, error) {
+	one, err := r.scanResource(r.s.pool.QueryRow(ctx, `
+		UPDATE resources SET integration_id = NULL, released_at = now(),
+			last_integration_id = $2, last_integration_kind = coalesce((
+				SELECT m.kind FROM integrations m WHERE m.id = $2), ''),
+			updated_at = now()
+		WHERE integration_id = $1 AND need_key = $3
+		RETURNING `+returnColumnsPlain, integrationID, integrationID, needKey), false)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("give up the resource for the %q slot: %w", needKey, err)
+	}
+	return one, nil
 }
 
 // AwaitingKind lists the resources somebody described for a kind of module that has not taken
