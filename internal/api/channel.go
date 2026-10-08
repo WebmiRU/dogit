@@ -93,6 +93,11 @@ type ModuleChannel struct {
 
 	mu      sync.Mutex
 	clients map[uuid.UUID]map[*channelClient]struct{}
+
+	// pending is the commands waiting to be delivered again, by module. Not by connection:
+	// a module that reconnects has a new connection and wants what it missed, and a command
+	// addressed to a socket that no longer exists is a command with nowhere to go.
+	pending map[uuid.UUID][]pendingCommand
 }
 
 // moduleChannel returns the core's channel.
@@ -101,7 +106,13 @@ type ModuleChannel struct {
 // second set of them, and a message sent down one of them would arrive at a module that another
 // set had already written off as gone.
 func (s *Server) moduleChannel() *ModuleChannel {
-	s.channelOnce.Do(func() { s.channel = &ModuleChannel{s: s, clients: map[uuid.UUID]map[*channelClient]struct{}{}} })
+	s.channelOnce.Do(func() {
+		s.channel = &ModuleChannel{
+			s:       s,
+			clients: map[uuid.UUID]map[*channelClient]struct{}{},
+			pending: map[uuid.UUID][]pendingCommand{},
+		}
+	})
 	return s.channel
 }
 
@@ -117,20 +128,29 @@ func (ch *ModuleChannel) Connected(moduleID uuid.UUID) int {
 	return len(ch.clients[moduleID])
 }
 
-// Send delivers a message to every connection of one module, and says how many took it.
+// Announce sends a fact to every connection of one module, and says how many took it.
+//
+// Not kept for redelivery, because a fact cannot be stale: a module that acts on one from four
+// minutes ago asks for the work and is told the queue is empty, which is the answer it would
+// have got anyway. See channel_cache.go for why a decision is a different call and not a flag on
+// this one.
+func (ch *ModuleChannel) Announce(ctx context.Context, moduleID uuid.UUID, fact Fact) (int, error) {
+	body, err := json.Marshal(fact.Payload)
+	if err != nil {
+		return 0, fmt.Errorf("encode a %q message: %w", fact.Kind, err)
+	}
+	return ch.send(ctx, moduleID, modulechan.Message{Kind: fact.Kind, Payload: body})
+}
+
+// send writes one message to every connection a module has, and says how many took it.
 //
 // Zero delivered is not a failure here: it is the case the command cache exists for, and the
 // caller decides what an undelivered command means. A message that could not be written to one
 // connection but reached another is logged and not returned — refusing the whole send because one
 // of several connections had gone would mean a module's second process going quietly silent
 // stops its first from being commanded.
-func (ch *ModuleChannel) Send(ctx context.Context, moduleID uuid.UUID,
-	kind string, payload any) (int, error) {
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return 0, fmt.Errorf("encode a %q message: %w", kind, err)
-	}
+func (ch *ModuleChannel) send(ctx context.Context, moduleID uuid.UUID,
+	message modulechan.Message) (int, error) {
 
 	ch.mu.Lock()
 	targets := make([]*channelClient, 0, len(ch.clients[moduleID]))
@@ -141,10 +161,9 @@ func (ch *ModuleChannel) Send(ctx context.Context, moduleID uuid.UUID,
 
 	delivered := 0
 	for _, client := range targets {
-		message := modulechan.Message{Kind: kind, Payload: body}
 		if err := client.send(ctx, message); err != nil {
 			ch.s.log.Warn("a module's channel would not take a message",
-				"module", client.name, "kind", kind, "error", err)
+				"module", client.name, "kind", message.Kind, "error", err)
 			continue
 		}
 		delivered++
@@ -175,8 +194,10 @@ func (s *Server) announceWork(ctx context.Context) {
 		if !module.Enabled || !strings.HasPrefix(module.Kind, "runner:") {
 			continue
 		}
-		delivered, err := s.moduleChannel().Send(ctx, module.ID, modulechan.WorkAvailable,
-			map[string]any{"waiting": waiting})
+		delivered, err := s.moduleChannel().Announce(ctx, module.ID, Fact{
+			Kind:    modulechan.WorkAvailable,
+			Payload: map[string]any{"waiting": waiting},
+		})
 		if err != nil {
 			s.log.Warn("could not send work to a runner", "module", module.Name, "error", err)
 			continue
@@ -350,12 +371,36 @@ func (ch *ModuleChannel) attach(ctx context.Context, conn *websocket.Conn,
 	}
 
 	ch.mu.Lock()
-	defer ch.mu.Unlock()
 	if ch.clients[module.ID] == nil {
 		ch.clients[module.ID] = map[*channelClient]struct{}{}
 	}
 	ch.clients[module.ID][client] = struct{}{}
+	ch.mu.Unlock()
+
+	// What this module was told and has not been given yet, now that somebody is there to
+	// take it. Read outside the lock, since it takes the same one.
+	ch.redeliver(ctx, client)
 	return client
+}
+
+// redeliver gives a module back the commands it was sent while it was not there.
+//
+// In the order they were made, because a deploy module that is handed two commands at once has
+// to be able to see that one came before the other. Failures are logged and the rest are sent:
+// one command the module cannot take is not a reason to withhold the ones after it.
+func (ch *ModuleChannel) redeliver(ctx context.Context, client *channelClient) {
+	waiting := ch.takePending(client.moduleID)
+	for _, command := range waiting {
+		if err := client.send(ctx, command.message); err != nil {
+			ch.s.log.Warn("a module's channel would not take a command it had already been sent",
+				"module", client.name, "kind", command.message.Kind,
+				"command", command.message.ID, "error", err)
+		}
+	}
+	if len(waiting) > 0 {
+		ch.s.log.Info("a module was given the commands it had missed", "module", client.name,
+			"commands", len(waiting))
+	}
 }
 
 func (ch *ModuleChannel) detach(client *channelClient) {

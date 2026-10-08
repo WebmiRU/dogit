@@ -1888,6 +1888,19 @@ func (s *Server) integrationView(r *http.Request, integration *models.Integratio
 		s.log.Debug("read module stats", "module", integration.Name, "error", err)
 	}
 
+	// What the channel currently holds for this module, as two numbers that answer two
+	// different questions.
+	//
+	// Both are here because "the core thinks it told the module to deploy and the module
+	// says it was never told" is otherwise indistinguishable from a module that ignored it.
+	// Connections tells an operator whether the module is there at all; commands waiting
+	// tells them that the core is holding something for a module that is not listening yet,
+	// which is a state that resolves itself and an operator should be able to watch rather
+	// than infer.
+	channel := s.moduleChannel()
+	view["channel_connections"] = channel.Connected(integration.ID)
+	view["channel_pending_commands"] = channel.PendingCommands(integration.ID)
+
 	if address, published := modulehost.BaseURL(s.cfg.PublicHost, integration.Capabilities.Routing); published {
 		view["public_url"] = address
 		view["dedicated_host"] = modulehost.IsDedicatedHost(s.cfg.PublicHost, integration.Capabilities.Routing)

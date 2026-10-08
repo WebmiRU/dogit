@@ -132,6 +132,20 @@ export interface ModuleRow {
   public_url?: string | null
   dedicated_host?: boolean
   stats?: ModuleStats | null
+  /**
+   * Connections the module has open to the core right now.
+   *
+   * Zero is not an error on its own — a module that has nothing to say may hold no channel —
+   * but it is the difference between a module that is absent and one that is here and idle.
+   */
+  channel_connections?: number
+  /**
+   * Commands the core is holding for this module, to give it when it comes back.
+   *
+   * Non-zero while the module is connected means the core made a command that has not been
+   * delivered yet, which is worth knowing before somebody concludes the module ignored it.
+   */
+  channel_pending_commands?: number
 }
 
 export type UninstallStatus =

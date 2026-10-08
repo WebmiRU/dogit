@@ -93,6 +93,54 @@ func send(t *testing.T, conn *websocket.Conn, message modulechan.Message) module
 	return readOne(t, conn)
 }
 
+// write sends a message and reads nothing back.
+//
+// The other helper, send, reads one message because that is right when a test is only asking
+// the core to authenticate a module. It is wrong once the module has commands waiting: attaching
+// puts those out before the answer to the message that caused the attachment, so a test reading
+// one message gets a command where it expected the answer.
+func write(t *testing.T, conn *websocket.Conn, message modulechan.Message) {
+	t.Helper()
+
+	frame, err := message.Envelope()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := conn.Write(ctx, websocket.MessageText, frame); err != nil {
+		t.Fatalf("write to the channel: %v", err)
+	}
+}
+
+// readCommand reads until a message that is not an answer arrives.
+//
+// Answers are skipped rather than treated as the wrong thing: the core sends one for every
+// message that carried an id, and a test that has just attached a module has two streams
+// arriving at once — the command it is here for, and the acknowledgement of its own hello.
+func readCommand(t *testing.T, conn *websocket.Conn) modulechan.Message {
+	t.Helper()
+
+	for range 5 {
+		if message := readOne(t, conn); message.Kind != modulechan.Answer {
+			return message
+		}
+	}
+	t.Fatal("the core sent five answers and no command")
+	return modulechan.Message{}
+}
+
+// greet opens the channel the way a module does and waits until it is registered.
+//
+// Written as a message rather than a helper that answers, because the answer is what
+// deliverToModule sends and a test that does not read it leaves it sitting on the socket where
+// the next read finds it.
+func greet(t *testing.T, f *moduleFixture, conn *websocket.Conn) {
+	t.Helper()
+	write(t, conn, modulechan.Message{ID: "m1", Kind: "hello", Token: f.moduleToken})
+}
+
 // A module's first message is authenticated, and so is every message after it.
 func TestTheChannelTakesAModuleWithItsToken(t *testing.T) {
 	f := newModuleFixture(t)
@@ -211,10 +259,12 @@ func TestACommandReachesEveryConnectionOfItsOwnModuleAndNoOther(t *testing.T) {
 		t.Fatalf("the core counts %d connections, so a command would reach %d of 2", got, got)
 	}
 
-	delivered, err := channel.Send(context.Background(), f.module.ID, modulechan.WorkAvailable,
-		map[string]any{"waiting": 1})
+	delivered, err := channel.Announce(context.Background(), f.module.ID, Fact{
+		Kind:    modulechan.WorkAvailable,
+		Payload: map[string]any{"waiting": 1},
+	})
 	if err != nil {
-		t.Fatalf("send: %v", err)
+		t.Fatalf("announce: %v", err)
 	}
 	if delivered != 2 {
 		t.Fatalf("the command reached %d connections of 2", delivered)

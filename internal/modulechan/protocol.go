@@ -93,6 +93,15 @@ type Refusal struct {
 	EndedOn string `json:"ended_on,omitempty"`
 }
 
+// CommandTTLSetting is the setting in which a module says how long the core keeps a command
+// for it, in seconds.
+//
+// Here rather than in the core because a module has to be able to announce the setting in its
+// own manifest and read the same name back: a key written out in two places is two places to
+// change, and the failure is silent — a module asking for a lifetime under one name while the
+// core reads another, and neither of them ever saying so.
+const CommandTTLSetting = "command_ttl_seconds"
+
 // Common reasons. Written down because they are the ones a module author will search for.
 const (
 	ReasonUnknownToken = "this token is not one this instance knows"

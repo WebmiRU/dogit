@@ -96,6 +96,7 @@ const statusClass: Record<string, string> = {
             <th>Status</th>
             <th>Address</th>
             <th>Storage</th>
+            <th>Channel</th>
             <th>Last seen</th>
           </tr>
         </thead>
@@ -124,6 +125,21 @@ const statusClass: Record<string, string> = {
                 </span>
               </template>
               <span v-else class="muted small">not reported</span>
+            </td>
+            <td class="small">
+              <!-- Two numbers rather than one badge, because they answer different
+                   questions: a module can be connected and still have nothing waiting, and
+                   commands waiting for a connected module is the state that looks like a
+                   module ignoring its core. -->
+              <span
+                class="badge"
+                :class="module.channel_connections ? 'badge-green' : 'badge-warning'"
+              >
+                {{ module.channel_connections || 0 }}
+              </span>
+              <span v-if="module.channel_pending_commands" class="muted small">
+                {{ module.channel_pending_commands }} waiting
+              </span>
             </td>
             <td class="small">{{ module.last_seen_at ? timeAgo(module.last_seen_at) : 'never' }}</td>
           </tr>

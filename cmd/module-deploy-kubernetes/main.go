@@ -25,6 +25,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	// For the one setting this module names that the core also has to read by name. The
+	// import is here for that constant alone, and it is still the right place: the key is
+	// written down once rather than twice, and a module asking for a lifetime under a name
+	// the core does not read is a setting that silently does nothing.
+	"github.com/ewolf/dogit/internal/modulechan"
 )
 
 const (
@@ -200,6 +206,23 @@ func manifest() map[string]any {
 				"driver accepts.",
 		},
 
+			{
+				// The one setting on this page that is about the core rather than about a
+				// place. It is here because this is the module that gets commands — a deploy
+				// that arrives is a deploy that happens — and because a setting nobody can
+				// find is a setting nobody can raise.
+				//
+				// No default on purpose: an empty field and a field saying five minutes have
+				// to behave the same, and the empty one is what every module registered
+				// before this setting existed already has. Writing 300 here would make the
+				// two look different on the page while behaving alike.
+				"key":   modulechan.CommandTTLSetting,
+				"label": "Command lifetime",
+				"type":  "int",
+				"description": "Seconds the core keeps a command for this module, so one made " +
+					"while it was down is still delivered when it comes back. 0 means keep nothing: " +
+					"a command arrives once or not at all. Empty means five minutes.",
+			},
 			{
 				// The value a new place starts with, and the only thing this setting is.
 				//

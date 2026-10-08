@@ -246,6 +246,24 @@ func manifest(cfg config) map[string]any {
 				"description": "Seconds a single job may run before it is stopped. A build that has not finished by then is not going to.",
 			},
 			{
+				"key":   modulechan.CommandTTLSetting,
+				"label": "Command lifetime",
+				"type":  "int",
+				// Declared with no default rather than 300, and that is deliberate: an
+				// empty field is what a runner registered before this setting existed
+				// has, and both must mean the same thing. Putting 300 here would make
+				// the two look different on the page while behaving alike, which is a
+				// question an operator will ask and cannot answer from what they see.
+				//
+				// No "default" key at all rather than a nil one: absent and null are the
+				// same thing to anything reading this, and a key written out is a key
+				// somebody will eventually fill in without reading why it was empty.
+				"description": "Seconds the core keeps a command for this runner, in case it " +
+					"cannot be delivered while it is down. 0 means do not keep anything: a command " +
+					"arrives once or not at all. Empty means five minutes. This runner is told about " +
+					"work rather than commanded, so nothing is lost by leaving it alone.",
+			},
+			{
 				"key":         "allow_privileged",
 				"label":       "Run privileged jobs",
 				"type":        "bool",

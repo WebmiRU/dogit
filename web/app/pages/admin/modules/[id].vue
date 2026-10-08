@@ -209,6 +209,21 @@ const storageFraction = computed(() => {
             <span v-if="module.last_seen_at" class="muted">· {{ formatDate(module.last_seen_at) }}</span>
           </dd>
 
+          <!-- The channel, not the heartbeat. The two answer different questions, and
+               only one of them is about whether the module is there: a module can be
+               answering over HTTP and hold no channel at all, and it can hold a channel
+               while its heartbeat is stale. -->
+          <dt>Channel</dt>
+          <dd>
+            <span class="badge" :class="module.channel_connections ? 'badge-green' : 'badge-warning'">
+              {{ module.channel_connections || 0 }}
+              {{ module.channel_connections === 1 ? 'connection' : 'connections' }}
+            </span>
+            <span v-if="module.channel_pending_commands" class="muted">
+              · {{ module.channel_pending_commands }} waiting to be delivered
+            </span>
+          </dd>
+
           <dt v-if="storageFraction !== null">Storage</dt>
           <dd v-if="storageFraction !== null">
             {{ formatBytes(stats!.storage_used_bytes) }} of
