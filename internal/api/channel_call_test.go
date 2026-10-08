@@ -263,16 +263,14 @@ func TestTwoQuestionsAtOnceAreAnsweredToTheRightCaller(t *testing.T) {
 	}
 }
 
-// A module that says something which is neither an answer nor a refusal is not silently accepted
-// as an answer: the caller has to hear that it got nothing usable.
-func TestAnAnswerThatSaysNothingIsNotAnAnswer(t *testing.T) {
+// The success case, which is the one that has to exist: a function that turns every answer into
+// an error turns every question the core asks into a failed one, and no test that only looks at
+// refusals and timeouts will notice that it has happened.
+func TestAnAnswerIsNotAFailure(t *testing.T) {
 	f := newModuleFixture(t)
 
-	refusal := moduleRefusalOf(f.module, "what that tag points at", json.RawMessage(`{"ok":true}`), nil)
-	if refusal == nil {
-		t.Fatal("a payload with nothing in it was read as an answer")
-	}
-	if !strings.Contains(refusal.Error(), "says nothing") {
-		t.Errorf("the sentence does not say what is wrong: %v", refusal)
+	if refusal := moduleRefusalOf(f.module, "what that tag points at",
+		json.RawMessage(`{"digest":"sha256:abc"}`), nil); refusal != nil {
+		t.Errorf("an answer was read as a failure: %v", refusal)
 	}
 }

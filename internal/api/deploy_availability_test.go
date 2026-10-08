@@ -9,10 +9,12 @@ package api
 // to the rows they belong to.
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +27,7 @@ import (
 	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/logger"
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/modulechan"
 	"github.com/ewolf/dogit/internal/repos"
 	"github.com/ewolf/dogit/internal/store"
 )
@@ -305,6 +308,16 @@ func newAvailabilityFixture(t *testing.T) *availabilityFixture {
 	router := chi.NewRouter()
 	router.Route("/api/v1", func(v1 chi.Router) { srv.Register(v1) })
 
+	// A real address, because the fake module reaches this core over its channel and a
+	// router with no address cannot be dialled. The tests below are about what crosses that
+	// channel now, so the fake has to actually be on it.
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	raw, _ := mintBoundToken(t, st, "the fake deploy module", deployer.ID)
+	module.comeOnline(t, server.URL, raw)
+	waitUntilAttached(t, srv, deployer.ID)
+
 	return &availabilityFixture{
 		store: st, router: router, session: dbtest.NewSession(t, st, user.ID),
 		module: module, project: project, deployer: deployer,
@@ -382,53 +395,133 @@ func newFakeDeployModule(t *testing.T) *fakeDeployModule {
 	return fake
 }
 
+// serve answers over HTTP, the way a module older than its channel would be asked.
+//
+// Kept because it is what a real module still serves, and a test that only exercised the channel
+// would not notice the endpoint rotting. The answer itself comes from the same function the channel
+// calls, so the two cannot begin to disagree.
 func (f *fakeDeployModule) serve(w http.ResponseWriter, r *http.Request) {
-	// What is running in a place: a place the core has not already answered for reaches
-	// here, so the fake has to answer it or the question never gets that far.
-	if strings.HasSuffix(r.URL.Path, "/current") {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"known":true,"asked":"the cluster","desired":1}`))
-		return
-	}
-	if !strings.HasSuffix(r.URL.Path, "/images-availability") {
+	var kind string
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/current"):
+		kind = modulechan.DeployCurrent
+	case strings.HasSuffix(r.URL.Path, "/images-availability"):
+		kind = modulechan.DeployImagesAvailability
+	default:
 		http.NotFound(w, r)
 		return
 	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	status, answer := f.answer(kind, r.URL.Query(), body)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(answer)
+}
+
+// answer is what this module says, whichever way it was asked.
+//
+// One function for both transports, because the thing these tests are about is what crosses the
+// wire — the credential that was resolved, the image rewritten to the address a pull would use,
+// the order of the answers matched back to the rows they belong to — and a fake with one path per
+// transport could answer two different things.
+func (f *fakeDeployModule) answer(kind string, query url.Values, body []byte) (int, any) {
+	// What is running in a place: a place the core has not already answered for reaches
+	// here, so the fake has to answer it or the question never gets that far.
+	if kind == modulechan.DeployCurrent {
+		return http.StatusOK, map[string]any{"known": true, "asked": "the cluster", "desired": 1}
+	}
+	if kind != modulechan.DeployImagesAvailability {
+		return http.StatusNotFound, map[string]any{"error": map[string]any{"message": "not asked that"}}
+	}
+
 	f.mu.Lock()
 	f.asked_ = append(f.asked_, body)
 	answers := f.answers
 	f.mu.Unlock()
 
 	if len(answers) == 0 {
-		// The default: everything asked about is there, so a test about something else
-		// does not fail on this. A manifest with no repository in it is refused, because
-		// that is what the real module does and the core has to pass the refusal on.
-		var question struct {
+		// The default: everything asked about is there, so a test about something else does
+		// not fail on this. A question with no manifest in it is refused, because that is
+		// what the real module does and the core has to pass the refusal on.
+		// Read the manifests out of whatever shape arrived: over HTTP the body is the
+		// request itself, and on the channel it is wrapped in the question. A fake that
+		// only understood one of them would look like a core that stopped asking.
+		var asked struct {
+			Body struct {
+				Images []struct {
+					Path      string `json:"path"`
+					Reference string `json:"reference"`
+				} `json:"images"`
+			} `json:"body"`
 			Images []struct {
 				Path      string `json:"path"`
 				Reference string `json:"reference"`
 			} `json:"images"`
 		}
-		_ = json.Unmarshal(body, &question)
-		if len(question.Images) == 0 {
-			http.Error(w, "no manifest was asked about", http.StatusBadRequest)
-			return
+		if err := json.Unmarshal(body, &asked); err != nil {
+			return http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "not JSON"}}
 		}
-		answers = make([]map[string]string, 0, len(question.Images))
-		for _, one := range question.Images {
+		images := asked.Images
+		if len(images) == 0 {
+			images = asked.Body.Images
+		}
+		if len(images) == 0 {
+			return http.StatusBadRequest,
+				map[string]any{"error": map[string]any{"message": "no manifest was asked about"}}
+		}
+		answers = make([]map[string]string, 0, len(images))
+		for _, one := range images {
 			answers = append(answers, map[string]string{
 				"path": one.Path, "reference": one.Reference, "state": "present",
 			})
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"images": answers})
+	return http.StatusOK, map[string]any{"images": answers}
+}
+
+// comeOnline opens the channel this fake module keeps open to the core, and answers on it.
+func (f *fakeDeployModule) comeOnline(t *testing.T, coreURL, token string) {
+	t.Helper()
+
+	// Declared before it is filled in, because the handler it carries answers through it.
+	var client *modulechan.Client
+	client = &modulechan.Client{
+		URL:   coreURL,
+		Token: token,
+		OnMessage: func(ctx context.Context, message modulechan.Message) {
+			if message.ID == "" {
+				return
+			}
+			go func() {
+				var asked fakeQuestion
+				if err := message.PayloadInto(&asked); err != nil {
+					_ = client.Answer(ctx, message.ID,
+						map[string]any{"error": map[string]any{"message": "not a question"}})
+					return
+				}
+				_, answer := f.answer(message.Kind, asked.values(), asked.Body)
+				_ = client.Answer(ctx, message.ID, answer)
+			}()
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	go func() {
+		defer close(done)
+		client.Run(ctx)
+	}()
 }
 
 // asked is every question this module was asked.

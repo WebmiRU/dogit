@@ -181,9 +181,25 @@ func (c *Client) session(ctx context.Context) error {
 
 	c.log().Info("the channel to the core is open")
 
-	// The context is detached from the request: a dial context that ends takes the
-	// connection with it, and this one lives until the module stops.
-	session := context.WithoutCancel(ctx)
+	// Detached from the dial, but not from the caller.
+	//
+	// Detaching from the dial is right: a context that is about to be cancelled for a request
+	// must not take a connection that has nothing to do with that request down with it, and this
+	// one has to keep reading for as long as the socket is open.
+	//
+	// Detaching from the caller entirely was wrong, and it was wrong in a way nothing noticed for
+	// a long time: Run would then return only when the socket broke, so a module that was asked to
+	// shut down could not shut down — it sat in a read that nothing would ever end. A goroutine
+	// kept alive by a socket is the same leak whichever process it is in, and in a test it is a
+	// cleanup that never finishes.
+	//
+	// AfterFunc rather than a goroutine that waits: it stops when the connection ends, so there is
+	// nothing left over when the session is over and the caller has not finished.
+	session, stop := context.WithCancel(context.WithoutCancel(ctx))
+	defer stop()
+	endWithCaller := context.AfterFunc(ctx, stop)
+	defer endWithCaller()
+
 	readErr := c.read(session, conn)
 
 	if readErr != nil && !isExpectedClose(readErr) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -594,24 +595,23 @@ func imageGone(ctx context.Context, registry *deployRegistry, image string) (gon
 // rather than an error, so the page can say "this module cannot tell you" instead of
 // "the request failed".
 func (c *coreClient) handleCurrent(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	query := r.URL.Query()
+	writeOutcome(w, c.answerCurrent(r.Context(), r.URL.Query()))
+}
+
+func (c *coreClient) answerCurrent(ctx context.Context, query url.Values) outcome {
 
 	project := query.Get("project")
 	name := strings.TrimSpace(query.Get("cluster"))
 	if project == "" || name == "" {
-		writeError(w, http.StatusBadRequest, "this module is asked what is running by project and cluster")
-		return
+		return outcome{status: http.StatusBadRequest, body: refusalBody("this module is asked what is running by project and cluster")}
 	}
 	if c.history == nil {
-		writeError(w, http.StatusServiceUnavailable, errNoHistory.Error())
-		return
+		return outcome{status: http.StatusServiceUnavailable, body: refusalBody(errNoHistory.Error())}
 	}
 
 	_, namespace, client, err := c.clusterFor(ctx, project, name, query.Get("namespace"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return outcome{status: http.StatusBadRequest, body: refusalBody(err.Error())}
 	}
 
 	// Which workload: the one asked about, or the one this module last deployed here.
@@ -619,18 +619,16 @@ func (c *coreClient) handleCurrent(w http.ResponseWriter, r *http.Request) {
 	if workload == "" {
 		last, err := c.history.Current(ctx, project, name, namespace)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			return outcome{status: http.StatusInternalServerError, body: refusalBody(err.Error())}
 		}
 		if last == nil || strings.TrimSpace(last.Workload) == "" {
-			writeJSON(w, http.StatusOK, map[string]any{
+			return outcome{status: http.StatusOK, body: map[string]any{
 				"known": false,
 				"reason": fmt.Sprintf(
 					"nothing has ever been deployed to %s/%s, so there is nothing there to report",
 					name, namespace),
 				"asked": "this module's own record",
-			})
-			return
+			}}
 		}
 		workload = last.Workload
 	}
@@ -639,8 +637,7 @@ func (c *coreClient) handleCurrent(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// A cluster that cannot be reached is not "unknown what is running" — it is a
 		// failure to find out, and the page says so rather than drawing an empty answer.
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
+		return outcome{status: http.StatusBadGateway, body: refusalBody(err.Error())}
 	}
 
 	answer := map[string]any{
@@ -691,7 +688,7 @@ func (c *coreClient) handleCurrent(w http.ResponseWriter, r *http.Request) {
 		last != nil && last.Image == image && last.FinishedAt != nil {
 		answer["since"] = last.FinishedAt
 	}
-	writeJSON(w, http.StatusOK, answer)
+	return outcome{status: http.StatusOK, body: answer}
 }
 
 // mustSettings is the module's settings for a project, or empty.
@@ -704,16 +701,19 @@ func mustSettings(ctx context.Context, c *coreClient, project string) map[string
 }
 
 func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	writeOutcome(w, c.answerDeployments(r.Context(), r.URL.Query()))
+}
 
-	project := r.URL.Query().Get("project")
-	name := r.URL.Query().Get("cluster")
-	namespace := r.URL.Query().Get("namespace")
+func (c *coreClient) answerDeployments(ctx context.Context, query url.Values) outcome {
+
+	project := query.Get("project")
+	name := query.Get("cluster")
+	namespace := query.Get("namespace")
 
 	// Which page, and how big. Said by the reader rather than guessed here: a control
 	// on a page decides what a page is, and the database is what can afford to answer.
-	page := queryInt(r, "page", 1)
-	perPage := queryInt(r, "per_page", 20)
+	page := queryInt(query, "page", 1)
+	perPage := queryInt(query, "per_page", 20)
 	if page < 1 {
 		page = 1
 	}
@@ -725,12 +725,10 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if project == "" {
-		writeError(w, http.StatusBadRequest, "the history is asked for by project")
-		return
+		return outcome{status: http.StatusBadRequest, body: refusalBody("the history is asked for by project")}
 	}
 	if c.history == nil {
-		writeError(w, http.StatusServiceUnavailable, errNoHistory.Error())
-		return
+		return outcome{status: http.StatusServiceUnavailable, body: refusalBody(errNoHistory.Error())}
 	}
 
 	// No cluster named means the whole project: a page asking "what has this project
@@ -739,8 +737,7 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(name) == "" {
 		records, total, err := c.history.List(ctx, project, "", "", perPage, (page-1)*perPage)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			return outcome{status: http.StatusInternalServerError, body: refusalBody(err.Error())}
 		}
 		// The newest row carries its own log, because that is the one a page opened
 		// between deployments asks about. The rest are a list of rows: a hundred
@@ -750,15 +747,13 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 				records[0].Log = lines
 			}
 		}
-		writeJSON(w, http.StatusOK, pageOf(records, total, page, perPage))
-		return
+		return outcome{status: http.StatusOK, body: pageOf(records, total, page, perPage)}
 	}
 
 	if strings.TrimSpace(namespace) == "" {
 		settings, err := c.settings(ctx, project)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
+			return outcome{status: http.StatusBadGateway, body: refusalBody(err.Error())}
 		}
 		if clusters, err := clustersOf(settings); err == nil {
 			if cluster, found := find(clusters, name); found {
@@ -770,8 +765,7 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	records, total, err := c.history.List(ctx, project, name, namespace,
 		perPage, (page-1)*perPage)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return outcome{status: http.StatusInternalServerError, body: refusalBody(err.Error())}
 	}
 
 	// The newest row carries its log, whether or not the list was narrowed to one
@@ -783,7 +777,7 @@ func (c *coreClient) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, pageOf(records, total, page, perPage))
+	return outcome{status: http.StatusOK, body: pageOf(records, total, page, perPage)}
 }
 
 // pageOf is one page of rows, and enough about the rest for a control to be honest
@@ -812,8 +806,8 @@ func pageOf(records []deploy.Deployment, total, page, perPage int) map[string]an
 
 // queryInt is a number the reader asked for, or a default when it asked for nothing
 // sensible.
-func queryInt(r *http.Request, name string, fallback int) int {
-	raw := r.URL.Query().Get(name)
+// queryIntOf reads one number, falling back when it is not one.
+func queryIntOf(raw string, fallback int) int {
 	if raw == "" {
 		return fallback
 	}
@@ -830,19 +824,20 @@ func queryInt(r *http.Request, name string, fallback int) int {
 // from one page is a catalogue that forgets everything older than that page, and the
 // older entries are exactly the ones a rollback is chosen from.
 func (c *coreClient) handleImages(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	project := r.URL.Query().Get("project")
+	writeOutcome(w, c.answerImages(r.Context(), r.URL.Query()))
+}
+
+func (c *coreClient) answerImages(ctx context.Context, query url.Values) outcome {
+	project := query.Get("project")
 	if project == "" {
-		writeError(w, http.StatusBadRequest, "the catalogue is asked for by project")
-		return
+		return outcome{status: http.StatusBadRequest, body: refusalBody("the catalogue is asked for by project")}
 	}
 	if c.history == nil {
-		writeError(w, http.StatusServiceUnavailable, errNoHistory.Error())
-		return
+		return outcome{status: http.StatusServiceUnavailable, body: refusalBody(errNoHistory.Error())}
 	}
 
-	page := queryInt(r, "page", 1)
-	perPage := queryInt(r, "per_page", 20)
+	page := queryInt(query, "page", 1)
+	perPage := queryInt(query, "per_page", 20)
 	if page < 1 {
 		page = 1
 	}
@@ -854,11 +849,10 @@ func (c *coreClient) handleImages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	images, total, err := c.history.Images(ctx, project,
-		r.URL.Query().Get("cluster"), r.URL.Query().Get("namespace"),
+		query.Get("cluster"), query.Get("namespace"),
 		perPage, (page-1)*perPage)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return outcome{status: http.StatusInternalServerError, body: refusalBody(err.Error())}
 	}
 
 	pages := 1
@@ -868,10 +862,10 @@ func (c *coreClient) handleImages(w http.ResponseWriter, r *http.Request) {
 	if pages < 1 {
 		pages = 1
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	return outcome{status: http.StatusOK, body: map[string]any{
 		"images": images, "total": total, "page": page,
 		"per_page": perPage, "pages": pages, "has_more": page*perPage < total,
-	})
+	}}
 }
 
 // handleImagesAvailability asks the registry this place pulls from whether it still serves
@@ -888,6 +882,10 @@ func (c *coreClient) handleImages(w http.ResponseWriter, r *http.Request) {
 // anyway, because a request that asks a registry about a thousand manifests at once is a
 // request for a rate limit, and the answer that comes back is "unknown" for all of them.
 func (c *coreClient) handleImagesAvailability(w http.ResponseWriter, r *http.Request) {
+	writeOutcome(w, c.answerImagesAvailability(r.Context(), r.URL.Query(), readBody(r)))
+}
+
+func (c *coreClient) answerImagesAvailability(ctx context.Context, query url.Values, body []byte) outcome {
 	var request struct {
 		Registry deployRegistry `json:"registry"`
 		Images   []struct {
@@ -895,20 +893,16 @@ func (c *coreClient) handleImagesAvailability(w http.ResponseWriter, r *http.Req
 			Reference string `json:"reference"`
 		} `json:"images"`
 	}
-	if err := decode(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	if err := decodeBody(body, &request); err != nil {
+		return outcome{status: http.StatusBadRequest, body: refusalBody(err.Error())}
 	}
 	if strings.TrimSpace(request.Registry.Address) == "" {
-		writeError(w, http.StatusBadRequest,
-			"the availability of an image is asked of a registry, and no registry was named")
-		return
+		return outcome{status: http.StatusBadRequest, body: refusalBody("the availability of an image is asked of a registry, and no registry was named")}
 	}
 	if len(request.Images) > availabilityLimit {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+		return outcome{status: http.StatusBadRequest, body: refusalBody(fmt.Sprintf(
 			"%d images were asked about at once, and the limit is %d",
-			len(request.Images), availabilityLimit))
-		return
+			len(request.Images), availabilityLimit))}
 	}
 
 	probe := k8s.RegistryProbe{
@@ -921,7 +915,7 @@ func (c *coreClient) handleImagesAvailability(w http.ResponseWriter, r *http.Req
 	for _, one := range request.Images {
 		images = append(images, k8s.ProbedImage{Path: one.Path, Reference: one.Reference})
 	}
-	states := probe.AvailabilityOf(r.Context(), images)
+	states := probe.AvailabilityOf(ctx, images)
 
 	answers := make([]map[string]any, 0, len(images))
 	for i, one := range images {
@@ -929,7 +923,7 @@ func (c *coreClient) handleImagesAvailability(w http.ResponseWriter, r *http.Req
 			"path": one.Path, "reference": one.Reference, "state": string(states[i]),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"images": answers})
+	return outcome{status: http.StatusOK, body: map[string]any{"images": answers}}
 }
 
 // availabilityLimit is how many manifests one request may ask about.
@@ -941,38 +935,36 @@ const availabilityLimit = 50
 // Worth having as its own question: the alternative is finding out at deploy time,
 // which is the moment somebody least wants to be told that a cluster is unreachable.
 func (c *coreClient) handleTestCluster(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	writeOutcome(w, c.answerTestCluster(r.Context(), r.URL.Query(), readBody(r)))
+}
+
+func (c *coreClient) answerTestCluster(ctx context.Context, query url.Values, body []byte) outcome {
 
 	var request struct {
 		Project string `json:"project"`
 		Cluster string `json:"cluster"`
 	}
-	if err := decode(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	if err := decodeBody(body, &request); err != nil {
+		return outcome{status: http.StatusBadRequest, body: refusalBody(err.Error())}
 	}
 
 	settings, err := c.settings(ctx, request.Project)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
+		return outcome{status: http.StatusBadGateway, body: refusalBody(err.Error())}
 	}
 	clusters, err := clustersOf(settings)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return outcome{status: http.StatusBadRequest, body: refusalBody(err.Error())}
 	}
 
 	cluster, found := find(clusters, request.Cluster)
 	if !found {
-		writeError(w, http.StatusNotFound, clusterGone(settings, request.Cluster).Error())
-		return
+		return outcome{status: http.StatusNotFound, body: refusalBody(clusterGone(settings, request.Cluster).Error())}
 	}
 
 	client, err := cluster.Connect(ctx)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "reason": err.Error()})
-		return
+		return outcome{status: http.StatusOK, body: map[string]any{"ok": false, "reason": err.Error()}}
 	}
 
 	// Reading the cluster is the test. A module that connected and did nothing has
@@ -981,14 +973,12 @@ func (c *coreClient) handleTestCluster(w http.ResponseWriter, r *http.Request) {
 		// A missing Deployment is the expected answer: the point is that the cluster
 		// answered at all.
 		if strings.Contains(err.Error(), "no deployment called") {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-			return
+			return outcome{status: http.StatusOK, body: map[string]any{"ok": true}}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "reason": err.Error()})
-		return
+		return outcome{status: http.StatusOK, body: map[string]any{"ok": false, "reason": err.Error()}}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	return outcome{status: http.StatusOK, body: map[string]any{"ok": true}}
 }
 
 // pullSecretName is the Secret this module writes, whatever the core asked for.

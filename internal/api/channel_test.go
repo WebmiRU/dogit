@@ -346,3 +346,83 @@ func mustTokenID(t *testing.T, f *moduleFixture, name string) uuid.UUID {
 	}
 	return id
 }
+
+// A module that only ever listens has to be reachable.
+//
+// A runner is told about work and never says anything: it claims over HTTP, as it always did. If
+// the core waited for the module's first message before counting the connection, the core would
+// hold nothing for a runner, find nobody to announce work to, and drop the announcement — the one
+// thing the channel was opened for, and it would fail exactly for the module it was built for.
+func TestAModuleThatOnlyListensIsAttachedOnItsConnection(t *testing.T) {
+	f := newModuleFixture(t)
+	channel := f.server.moduleChannel()
+
+	conn := openChannel(t, standUp(t, f), f.moduleToken)
+	_ = conn
+
+	deadline := time.Now().Add(5 * time.Second)
+	for channel.Connected(f.module.ID) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := channel.Connected(f.module.ID); got != 1 {
+		t.Fatalf("a module that said nothing is counted %d times, want 1 — the core will find "+
+			"nobody to announce work to", got)
+	}
+
+	// And it is told: nothing has been said by the module at all.
+	delivered, err := channel.Announce(context.Background(), f.module.ID, Fact{
+		Kind: modulechan.WorkAvailable, Payload: map[string]any{"waiting": 1},
+	})
+	if err != nil {
+		t.Fatalf("announce: %v", err)
+	}
+	if delivered != 1 {
+		t.Errorf("the announcement reached %d of 1 connections", delivered)
+	}
+	if message := readOne(t, conn); message.Kind != modulechan.WorkAvailable {
+		t.Errorf("the module was sent %q", message.Kind)
+	}
+}
+
+// A connection opened with a token the core does not know is refused before it is ever attached:
+// a connection nobody can name is not a connection to anything.
+//
+// And refused with the reason *said*, not only carried in the close frame. A module that is cut off
+// with no word reconnects, is refused again, and never learns anything.
+func TestAChannelOpenedWithATokenNobodyKnowsIsRefused(t *testing.T) {
+	f := newModuleFixture(t)
+	channel := f.server.moduleChannel()
+
+	conn := openChannel(t, standUp(t, f), "this-token-is-not-one")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("the connection was cut off without saying anything: %v", err)
+	}
+	message, err := modulechan.Decode(data)
+	if err != nil {
+		t.Fatalf("the core sent something that is not a message: %v", err)
+	}
+	if message.Kind != modulechan.Refused {
+		t.Fatalf("the connection was answered %q rather than refused", message.Kind)
+	}
+	var refusal modulechan.Refusal
+	if err := message.PayloadInto(&refusal); err != nil {
+		t.Fatalf("read the refusal: %v", err)
+	}
+	if refusal.Reason == "" {
+		t.Error("the refusal says no reason, which is the one thing it is for")
+	}
+
+	// And nothing was attached, because a connection nobody can name is not a connection to
+	// anything. Waited for rather than slept: the core learns of the close on its own goroutine.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := channel.Connected(f.module.ID); got != 0 {
+			t.Fatalf("a refused connection was counted %d times", got)
+		}
+		break
+	}
+}

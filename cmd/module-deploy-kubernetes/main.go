@@ -134,6 +134,19 @@ func main() {
 
 	go heartbeat(ctx, core, cfg.interval, reRegister)
 
+	// The channel to the core, for the questions a page has to have answered before it can
+	// draw anything. A deployment still goes over HTTP, because a deploy narrates itself line
+	// by line and that is a stream rather than an answer — see channel.go for why that one was
+	// left alone.
+	//
+	// Started after registration because the channel authenticates with the token registration
+	// hands back, and it reconnects on its own, so nothing else here has to notice.
+	go serve(ctx, &modulechan.Client{
+		URL:   cfg.coreURL,
+		Token: core.token,
+		Log:   channelLog{},
+	}, core)
+
 	server := &http.Server{
 		Addr:              cfg.listen,
 		Handler:           ownEndpoints(core),

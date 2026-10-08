@@ -59,6 +59,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# How long one package may take before this calls it a hang.
+#
+# Set from what these packages actually take, not from what go defaults to, because the default is
+# ten minutes and a ten-minute hang is indistinguishable from a slow machine. A timeout several
+# times the baseline is a hang worth investigating; it is not slack. The baselines, measured on a
+# fresh database per package:
+#
+#   internal/api                              13s
+#   internal/store                            2s
+#   cmd/module-deploy-kubernetes/deploy      106s   <- the slow one: it stands up clusters
+#   everything else                          under 8s
+#
+# So 150s for the api package is about eleven times its normal, and that is generous on purpose:
+# a machine under load can be three or four times slower than an idle one, and a timeout that fires
+# on a busy afternoon teaches people to re-run rather than to look. DOGIT_TEST_TIMEOUT overrides it
+# for a package that is genuinely slower — on a laptop, or with a cold cache.
+timeout="${DOGIT_TEST_TIMEOUT:-150s}"
+
 failed=0
 for package in "${packages[@]}"; do
   # A name this run owns, made from the package so a leftover is identifiable.
@@ -74,7 +92,7 @@ for package in "${packages[@]}"; do
   created+=("$name")
 
   if ! DOGIT_TEST_DATABASE_URL="${admin_url%/*}/$name?sslmode=disable" \
-       go test "$package" -count=1; then
+       go test "$package" -count=1 -timeout "$timeout"; then
     failed=1
   fi
 done

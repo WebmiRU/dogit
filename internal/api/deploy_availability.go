@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ewolf/dogit/internal/modulechan"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -158,8 +159,8 @@ func (s *Server) handleProjectDeployImagesAvailability(w http.ResponseWriter, r 
 		s.writeError(w, r, fmt.Errorf("could not describe the question: %w", err))
 		return
 	}
-	answer, err := s.callDeployModule(r.Context(), module, http.MethodPost,
-		"/images-availability", body)
+	answer, err := s.askDeployModule(r.Context(), module,
+		modulechan.DeployImagesAvailability, nil, body)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

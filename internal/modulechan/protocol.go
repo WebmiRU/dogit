@@ -78,6 +78,19 @@ const (
 	// channel open.
 	ResolveImage = "registry.resolve"
 
+	// The questions a deploy module answers, each one a thing a page has to know before it can
+	// draw something.
+	//
+	// All of them ask, none of them act: a rollout that is narrating itself line by line is not
+	// in this list, because it is a stream rather than an answer and the channel does not carry
+	// streams. That is a deliberate omission rather than an oversight, and a module reading this
+	// file should not take it for permission to answer a deploy here.
+	DeployImages             = "deploy.images"
+	DeployCurrent            = "deploy.current"
+	DeployDeployments        = "deploy.deployments"
+	DeployImagesAvailability = "deploy.images_availability"
+	DeployTestCluster        = "deploy.clusters.test"
+
 	// Answer says what came of a message the module was sent. Carries the ID of that
 	// message.
 	Answer = "answer"

@@ -239,17 +239,35 @@ func (s *Server) handleModuleChannel(w http.ResponseWriter, r *http.Request) {
 	ctx := context.WithoutCancel(r.Context())
 	ch := s.moduleChannel()
 
-	var client *channelClient
-	defer func() {
-		if client != nil {
-			ch.detach(client)
-		}
-	}()
+	// Attached here rather than on the first message, and that is not a weakening of the rule
+	// below: the token in this header is checked in every message as well, and the connection
+	// attached here is replaced by nothing — a message naming another module still ends it.
+	//
+	// It has to be attached here because a module that only ever listens would otherwise never
+	// be attached at all. A runner is told about work and never says anything: it claims over
+	// HTTP, as it always did. So the core would hold no connection for it, find nobody to tell,
+	// and drop the announcement — which is the one thing the channel was opened for. Waiting for
+	// the module to speak first makes the module's silence the price of being reachable.
+	module, err := s.moduleFromToken(ctx, bearerOf(r))
+	if err != nil {
+		// Refused the same way a bad token in a message is refused, with the reason sent
+		// before the close rather than only inside it. A module cut off with no word
+		// reconnects, is refused again, and never learns anything — and its author has no way
+		// to tell that from a network fault.
+		s.log.Debug("a module channel was refused at the upgrade",
+			"reason", moduleRefusal(err).Reason)
+		s.refuseAndClose(ctx, conn, "", moduleRefusal(err))
+		return
+	}
+	client := ch.attach(ctx, conn, module)
+	s.log.Info("a module opened its channel", "module", client.name,
+		"kind", module.Kind, "endpoint", module.Endpoint)
+	defer ch.detach(client)
 
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
-			if client != nil && !isQuietClose(err) {
+			if !isQuietClose(err) {
 				s.log.Info("a module channel closed", "module", client.name,
 					"for", time.Since(client.since()).Round(time.Second), "error", err)
 			}
@@ -262,6 +280,8 @@ func (s *Server) handleModuleChannel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Checked on every message, including the first, so that a long-lived connection
+		// cannot outlive the token it was opened with.
 		module, err := s.moduleFromToken(ctx, message.Token)
 		if err != nil {
 			// The reason is sent before the connection goes. A module that is cut off
@@ -269,12 +289,6 @@ func (s *Server) handleModuleChannel(w http.ResponseWriter, r *http.Request) {
 			// author of the module has no way to tell that from a network fault.
 			s.refuseAndClose(ctx, conn, message.ID, moduleRefusal(err))
 			return
-		}
-
-		if client == nil {
-			client = ch.attach(ctx, conn, module)
-			s.log.Info("a module opened its channel", "module", client.name,
-				"kind", module.Kind, "endpoint", module.Endpoint)
 		}
 		// A connection that changes which module it is mid-stream is refused rather than
 		// reassigned. It means one token was presented as two, and the answer to that is
@@ -453,4 +467,19 @@ func mustMarshal(value any) json.RawMessage {
 		return json.RawMessage(`null`)
 	}
 	return encoded
+}
+
+// bearerOf is the token in the upgrade's authorization header.
+//
+// Read from the header rather than from anything the connection remembers, because that is the
+// whole point: nothing about "which module is this" may be decided once and kept. This read only
+// decides who to attach the connection to so that messages can be sent down it — every message is
+// checked again, and a message naming a different module ends the connection anyway.
+func bearerOf(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(header) > len(prefix) && strings.EqualFold(header[:len(prefix)], prefix) {
+		return header[len(prefix):]
+	}
+	return ""
 }

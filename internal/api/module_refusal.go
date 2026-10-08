@@ -25,20 +25,23 @@ import (
 // one of those is a decision. Pass both rather than picking between them at the call site, since
 // picking is exactly the mistake this exists to stop being made.
 func moduleRefusalOf(module *models.Integration, asked string, answer []byte, err error) error {
+	// A refusal in the answer: a decision somebody wrote down, kept verbatim.
 	if reason, refused := modulechan.RefusalIn(answer); refused {
 		return fmt.Errorf("the %s module refused: %s", module.Kind, reason)
 	}
 
+	// No refusal and no failure is an answer. Nil here and not an error, because this function
+	// runs on every call and a version that could not tell success from failure would turn every
+	// question the core asks into a failed one.
 	if err == nil {
-		return fmt.Errorf("the %s module answered about %s with something that says nothing about it",
-			module.Kind, asked)
+		return nil
 	}
 
 	// Silence, named as silence, and wrapped rather than replaced: a caller that wants to know
 	// whether the module refused or merely went quiet can ask with errors.Is against ErrNoAnswer,
 	// and a timeout that arrives wrapped is still recognised as the timeout it is.
 	//
-	// One message for a timeout and for a connection that was never there, because the module
+	// One sentence for a timeout and for a connection that was never there, because the module
 	// is in the same position either way: it was not asked in a way that produced an answer.
 	return fmt.Errorf("the %s module did not answer what %s is: %w", module.Kind, asked, err)
 }

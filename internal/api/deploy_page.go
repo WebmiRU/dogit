@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/modulechan"
 	"github.com/ewolf/dogit/internal/pipeline"
 	"github.com/ewolf/dogit/internal/store"
 )
@@ -237,7 +238,7 @@ func (s *Server) handleProjectDeployImages(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	body, err := s.callDeployModule(r.Context(), module, http.MethodGet, "/images?"+query.Encode(), nil)
+	body, err := s.askDeployModule(r.Context(), module, modulechan.DeployImages, query, nil)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -302,7 +303,7 @@ func (s *Server) handleProjectDeployCurrent(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	body, err := s.callDeployModule(r.Context(), module, http.MethodGet, "/current?"+query.Encode(), nil)
+	body, err := s.askDeployModule(r.Context(), module, modulechan.DeployCurrent, query, nil)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -343,7 +344,7 @@ func (s *Server) handleProjectDeployments(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	body, err := s.callDeployModule(r.Context(), module, http.MethodGet, "/deployments?"+query.Encode(), nil)
+	body, err := s.askDeployModule(r.Context(), module, modulechan.DeployDeployments, query, nil)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -412,7 +413,7 @@ func (s *Server) handleTestDeployCluster(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	answer, err := s.callDeployModule(r.Context(), module, http.MethodPost, "/clusters/test", body)
+	answer, err := s.askDeployModule(r.Context(), module, modulechan.DeployTestCluster, nil, body)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -658,51 +659,39 @@ func (s *Server) deployModuleFor(r *http.Request, project *models.Project) (*mod
 	return found, nil
 }
 
-// callDeployModule asks a deploy module something, as that module.
+// askDeployModule asks a deploy module something, over the channel.
 //
-// A short-lived credential scoped to this project, so the module can tell which
-// project's deployments it is being asked about without being told twice. It is not
-// held anywhere: it exists for this request and is over when the answer is.
-func (s *Server) callDeployModule(ctx context.Context, module *models.Integration,
-	method, path string, body []byte) ([]byte, error) {
+// The five questions a page has to have answered before it can draw anything, and nothing else. A
+// deployment and a revert still go over HTTP: they narrate themselves line by line for as long as a
+// rollout takes, which is a stream rather than an answer, and the live log of a deploy is what a
+// person watches while pods come up. Uniformity of transport is worth less than that log.
+//
+// The module opens the channel, so a deploy module the core cannot dial — behind NAT, on a host it
+// has no route to — can still be asked. The timeout is half a minute because a page is waiting on
+// it: a module that cannot answer a question about the past in half a minute is not answering at
+// all.
+func (s *Server) askDeployModule(ctx context.Context, module *models.Integration,
+	kind string, query url.Values, body []byte) ([]byte, error) {
 
-	var reader io.Reader
-	if body != nil {
-		reader = bytes.NewReader(body)
-	}
-
-	request, err := http.NewRequestWithContext(ctx, method,
-		strings.TrimRight(module.Endpoint, "/")+path, reader)
-	if err != nil {
-		return nil, fmt.Errorf("could not address the %s module: %w", module.Kind, err)
-	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-
-	// A deployment can take as long as a rollout, and this is a page request rather
-	// than a job: the answer is about the past, so it is a read and it should be
-	// quick. A module that cannot answer in half a minute is not answering at all.
-	client := &http.Client{Timeout: 30 * time.Second}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("the %s module did not answer: %w", module.Kind, err)
-	}
-	defer response.Body.Close()
-
-	raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if response.StatusCode != http.StatusOK {
-		var refused struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
+	asked := map[string]any{"query": map[string]string{}}
+	if len(query) > 0 {
+		flat := make(map[string]string, len(query))
+		for name, values := range query {
+			if len(values) > 0 {
+				flat[name] = values[0]
+			}
 		}
-		if json.Unmarshal(raw, &refused) == nil && refused.Error.Message != "" {
-			return nil, errBadRequestf("the %s module said: %s", module.Kind, refused.Error.Message)
-		}
-		return nil, fmt.Errorf("the %s module said %s", module.Kind, response.Status)
+		asked["query"] = flat
 	}
-	return raw, nil
+	if len(body) > 0 {
+		asked["body"] = json.RawMessage(body)
+	}
+
+	answer, err := s.moduleChannel().Call(ctx, module, Decision{Kind: kind, Payload: asked}, 30*time.Second)
+	if refused := moduleRefusalOf(module, kind, answer, err); refused != nil {
+		return nil, refused
+	}
+	return answer, nil
 }
 
 // writeRaw passes a module's own JSON on unchanged.
