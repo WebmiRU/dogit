@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -61,6 +62,13 @@ type createResourceRequest struct {
 	Name     string `json:"name"`
 	Origin   string `json:"origin"`
 	Address  string `json:"address"`
+	// ForModuleKind names the kind of module this is for, so that the next one of that kind
+	// to register is given this rather than a database created inside this cluster.
+	//
+	// Optional, and empty means "nobody yet". A resource nobody has claimed is not handed to
+	// whatever module arrives next: somebody described it for a module they had in mind, and
+	// guessing which one is how the wrong module ends up on somebody's production database.
+	ForModuleKind string `json:"for_module_kind,omitempty"`
 }
 
 // handleCreateResource writes down a resource an administrator has described.
@@ -135,13 +143,33 @@ func (s *Server) handleCreateResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wanted := strings.TrimSpace(req.ForModuleKind)
+	if wanted != "" {
+		// Said as a kind exists, not merely as a string: a module kind nobody has registered
+		// is a typo, and a typo here is a resource that waits forever for a module that never
+		// comes, looking like a resource that was described for a module that does.
+		found, err := s.moduleKindRegistered(r.Context(), wanted)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if !found {
+			s.writeError(w, r, errBadRequestf(
+				"no module of kind %q has registered on this instance; check it, because a "+
+					"resource waiting for a kind that never arrives looks exactly like one "+
+					"waiting for a module that has not come back yet", wanted))
+			return
+		}
+	}
+
 	one, err := s.store.Resources().Put(r.Context(), models.Resource{
-		Kind:     kind,
-		Software: strings.ToLower(strings.TrimSpace(req.Software)),
-		Version:  strings.TrimSpace(req.Version),
-		Name:     strings.TrimSpace(req.Name),
-		Origin:   origin,
-		Address:  address,
+		Kind:                kind,
+		Software:            strings.ToLower(strings.TrimSpace(req.Software)),
+		Version:             strings.TrimSpace(req.Version),
+		Name:                strings.TrimSpace(req.Name),
+		Origin:              origin,
+		Address:             address,
+		LastIntegrationKind: wanted,
 	})
 	if err != nil {
 		s.writeError(w, r, err)
@@ -281,4 +309,21 @@ func holderOf(one models.Resource) string {
 	default:
 		return "a module"
 	}
+}
+
+// moduleKindRegistered says whether any module of this kind has ever registered.
+//
+// A resource written down for a kind nobody has is the one mistake here that is invisible: it
+// waits forever, and a list of resources nobody claims is a list somebody stops reading.
+func (s *Server) moduleKindRegistered(ctx context.Context, kind string) (bool, error) {
+	integrations, err := s.store.Integrations().List(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, one := range integrations {
+		if one.Kind == kind {
+			return true, nil
+		}
+	}
+	return false, nil
 }

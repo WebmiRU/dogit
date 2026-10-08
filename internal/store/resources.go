@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/secrets"
@@ -18,7 +20,7 @@ func (s *Store) Resources() *ResourceRepo { return &ResourceRepo{s: s} }
 
 const resourceColumns = `r.id, r.kind, r.software, r.version, r.name, r.origin,
 	r.address, r.integration_id, r.released_at, r.last_integration_id,
-	r.created_at, r.updated_at`
+	r.last_integration_kind, r.created_at, r.updated_at`
 
 // A resource as the list shows it, with the holder's kind and name beside it.
 //
@@ -46,7 +48,7 @@ func (r *ResourceRepo) List(ctx context.Context) ([]models.Resource, error) {
 		)
 		if err := rows.Scan(&one.ID, &one.Kind, &one.Software, &one.Version, &one.Name,
 			&one.Origin, &address, &one.IntegrationID, &one.ReleasedAt,
-			&one.LastIntegrationID, &one.CreatedAt, &one.UpdatedAt,
+			&one.LastIntegrationID, &one.LastIntegrationKind, &one.CreatedAt, &one.UpdatedAt,
 			&moduleKind, &moduleName); err != nil {
 			return nil, fmt.Errorf("read a resource: %w", err)
 		}
@@ -82,9 +84,16 @@ func (r *ResourceRepo) ByID(ctx context.Context, id uuid.UUID) (*models.Resource
 		SELECT `+resourceColumns+`
 		FROM resources r WHERE r.id = $1`, id).Scan(&one.ID, &one.Kind, &one.Software,
 		&one.Version, &one.Name, &one.Origin, &address, &one.IntegrationID, &one.ReleasedAt,
-		&one.LastIntegrationID, &one.CreatedAt, &one.UpdatedAt)
+		&one.LastIntegrationID, &one.LastIntegrationKind, &one.CreatedAt, &one.UpdatedAt)
 	if err != nil {
-		return nil, ErrNotFound
+		// "No such row" and "could not read the row" are told apart, because they are
+		// different answers and collapsing them is how a broken query reads as an empty
+		// shelf. This function used to return "not found" for anything at all, so a missing
+		// column in the list below made every resource on the page say it did not exist.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("read resource %s: %w", id, err)
 	}
 	opened, err := r.openAddress(address)
 	if err != nil {
@@ -118,18 +127,26 @@ func (r *ResourceRepo) Grant(ctx context.Context, id, integrationID uuid.UUID) e
 // This is what removing a module does. The resource stays, sealed, with nothing holding it,
 // and the module it belonged to is written down beside it: somebody looking at an orphan
 // months later is going to ask whose it was, and the answer is not in the module any more.
-func (r *ResourceRepo) Release(ctx context.Context, integrationID uuid.UUID) (*models.Resource, error) {
+func (r *ResourceRepo) Release(ctx context.Context, integrationID uuid.UUID,
+	kind string) (*models.Resource, error) {
 	var one models.Resource
 	err := r.s.pool.QueryRow(ctx, `
 		UPDATE resources SET integration_id = NULL, released_at = now(),
-			last_integration_id = $1, updated_at = now()
-		WHERE integration_id = $1
-		RETURNING id, kind, software, version, name, origin, released_at, last_integration_id,
-			created_at, updated_at`, integrationID).Scan(&one.ID, &one.Kind, &one.Software,
-		&one.Version, &one.Name, &one.Origin, &one.ReleasedAt, &one.LastIntegrationID,
-		&one.CreatedAt, &one.UpdatedAt)
+			last_integration_id = $1, last_integration_kind = $2, updated_at = now()
+		FROM integrations m WHERE m.id = $1
+		  AND resources.integration_id = $1
+		RETURNING resources.id, resources.kind, resources.software, resources.version,
+			resources.name, resources.origin, resources.released_at,
+			resources.last_integration_id, resources.last_integration_kind,
+			resources.created_at, resources.updated_at`, integrationID, kind).
+		Scan(&one.ID, &one.Kind, &one.Software, &one.Version, &one.Name, &one.Origin,
+			&one.ReleasedAt, &one.LastIntegrationID, &one.LastIntegrationKind,
+			&one.CreatedAt, &one.UpdatedAt)
 	if err != nil {
-		return nil, ErrNotFound
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("give up the resource: %w", err)
 	}
 	return &one, nil
 }
@@ -140,12 +157,15 @@ func (r *ResourceRepo) ReleaseByID(ctx context.Context, id uuid.UUID) (*models.R
 	var one models.Resource
 	err := r.s.pool.QueryRow(ctx, `
 		UPDATE resources SET integration_id = NULL, released_at = now(),
-			last_integration_id = integration_id, updated_at = now()
+			last_integration_id = integration_id,
+			last_integration_kind = coalesce((
+				SELECT m.kind FROM integrations m WHERE m.id = resources.integration_id), ''),
+			updated_at = now()
 		WHERE id = $1 AND integration_id IS NOT NULL
 		RETURNING id, kind, software, version, name, origin, released_at, last_integration_id,
-			created_at, updated_at`, id).Scan(&one.ID, &one.Kind, &one.Software,
-		&one.Version, &one.Name, &one.Origin, &one.ReleasedAt, &one.LastIntegrationID,
-		&one.CreatedAt, &one.UpdatedAt)
+			last_integration_kind, created_at, updated_at`, id).Scan(&one.ID, &one.Kind,
+		&one.Software, &one.Version, &one.Name, &one.Origin, &one.ReleasedAt,
+		&one.LastIntegrationID, &one.LastIntegrationKind, &one.CreatedAt, &one.UpdatedAt)
 	if err != nil {
 		return nil, ErrNotFound
 	}
@@ -165,9 +185,13 @@ func (r *ResourceRepo) HeldBy(ctx context.Context, integrationID uuid.UUID) (*mo
 		SELECT `+resourceColumns+`
 		FROM resources r WHERE r.integration_id = $1`, integrationID).Scan(&one.ID, &one.Kind,
 		&one.Software, &one.Version, &one.Name, &one.Origin, &address, &one.IntegrationID,
-		&one.ReleasedAt, &one.LastIntegrationID, &one.CreatedAt, &one.UpdatedAt)
+		&one.ReleasedAt, &one.LastIntegrationID, &one.LastIntegrationKind,
+		&one.CreatedAt, &one.UpdatedAt)
 	if err != nil {
-		return nil, ErrNotFound
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("read the resource of %s: %w", integrationID, err)
 	}
 	opened, err := r.openAddress(address)
 	if err != nil {
@@ -255,10 +279,11 @@ func (r *ResourceRepo) Put(ctx context.Context, one models.Resource) (*models.Re
 	// resource was written before it was.
 	err = r.s.pool.QueryRow(ctx, `
 		INSERT INTO resources (id, kind, software, version, name, origin, address,
-			integration_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			integration_id, last_integration_kind)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING created_at, updated_at`, one.ID, one.Kind, one.Software, one.Version,
-		one.Name, one.Origin, sealed, one.IntegrationID).Scan(&one.CreatedAt, &one.UpdatedAt)
+		one.Name, one.Origin, sealed, one.IntegrationID,
+		one.LastIntegrationKind).Scan(&one.CreatedAt, &one.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("record the resource: %w", err)
 	}

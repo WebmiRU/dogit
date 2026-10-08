@@ -25,6 +25,7 @@ const software = ref('postgresql')
 const version = ref('')
 const name = ref('')
 const address = ref('')
+const forModuleKind = ref('')
 const busy = ref(false)
 const error = ref('')
 
@@ -63,6 +64,7 @@ async function save() {
       name: name.value.trim(),
       origin: 'manual',
       address: address.value.trim(),
+      for_module_kind: forModuleKind.value.trim(),
     })
     notify('Written down. It is sealed, and the list will not show it again.', { type: 'success' })
     await navigateTo('/admin/resources')
@@ -116,6 +118,17 @@ async function save() {
           <input v-model="name" type="text" placeholder="the deploy module's database">
           <span class="muted small">
             Optional, and for you. Nothing resolves through it, so two may share one.
+          </span>
+        </label>
+
+        <label class="field">
+          <span class="label">For which module</span>
+          <input v-model="forModuleKind" type="text" placeholder="deploy:kubernetes">
+          <span class="muted small">
+            Optional, and the most important field here. A module of this kind that has no
+            database is given this one instead of a new one inside this cluster — which is
+            the whole point of describing one. Left empty, it waits: a resource nobody has
+            claimed is not handed to whatever module arrives next.
           </span>
         </label>
 

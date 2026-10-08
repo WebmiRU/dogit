@@ -125,6 +125,38 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 		case integration.DatabaseName != "":
 			s.log.Info("the module already has a database; keeping it",
 				"kind", integration.Kind, "database", integration.DatabaseName)
+
+		// A resource an administrator wrote down for this kind of module. Taken before
+		// anything is created, and this is the whole of "let a module have its own": somebody
+		// writes down a database on a host they already have, or one this instance should
+		// not be able to reach, and the next module of that kind to arrive is given it
+		// rather than a new one inside this cluster.
+		//
+		// Matched on what the resource was last given to, not merely on being free. A free
+		// resource with nothing written about who wanted it is a resource somebody described
+		// for a module that has not arrived yet, and handing it to whatever turns up next is
+		// how the wrong module ends up on somebody's production database.
+		case s.adoptedResource(r.Context(), integration) != nil:
+			adopted := s.adoptedResource(r.Context(), integration)
+			if err := s.store.Resources().Grant(r.Context(), adopted.ID, integration.ID); err != nil {
+				s.log.Warn("the described database could not be given to the module",
+					"kind", integration.Kind, "error", err)
+			} else {
+				s.log.Info("the module was given the database an administrator described",
+					"kind", integration.Kind, "resource", adopted.Coordinate(),
+					"name", adopted.Name)
+			}
+			if err := s.store.Integrations().SetModuleDatabase(r.Context(), integration.ID,
+				adopted.Name, ""); err != nil {
+				s.log.Warn("the database was given but its name could not be recorded",
+					"kind", integration.Kind, "error", err)
+			}
+			database = map[string]any{
+				"url":  adopted.Address,
+				"name": adopted.Name,
+				"role": "",
+			}
+
 		default:
 			provisioned, err := s.store.Integrations().ProvisionModuleDatabase(
 				r.Context(), s.cfg.DatabaseURL, integration.Kind)
@@ -497,7 +529,8 @@ func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
 	// is where it is kept: a module can be reinstalled and given the same database back, with
 	// its data in it.
 	orphaned := ""
-	if released, relErr := s.store.Resources().Release(r.Context(), integration.ID); relErr == nil {
+	if released, relErr := s.store.Resources().Release(r.Context(), integration.ID,
+		integration.Kind); relErr == nil {
 		orphaned = released.Coordinate()
 		if released.Name != "" {
 			orphaned += ` ("` + released.Name + `")`
@@ -2095,6 +2128,38 @@ const (
 // looked up, so that what a resource says it is does not change under it when the cluster
 // underneath is upgraded.
 const DatabaseSoftware = "postgresql"
+
+// adoptedResource is a free database that a module of this kind had before.
+//
+// The reinstall case, and the only one where a resource is not created: a module is removed,
+// its resource is left behind rather than destroyed, and the same kind of module comes back —
+// which is what makes the resource worth keeping at all. It is given the database it had, with
+// its data in it, because a module reinstalled onto an empty database has silently lost
+// everything it was keeping.
+//
+// Matched on the kind rather than on the module's own id, because removing the module deletes
+// the row that id pointed at. Matching on it would make this fire on the first registration
+// and never again, which is precisely the case it exists for.
+//
+// A resource that was never given to anybody is not a candidate. Somebody described it for a
+// module that has not arrived yet, and handing it to whatever turns up next is how the wrong
+// module ends up on somebody's production database. To offer one to a particular module is a
+// deliberate act, made by naming the module's kind when the resource was written down.
+func (s *Server) adoptedResource(ctx context.Context,
+	integration *models.Integration) *models.Resource {
+	free, err := s.store.Resources().Free(ctx)
+	if err != nil {
+		s.log.Warn("the resources this instance is holding could not be read", "error", err)
+		return nil
+	}
+	for _, one := range free {
+		if one.Kind == ResourceKindDatabase &&
+			one.LastIntegrationKind == integration.Kind {
+			return &one
+		}
+	}
+	return nil
+}
 
 func moduleDeclaresSetting(integration *models.Integration, key string) bool {
 	for _, spec := range integration.Capabilities.Settings {

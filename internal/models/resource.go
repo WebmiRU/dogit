@@ -42,11 +42,18 @@ type Resource struct {
 	// never given.
 	IntegrationID *uuid.UUID `json:"integration_id,omitempty"`
 
-	// ReleasedAt is when it was given up, and LastIntegrationID is who had it, kept after the
-	// link is gone. Both exist for the orphan page: "which module used this" is the question
-	// asked about a resource nobody holds, and it is otherwise lost with the module.
-	ReleasedAt        *time.Time `json:"released_at,omitempty"`
-	LastIntegrationID *uuid.UUID `json:"last_integration_id,omitempty"`
+	// ReleasedAt is when it was given up, and LastIntegrationKind is what kind of module had
+	// it, both kept after the link is gone.
+	//
+	// The kind and not the id, because the id does not outlive the module: removing a module
+	// deletes the row the id pointed at, and after that there is nothing to compare against —
+	// so the one case these exist for, a module of the same kind coming back and being given
+	// the database it had with its data in it, would be the one case that never fires.
+	ReleasedAt *time.Time `json:"released_at,omitempty"`
+	// LastIntegrationID is who had it, for the orphan page: "which module used this" is the
+	// question asked about a resource nobody holds. Its row may be gone; the kind is not.
+	LastIntegrationID   *uuid.UUID `json:"last_integration_id,omitempty"`
+	LastIntegrationKind string     `json:"last_integration_kind,omitempty"`
 
 	// ModuleKind and ModuleName are the holder's, read for the list so that a page showing
 	// twenty resources does not become twenty requests. Not stored: a module can be renamed.

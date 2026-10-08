@@ -176,7 +176,7 @@ onMounted(load)
 
     <div class="card">
       <div class="card-body">
-        <NuxtLink to="/resources/new" class="btn btn-small">
+        <NuxtLink to="/admin/resources/new" class="btn btn-small">
           Describe a resource
         </NuxtLink>
         <p class="muted small" style="margin-top: 0.5rem">
