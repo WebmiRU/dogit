@@ -274,3 +274,72 @@ func TestAnAnswerIsNotAFailure(t *testing.T) {
 		t.Errorf("an answer was read as a failure: %v", refusal)
 	}
 }
+
+// What a module receives is the object the core meant to send.
+//
+// This is the shape of a bug that costs more than it looks. A caller that hands Call bytes of
+// JSON it built itself gets those bytes encoded again — as base64, inside a JSON string — and
+// the module answers "this is not a question I can read". The refusal is true, names the shape
+// rather than the mistake, and sends the caller looking for a version mismatch that does not
+// exist. On this instance it meant every deployment was applied by a mutable tag instead of a
+// digest, so the Deployment never changed between runs and no rollout ever happened.
+func TestAPayloadOfBytesArrivesAsTheObjectItWas(t *testing.T) {
+	built, err := json.Marshal(map[string]string{"project": "test/versions", "tag": "abc1234"})
+	if err != nil {
+		t.Fatalf("build the payload: %v", err)
+	}
+
+	sent, err := modulechan.Payload(built)
+	if err != nil {
+		t.Fatalf("payloadOf: %v", err)
+	}
+	if string(sent) != string(built) {
+		t.Fatalf("the payload changed on the way out:\n got %s\nwant %s", sent, built)
+	}
+
+	// And what the module would make of it, which is the question that matters: an object
+	// with the fields in it, not a string.
+	var asked struct {
+		Project string `json:"project"`
+		Tag     string `json:"tag"`
+	}
+	if err := json.Unmarshal(sent, &asked); err != nil {
+		t.Fatalf("the module could not read the payload: %v", err)
+	}
+	if asked.Project != "test/versions" || asked.Tag != "abc1234" {
+		t.Errorf("the payload arrived as %#v", asked)
+	}
+}
+
+// RawMessage and bytes mean the same thing, and a value still gets encoded. All three forms are
+// in use by callers in this package and none of them is a mistake.
+func TestEveryPayloadFormArrivesReadable(t *testing.T) {
+	want := map[string]string{"image": "registry.test/versions"}
+
+	for name, payload := range map[string]any{
+		"a value":     want,
+		"raw message": json.RawMessage(`{"image":"registry.test/versions"}`),
+		"bytes":       []byte(`{"image":"registry.test/versions"}`),
+		"nothing":     nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sent, err := modulechan.Payload(payload)
+			if err != nil {
+				t.Fatalf("payloadOf: %v", err)
+			}
+			if name == "nothing" {
+				if len(sent) != 0 {
+					t.Errorf("a command with no payload sent %s", sent)
+				}
+				return
+			}
+			var got map[string]string
+			if err := json.Unmarshal(sent, &got); err != nil {
+				t.Fatalf("unreadable: %s", sent)
+			}
+			if got["image"] != want["image"] {
+				t.Errorf("arrived as %#v", got)
+			}
+		})
+	}
+}

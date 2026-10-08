@@ -1230,23 +1230,15 @@ func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image, 
 		return "", err
 	}
 
-	body, err := json.Marshal(map[string]string{
-		"project": job.ProjectPath,
-		"image":   repository,
-		"tag":     tag,
-		"token":   token,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	// Over the channel, not over HTTP: the module opens the connection, so a registry the
-	// core cannot dial — behind NAT, on a host it has no route to — can still be asked. The
-	// question is the same one the HTTP endpoint answers, and both go through the same code
-	// in the module, so the two cannot answer differently.
+	// The question as a value, not as bytes of JSON it built itself.
 	answer, err := s.moduleChannel().Call(ctx, registry, Decision{
-		Kind:    modulechan.ResolveImage,
-		Payload: body,
+		Kind: modulechan.ResolveImage,
+		Payload: map[string]string{
+			"project": job.ProjectPath,
+			"image":   repository,
+			"tag":     tag,
+			"token":   token,
+		},
 	}, 30*time.Second)
 	if refused := moduleRefusalOf(registry, "what that tag points at", answer, err); refused != nil {
 		return "", refused

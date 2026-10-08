@@ -80,7 +80,7 @@ func (ch *ModuleChannel) Call(ctx context.Context, module *models.Integration,
 	id := ch.expect(wait)
 	defer ch.forget(id)
 
-	body, err := json.Marshal(decision.Payload)
+	body, err := modulechan.Payload(decision.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode a %q command: %w", decision.Kind, err)
 	}
