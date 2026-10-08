@@ -83,7 +83,7 @@ onMounted(async () => {
             <!-- A place that only a tag can reach says so here rather than by its
                  absence: "every run" next to production would be the wrong thing to
                  read, and the rule is what stops it, not the prose. -->
-            <span v-if="place.tag_only" class="badge badge-neutral">by tag only</span>
+            <span v-if="place.tag_only" class="badge badge-neutral">By tag only</span>
           </td>
           <!-- Who deploys it and where it goes: the module is the one doing the work,
                the place is the row of its own settings that says where in the cluster

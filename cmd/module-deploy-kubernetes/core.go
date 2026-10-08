@@ -42,9 +42,10 @@ type coreClient struct {
 type registrationAnswer struct {
 	Integration json.RawMessage `json:"integration"`
 	Token       string          `json:"token"`
-	// Database is the parts of one database, not a connection string. See databaseParts.
-	Database          *databaseParts `json:"database"`
-	HeartbeatInterval string         `json:"heartbeat_interval"`
+	// Resources are this module's slots, filled, keyed by the name the manifest asked
+	// under. See resourceHandover.
+	Resources         map[string]resourceHandover `json:"resources"`
+	HeartbeatInterval string                      `json:"heartbeat_interval"`
 }
 
 // register introduces this module, or introduces it again.
@@ -82,8 +83,8 @@ func (c *coreClient) register(ctx context.Context, token, name, endpoint string)
 	if err := json.Unmarshal(data, &answer); err != nil {
 		return "", fmt.Errorf("the core's answer could not be read: %w", err)
 	}
-	if answer.Database != nil && c.databaseURL == "" {
-		assembled, err := answer.Database.connectionString()
+	if c.databaseURL == "" {
+		assembled, err := applyHandover(&answer)
 		if err != nil {
 			return "", err
 		}
@@ -92,12 +93,36 @@ func (c *coreClient) register(ctx context.Context, token, name, endpoint string)
 	return answer.Token, nil
 }
 
-// databaseParts is one database, as the core describes it.
+// historySlot is the name this module asks its database under, and the only one it asks for.
 //
-// Keys are the core's own words for the parts and are written out rather than taken as a map, so
-// that a core which renames or drops one stops compiling here instead of handing this module a
-// URL with an empty user in it.
-type databaseParts struct {
+// Named because the core keys the handover by it, and the name is this module's own: the core
+// carries whatever a module calls its needs without knowing what they are for. Renaming it
+// here without renaming it in the manifest below would leave the module asking for nothing.
+const historySlot = "history"
+
+// applyHandover turns this module's slot in a registration answer into a connection string.
+//
+// The slot is required: without a database this module still deploys and still answers, and
+// records nothing — which from the outside is a module that has never deployed anything. So a
+// handover without it is refused here, where the administrator installing it can read why,
+// rather than accepted and carried on from, which is what a missing field used to do.
+func applyHandover(answer *registrationAnswer) (string, error) {
+	given, ok := answer.Resources[historySlot]
+	if !ok {
+		return "", fmt.Errorf("the core registered this module and gave it no %q, and without "+
+			"a database it deploys and remembers nothing — that failure looks exactly like a "+
+			"module that has never deployed anything", historySlot)
+	}
+	return given.connectionString()
+}
+
+// resourceHandover is one resource, as the core describes it: its parts, not a connection
+// string. Assembling that string is this module's business — see connectionString.
+//
+// The payload keys are written out rather than taken as a map, so that a core which renames
+// or drops one stops compiling here rather than handing this module a DSN with an empty user
+// in it. A slot this module did not ask for, or did not get, is simply absent from the map.
+type resourceHandover struct {
 	Kind    string `json:"kind"`
 	Name    string `json:"name"`
 	Role    string `json:"role"`
@@ -118,7 +143,7 @@ type databaseParts struct {
 //
 // Every part is required and said so by name. A half-filled DSN is the same string as an empty
 // one to the driver, and the resulting error names a socket rather than a missing field.
-func (d *databaseParts) connectionString() (string, error) {
+func (d *resourceHandover) connectionString() (string, error) {
 	missing := []string{}
 	for _, part := range []struct{ name, value string }{
 		{"host", d.Payload.Host},

@@ -33,6 +33,78 @@ const (
 	ScopeDeployWrite = "deploy:write"
 )
 
+// ResourceNeed is one slot a module needs filled, named by the module.
+//
+// The name is the module's own and the core only carries it, because only the module knows
+// what it will do with the thing. A registry calling its store `blobs` is describing its own
+// internals, and the core has no business renaming it to `object_store_1` and then having to
+// be told which one that was.
+type ResourceNeed struct {
+	// Key names the slot, and is the key this need is answered under.
+	Key string `json:"key"`
+
+	// Kind is the class wanted: db, s3. Required when there is nothing to compare against.
+	Kind string `json:"kind"`
+
+	// Software is the piece of software inside that class, and Version a number against it.
+	// Empty means the module does not care which, and nothing is refused on that account.
+	Software string `json:"software,omitempty"`
+	Version  string `json:"version,omitempty"`
+
+	// Required says whether the module can work without it. It is the only word here that
+	// changes what anybody is allowed to do afterwards.
+	Required bool `json:"required,omitempty"`
+}
+
+// Needs are the slots this module wants filled, whichever way it asked.
+//
+// The shorthand is resolved here rather than at every place that reads it, so that there is
+// one answer to "what does this module want" rather than one per caller — and callers here
+// already disagree about whether `database: true` means a required database or a hint.
+//
+// A need with no key gets one derived from its kind, because a slot nobody can name is a slot
+// the module cannot ask for by name in the answer. A database is `database` and anything else
+// is its own kind, which is enough to be addressable and does not try to be clever.
+func (m Manifest) Needs() []ResourceNeed {
+	if len(m.Resources) > 0 {
+		out := make([]ResourceNeed, 0, len(m.Resources))
+		for _, need := range m.Resources {
+			if need.Key == "" {
+				need.Key = defaultNeedKey(need.Kind)
+			}
+			out = append(out, need)
+		}
+		return out
+	}
+	if m.Database {
+		return []ResourceNeed{{
+			Key:      "database",
+			Kind:     "db",
+			Software: "postgresql",
+			Required: true,
+		}}
+	}
+	return nil
+}
+
+// WantsDatabase says whether any of this module's needs is a database, which is what several
+// parts of the core still ask about specifically.
+func (m Manifest) WantsDatabase() bool {
+	for _, need := range m.Needs() {
+		if need.Kind == "db" {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultNeedKey(kind string) string {
+	if kind == "db" {
+		return "database"
+	}
+	return kind
+}
+
 // Manifest is what a module reports about itself at registration time.
 type Manifest struct {
 	// Version is the module's own version string.
@@ -48,7 +120,33 @@ type Manifest struct {
 	Description string `json:"description,omitempty"`
 	// Database asks the core to provision a database in the shared cluster when the
 	// module registers. The credentials arrive once, in the registration response.
+	//
+	// Kept, and kept working, because it is the shorthand for the one thing almost every
+	// module needs and a module that has been running for a year should not stop working
+	// because the core grew a way of saying the same thing. It is exactly Resources with a
+	// single required slot keyed `database`, and Resources takes precedence when both are
+	// present.
 	Database bool `json:"database,omitempty"`
+
+	// Resources are the things this module needs in order to work, one per slot.
+	//
+	// A slot rather than a kind, because a module can want two of the same kind — a registry
+	// with a database for its tags and an object store for its blobs, and later two object
+	// stores, one readable by anyone and one not. A kind cannot name those apart; a key can,
+	// and the key is what the module asks for by name in the response.
+	//
+	// Which of these is the rule, and it is worth being exact about it, because the wrong
+	// half is the obvious one: a resource belongs to one module and is never shared. Two
+	// modules deciding what is in one database means nobody can say afterwards whose `users`
+	// table was there first. What is *not* forbidden is a module holding several resources —
+	// one module cannot have "only one resource" as a rule, because a module with a database
+	// and a store is not sharing anything with anybody.
+	//
+	// Required says whether the module can work without it, and it decides what the core may
+	// do about it afterwards: an optional slot may be emptied by an administrator, and a
+	// required one may not, because taking away a database a module needs leaves a module
+	// that runs and quietly forgets everything it deployed.
+	Resources []ResourceNeed `json:"resources,omitempty"`
 
 	// Uninstall describes what this module needs to be told before it removes
 	// itself. The core renders these and passes the chosen keys back, and knows

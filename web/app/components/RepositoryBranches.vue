@@ -77,8 +77,8 @@ async function remove(name: string) {
           >
             {{ branch.name }}
           </NuxtLink>
-          <span v-if="isDefault(branch.name)" class="badge">default</span>
-          <span v-if="branch.name === refName" class="badge">current</span>
+          <span v-if="isDefault(branch.name)" class="badge">Default</span>
+          <span v-if="branch.name === refName" class="badge">Current</span>
           <span class="meta mono">{{ branch.target.slice(0, 8) }}</span>
           <!-- The default branch is not offered: the server refuses it, and a
                button that always fails reads as a broken page. -->

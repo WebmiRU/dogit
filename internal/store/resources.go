@@ -26,8 +26,8 @@ func (s *Store) Resources() *ResourceRepo { return &ResourceRepo{s: s} }
 // where a thing is stops before it.
 const resourceColumns = `r.id, r.kind, r.software, r.version, r.name, r.origin,
 	r.host, r.port, r.database_name, r.username, r.endpoint, r.region, r.bucket,
-	r.access_key, r.secret, r.integration_id, r.released_at, r.last_integration_id,
-	r.last_integration_kind, r.created_at, r.updated_at`
+	r.access_key, r.secret, r.integration_id, r.need_key, r.released_at,
+	r.last_integration_id, r.last_integration_kind, r.created_at, r.updated_at`
 
 // scanResource reads one row in the order resourceColumns names, with the sealed half left
 // unopened unless the caller asked for it.
@@ -52,7 +52,7 @@ func (r *ResourceRepo) scanResource(row pgx.Row, withSecret bool) (*models.Resou
 	if err := row.Scan(&one.ID, &one.Kind, &one.Software, &one.Version, &one.Name, &one.Origin,
 		&plain.host, &port, &plain.databaseName, &plain.username, &plain.endpoint,
 		&plain.region, &plain.bucket, &plain.accessKey, &sealed, &one.IntegrationID,
-		&one.ReleasedAt, &one.LastIntegrationID, &one.LastIntegrationKind,
+		&one.NeedKey, &one.ReleasedAt, &one.LastIntegrationID, &one.LastIntegrationKind,
 		&one.CreatedAt, &one.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func (r *ResourceRepo) List(ctx context.Context) ([]models.Resource, error) {
 		if err := rows.Scan(&one.ID, &one.Kind, &one.Software, &one.Version, &one.Name,
 			&one.Origin, &plain.host, &port, &plain.databaseName, &plain.username,
 			&plain.endpoint, &plain.region, &plain.bucket, &plain.accessKey, &sealed,
-			&one.IntegrationID, &one.ReleasedAt, &one.LastIntegrationID,
+			&one.IntegrationID, &one.NeedKey, &one.ReleasedAt, &one.LastIntegrationID,
 			&one.LastIntegrationKind, &one.CreatedAt, &one.UpdatedAt,
 			&moduleKind, &moduleName); err != nil {
 			// Named rather than swallowed: a resource this instance cannot read is one it
@@ -196,10 +196,11 @@ func (r *ResourceRepo) ByID(ctx context.Context, id uuid.UUID) (*models.Resource
 // resource for the same module impossible, so the caller finds out from the constraint rather
 // than from having read the table first and been wrong. A module with a resource and asking
 // for another is told so; it is not given one and a spare.
-func (r *ResourceRepo) Grant(ctx context.Context, id, integrationID uuid.UUID) error {
+func (r *ResourceRepo) Grant(ctx context.Context, id, integrationID uuid.UUID, needKey string) error {
 	tag, err := r.s.pool.Exec(ctx, `
-		UPDATE resources SET integration_id = $2, released_at = NULL, updated_at = now()
-		WHERE id = $1 AND (integration_id IS NULL OR integration_id = $2)`, id, integrationID)
+		UPDATE resources SET integration_id = $2, need_key = $3, released_at = NULL,
+			updated_at = now()
+		WHERE id = $1 AND (integration_id IS NULL OR integration_id = $2)`, id, integrationID, needKey)
 	if err != nil {
 		return fmt.Errorf("grant resource %s: %w", id, err)
 	}
@@ -278,14 +279,14 @@ func (r *ResourceRepo) ReleaseByID(ctx context.Context, id uuid.UUID) (*models.R
 const (
 	returnColumnsPlain = `id, kind, software, version, name, origin,
 		host, port, database_name, username, endpoint, region, bucket, access_key, secret,
-		integration_id, released_at, last_integration_id, last_integration_kind,
+		integration_id, need_key, released_at, last_integration_id, last_integration_kind,
 		created_at, updated_at`
 
 	returnColumnsJoined = `resources.id, resources.kind, resources.software, resources.version,
 		resources.name, resources.origin, resources.host, resources.port,
 		resources.database_name, resources.username, resources.endpoint, resources.region,
 		resources.bucket, resources.access_key, resources.secret, resources.integration_id,
-		resources.released_at, resources.last_integration_id,
+		resources.need_key, resources.released_at, resources.last_integration_id,
 		resources.last_integration_kind, resources.created_at, resources.updated_at`
 )
 
@@ -324,6 +325,52 @@ func (r *ResourceRepo) ByIDFor(ctx context.Context, integrationID uuid.UUID) (*m
 		return nil, fmt.Errorf("read the resource of %s: %w", integrationID, err)
 	}
 	return one, nil
+}
+
+// ByModule lists what a module holds, one row per resource.
+//
+// A module may hold several, which is the whole reason this exists and the reason there is no
+// single-resource accessor beside it: a registry with a database and an object store is one
+// module holding two things, and a function returning "the resource" would have to pick.
+func (r *ResourceRepo) ByModule(ctx context.Context, integrationID uuid.UUID) ([]models.Resource, error) {
+	rows, err := r.s.pool.Query(ctx, `
+		SELECT `+resourceColumns+` FROM resources r
+		WHERE r.integration_id = $1 ORDER BY r.created_at`, integrationID)
+	if err != nil {
+		return nil, fmt.Errorf("read the resources of %s: %w", integrationID, err)
+	}
+	defer rows.Close()
+
+	out := []models.Resource{}
+	for rows.Next() {
+		one, err := r.scanResource(rows, false)
+		if err != nil {
+			return nil, fmt.Errorf("read a resource of %s: %w", integrationID, err)
+		}
+		out = append(out, *one)
+	}
+	return out, rows.Err()
+}
+
+// AwaitingKind lists the resources somebody described for a kind of module that has not taken
+// them yet.
+//
+// Named for the module's kind rather than for an id, for the same reason adoption is matched on
+// the kind: a module's row is gone by the time its resource is free, so there is nothing to
+// match an id against. It is also what makes this the right question to ask — "what is waiting
+// for a kubernetes module" is what somebody reads before installing one.
+func (r *ResourceRepo) AwaitingKind(ctx context.Context, kind string) ([]models.Resource, error) {
+	free, err := r.Free(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []models.Resource{}
+	for _, one := range free {
+		if one.LastIntegrationKind == kind {
+			out = append(out, one)
+		}
+	}
+	return out, nil
 }
 
 // Free lists resources nobody holds: what the removal of a module left behind, and what an
@@ -420,13 +467,14 @@ func (r *ResourceRepo) Put(ctx context.Context, one models.Resource) (*models.Re
 	err = r.s.pool.QueryRow(ctx, `
 		INSERT INTO resources (id, kind, software, version, name, origin,
 			host, port, database_name, username, endpoint, region, bucket, access_key,
-			secret, integration_id, last_integration_kind)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			secret, integration_id, need_key, last_integration_kind)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		RETURNING created_at, updated_at`,
 		one.ID, one.Kind, one.Software, one.Version, one.Name, one.Origin,
 		plain["host"], numberOrNil(plain["port"]), plain["database_name"], plain["username"],
 		plain["endpoint"], plain["region"], plain["bucket"], plain["access_key"],
-		sealed, one.IntegrationID, one.LastIntegrationKind).Scan(&one.CreatedAt, &one.UpdatedAt)
+		sealed, one.IntegrationID, one.NeedKey, one.LastIntegrationKind).
+		Scan(&one.CreatedAt, &one.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("record the resource: %w", err)
 	}

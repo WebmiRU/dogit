@@ -52,6 +52,19 @@ type Resource struct {
 	// never given.
 	IntegrationID *uuid.UUID `json:"integration_id,omitempty"`
 
+	// NeedKey is which of the holding module's needs this resource answers, by the key the
+	// module named it.
+	//
+	// Recorded rather than assumed, because a module may hold several resources and the kind
+	// alone does not say which need got which: a registry with a database and an object store
+	// is one module holding two resources, and nothing in either row distinguishes the one
+	// holding its tags from the one holding its blobs.
+	//
+	// Empty is the ordinary answer for a resource nobody holds, and for a module that asked
+	// the old `database: true` — a shorthand with one unnamed slot, where there is nothing to
+	// tell.
+	NeedKey string `json:"need_key,omitempty"`
+
 	// ReleasedAt is when it was given up, and LastIntegrationKind is what kind of module had
 	// it, both kept after the link is gone.
 	//

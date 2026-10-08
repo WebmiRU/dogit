@@ -85,7 +85,7 @@ func TestADescribedDatabaseLivesAndDiesWithoutLosingItsSecret(t *testing.T) {
 	}
 
 	// The module is given it, and sees the same secret.
-	if err := resources.Grant(t.Context(), written.ID, module.ID); err != nil {
+	if err := resources.Grant(t.Context(), written.ID, module.ID, "database"); err != nil {
 		t.Fatalf("give the resource to the module: %v", err)
 	}
 	held, err := resources.HeldBy(t.Context(), module.ID)
@@ -158,7 +158,7 @@ func TestRemovingAModuleLeavesItsDatabaseBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write the resource down: %v", err)
 	}
-	if err := resources.Grant(t.Context(), written.ID, module.ID); err != nil {
+	if err := resources.Grant(t.Context(), written.ID, module.ID, "database"); err != nil {
 		t.Fatalf("give the resource to the module: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestRemovingAModuleLeavesItsDatabaseBehind(t *testing.T) {
 	if candidate == nil {
 		t.Fatalf("no free resource names %q as its last kind of module", next.Kind)
 	}
-	if err := resources.Grant(t.Context(), candidate.ID, next.ID); err != nil {
+	if err := resources.Grant(t.Context(), candidate.ID, next.ID, "database"); err != nil {
 		t.Fatalf("give the free resource to the module that came back: %v", err)
 	}
 	if _, err := resources.HeldBy(t.Context(), next.ID); err != nil {
@@ -379,7 +379,7 @@ func TestAModuleWithNoResourceBehindItsDatabaseNameHoldsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write a resource down: %v", err)
 	}
-	if err := resources.Grant(t.Context(), written.ID, module.ID); err != nil {
+	if err := resources.Grant(t.Context(), written.ID, module.ID, "database"); err != nil {
 		t.Fatalf("give it to the module: %v", err)
 	}
 	held, err = resources.IsHeldBy(t.Context(), module.ID)

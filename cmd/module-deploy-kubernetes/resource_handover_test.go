@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-// The core describes a database as its parts and this module assembles them. A password with an
+// The core describes a resource as its parts and this module assembles a DSN from them. A password with an
 // `@` in it is legal in a database, so it must not be going through URL escaping — this test
 // exists because getting that wrong produces "password authentication failed" on the one
 // database whose whole purpose is to be reached.
-func TestDatabasePartsAssemblesADSNThatSurvivesAwkwardPasswords(t *testing.T) {
-	parts := &databaseParts{Kind: "db", Name: "dogit_deploy"}
+func TestResourceHandoverAssemblesADSNThatSurvivesAwkwardPasswords(t *testing.T) {
+	parts := &resourceHandover{Kind: "db", Name: "dogit_deploy"}
 	parts.Payload.Host = "postgres"
 	parts.Payload.Port = "5432"
 	parts.Payload.Database = "dogit_deploy"
@@ -33,8 +33,8 @@ func TestDatabasePartsAssemblesADSNThatSurvivesAwkwardPasswords(t *testing.T) {
 
 // A part left out is named. Without this the module would hand its driver a DSN missing a field
 // and the driver would refuse a socket, which says nothing about the field that was absent.
-func TestDatabasePartsNamesEveryPartItIsMissing(t *testing.T) {
-	parts := &databaseParts{}
+func TestResourceHandoverNamesEveryPartItIsMissing(t *testing.T) {
+	parts := &resourceHandover{}
 	_, err := parts.connectionString()
 	if err == nil {
 		t.Fatal("a database with no parts at all was assembled into a connection string")
@@ -48,8 +48,8 @@ func TestDatabasePartsNamesEveryPartItIsMissing(t *testing.T) {
 
 // One part missing is one part missing. Saying all five were absent when one was would send
 // somebody looking for four problems that are not there.
-func TestDatabasePartsNamesOnlyWhatIsActuallyMissing(t *testing.T) {
-	parts := &databaseParts{}
+func TestResourceHandoverNamesOnlyWhatIsActuallyMissing(t *testing.T) {
+	parts := &resourceHandover{}
 	parts.Payload.Host = "postgres"
 	parts.Payload.Port = "5432"
 	parts.Payload.Database = "dogit_deploy"
@@ -100,8 +100,8 @@ func missingParts(t *testing.T, err error) []string {
 
 // A blank value is an absent one. A core that sent `"host": "  "` has told this module nothing,
 // and treating it as told something produces a connection to a host named by two spaces.
-func TestDatabasePartsTreatsBlankAsMissing(t *testing.T) {
-	parts := &databaseParts{}
+func TestResourceHandoverTreatsBlankAsMissing(t *testing.T) {
+	parts := &resourceHandover{}
 	parts.Payload.Host = "   "
 	parts.Payload.Port = "5432"
 	parts.Payload.Database = "dogit_deploy"
@@ -110,5 +110,43 @@ func TestDatabasePartsTreatsBlankAsMissing(t *testing.T) {
 
 	if _, err := parts.connectionString(); err == nil {
 		t.Fatal("a host of three spaces was accepted as a host")
+	}
+}
+
+// The core handed over no database at all. This module still deploys without one and records
+// nothing, which from the outside is a module that has never deployed anything — the exact
+// shape of failure the previous code was written to refuse, and which it refused by carrying
+// on.
+func TestAModuleThatAsksForADatabaseAndGetsNoneIsRefused(t *testing.T) {
+	answer := registrationAnswer{Resources: map[string]resourceHandover{}}
+
+	_, err := applyHandover(&answer)
+	if err == nil {
+		t.Fatal("a module with no database registered as though it had one")
+	}
+	if !strings.Contains(err.Error(), historySlot) {
+		t.Errorf("the refusal does not name the slot that was not filled: %v", err)
+	}
+}
+
+// A handover that arrived but lost part of itself on the way. Refused by name rather than
+// assembled into a DSN with a hole in it, which fails at connect time as a refused socket.
+func TestAHandoverMissingAPartIsRefused(t *testing.T) {
+	given := resourceHandover{}
+	given.Payload.Host = "postgres"
+	given.Payload.Port = "5432"
+	given.Payload.Database = "dogit_deploy"
+	// No user, no password.
+
+	answer := registrationAnswer{Resources: map[string]resourceHandover{historySlot: given}}
+	_, err := applyHandover(&answer)
+	if err == nil {
+		t.Fatal("a handover with no user and no password was accepted")
+	}
+	named := err.Error()
+	for _, want := range []string{"user", "password"} {
+		if !strings.Contains(named, want) {
+			t.Errorf("%q is not named as missing in %v", want, named)
+		}
 	}
 }

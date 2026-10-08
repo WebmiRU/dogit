@@ -16,6 +16,19 @@ const moduleId = computed(() => String(route.params.id ?? ''))
  * resource, it has a name nobody kept a resource for, or it declared from the start that it
  * keeps its data elsewhere. The address is not here and is not fetched — it is a password.
  */
+interface ModuleResource {
+  id: string
+  kind: string
+  software?: string
+  version?: string
+  name?: string
+  origin: 'managed' | 'manual' | string
+  /** Where it is. Never a secret — a page can show a host without opening a password. */
+  parts?: Record<string, string>
+  created_at: string
+  released_at?: string
+}
+
 interface ModuleDatabase {
   /** Whether the module asked the core for a database when it registered. */
   wants_one: boolean
@@ -23,16 +36,13 @@ interface ModuleDatabase {
   name: string
   role?: string
   /** The resource being held for it, absent when there is none. */
-  resource?: {
-    id: string
-    kind: string
-    software?: string
-    version?: string
-    name?: string
-    origin: 'managed' | 'manual' | string
-    created_at: string
-  }
+  resource?: ModuleResource
+  /** Resources somebody described for this kind of module that nothing holds yet. */
+  awaiting?: ModuleResource[]
 }
+
+/** Whether this module is one that asks for a resource at all, from its own manifest. */
+const wantsResource = computed(() => Boolean(module.value?.manifest?.database))
 
 const module = ref<ModuleRow | null>(null)
 const database = ref<ModuleDatabase | null>(null)
@@ -73,6 +83,11 @@ const tabNames = computed(() => [
   // is settings anybody inherits, the other is what happened to a running system and
   // belongs to whoever may change one.
   ...(moduleKind.value.startsWith('deploy:') ? ['deployments'] : []),
+  // What this module's data lives in. Its own tab rather than a line above the settings
+  // form, because there is more to say about it than one line holds: what it is, where it
+  // is, where it came from, what is waiting for it, and — the part that matters — that a
+  // module which asked for a database and has none is a gap rather than a choice.
+  ...(wantsResource.value || database.value?.resource ? ['resources'] : []),
   'removal',
 ])
 
@@ -81,6 +96,7 @@ const tabTitles: Record<string, string> = {
   images: 'Images',
   notifications: 'Notifications',
   deployments: 'Deployments',
+  resources: 'Resources',
   settings: 'Settings',
   removal: 'Removal',
 }
@@ -167,7 +183,7 @@ const databaseLine = computed(() => {
   if (held) {
     return {
       name: held.name || db.name || 'unnamed',
-      badges: [held.kind, held.software, held.version].filter(Boolean).join(':'),
+      badges: [held.kind, held.software, held.version].filter(Boolean).join(':') || '',
       // Short, because this sits in a row with other facts in it, and a badge that needs
       // two lines stops being a badge. The consequence goes in the note below instead.
       origin: held.origin === 'manual'
@@ -190,7 +206,7 @@ const databaseLine = computed(() => {
     // on the Resources page", and a reader who cannot get there will assume the page is broken.
     return {
       name: db.name,
-      badges: [],
+      badges: '',
       origin: '',
       since: '',
       link: '',
@@ -203,7 +219,7 @@ const databaseLine = computed(() => {
   if (db.wants_one) {
     return {
       name: 'none',
-      badges: [],
+      badges: '',
       origin: '',
       since: '',
       link: '',
@@ -215,7 +231,7 @@ const databaseLine = computed(() => {
 
   return {
     name: 'none',
-    badges: [],
+    badges: '',
     origin: '',
     since: '',
     link: '',
@@ -283,7 +299,7 @@ const storageFraction = computed(() => {
             <span class="badge" :class="module.status === 'online' ? 'badge-green' : 'badge-neutral'">
               {{ module.status }}
             </span>
-            <span v-if="!module.enabled" class="badge badge-warning">forbidden</span>
+            <span v-if="!module.enabled" class="badge badge-warning">Forbidden</span>
           </dd>
 
           <dt>Address</dt>
@@ -373,34 +389,6 @@ const storageFraction = computed(() => {
 
       <!-- What this module is configured with, at every scope it is configured at. -->
       <section v-else-if="tab === 'settings'">
-        <!-- Where its data lives, above the form that decides how it behaves.
-             Information, not a control: the address is a password and the database belongs to
-             the module, so there is nothing here to change and nothing to change it from.
-             Buildkit was the module that made this asked for — it declares no database, has
-             none, and used to say nothing about either, which from this page looked exactly
-             like a module holding one and keeping quiet. -->
-        <dl v-if="databaseLine" class="facts facts-db">
-          <dt>Database</dt>
-          <dd>
-            <span class="mono">{{ databaseLine.name }}</span>
-            <span v-if="databaseLine.badges" class="badge">{{ databaseLine.badges }}</span>
-            <span v-if="databaseLine.origin" class="badge badge-neutral">
-              {{ databaseLine.origin }}
-            </span>
-            <span v-if="databaseLine.since" class="muted">
-              · since {{ formatDate(databaseLine.since) }}
-            </span>
-            <NuxtLink
-              v-if="databaseLine.link"
-              :to="`/admin/resources`"
-              class="muted"
-            >· on the Resources page</NuxtLink>
-            <span v-if="databaseLine.note" class="muted small">
-              — {{ databaseLine.note }}
-            </span>
-          </dd>
-        </dl>
-
         <div v-if="!module.manifest?.settings?.length" class="card empty">
           This module declared no settings.
         </div>
@@ -419,6 +407,17 @@ const storageFraction = computed(() => {
             />
           </div>
         </div>
+      </section>
+
+      <!-- Where this module's data lives, and what is waiting for it. -->
+      <section v-else-if="tab === 'resources'">
+        <ModuleResources
+          :held="database?.resource ?? null"
+          :awaiting="database?.awaiting ?? []"
+          :wants-one="database?.wants_one ?? false"
+          :recorded-name="database?.name ?? ''"
+          :role="database?.role ?? ''"
+        />
       </section>
 
       <!-- Instance-wide: every project's deployments through this module, which is

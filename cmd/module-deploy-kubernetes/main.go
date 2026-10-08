@@ -178,11 +178,22 @@ func manifest() map[string]any {
 		// undo it, and it can only decide that about scopes a module says it has.
 		"scopes": []string{"deploy:read", "deploy:write"},
 
-		// It asks the core for a database of its own. The history is this module's
-		// business and nobody else's, and a module without one would be asking the core
-		// to keep deployment records — which is how the core starts knowing what a
-		// cluster is.
-		"database": true,
+		// It asks the core for a database of its own, under the name it calls it by. The
+		// history is this module's business and nobody else's, and a module without one
+		// would be asking the core to keep deployment records — which is how the core
+		// starts knowing what a cluster is.
+		//
+		// Named and required rather than the bare `database: true` this used to ask for:
+		// a module may want several resources, and the name is what tells the core which
+		// of them this one is. Required, because this module works without a database and
+		// records nothing — which is a module that looks like it has never deployed
+		// anything, and is told so here instead.
+		"resources": []map[string]any{{
+			"key":      historySlot,
+			"kind":     "db",
+			"software": "postgresql",
+			"required": true,
+		}},
 
 		"settings": []map[string]any{
 			{

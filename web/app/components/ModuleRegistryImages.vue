@@ -295,7 +295,7 @@ onBeforeUnmount(() => stopWatching?.())
     </div>
 
     <div v-else class="summary">
-      <span class="badge badge-green">online</span>
+      <span class="badge badge-green">Online</span>
       <span>{{ groups.length }} {{ groups.length === 1 ? 'group' : 'groups' }}</span>
       <span>{{ images }} {{ images === 1 ? 'image' : 'images' }}</span>
       <span>{{ repositories }} {{ repositories === 1 ? 'repository' : 'repositories' }}</span>

@@ -288,9 +288,13 @@ label {
   background: var(--badge-bg, #262b36);
   color: var(--badge-fg, var(--text-muted));
   white-space: nowrap;
-  /* Every badge reads the same way: the words are stored as they come from the
-     server and capitalised here, so no one of them is left lowercase. */
-  text-transform: capitalize;
+  /* No text-transform here, and its absence is deliberate.
+     A badge holds whatever the server sent, and what the server sent is not always prose: a
+     coordinate like `db:postgresql`, a branch name, a scope, a host. Capitalising each word
+     of those rewrites a thing you can look up into one you cannot — `Db:Postgresql` is not
+     the string any comparison is written against, and it reads as a different thing rather
+     than as the same one shouted at. Words that are labels are capitalised where they are
+     written, in the template, where somebody editing a sentence can find it. */
 }
 
 .badge-private {

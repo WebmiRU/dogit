@@ -198,8 +198,8 @@ const statusClass: Record<string, string> = {
             <span>
               <span class="option-label">
                 {{ option.label }}
-                <span v-if="option.dangerous" class="badge badge-danger">cannot be undone</span>
-                <span v-if="option.required" class="badge">required</span>
+                <span v-if="option.dangerous" class="badge badge-danger">Cannot be undone</span>
+                <span v-if="option.required" class="badge">Required</span>
               </span>
               <span v-if="option.description" class="muted small">{{ option.description }}</span>
             </span>

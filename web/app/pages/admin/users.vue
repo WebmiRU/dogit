@@ -113,7 +113,7 @@ const admins = computed(() => users.value.filter((one) => one.is_admin).length)
                 <div>
                   <div class="who-name">
                     {{ one.name || one.username }}
-                    <span v-if="one.is_admin" class="badge badge-private">admin</span>
+                    <span v-if="one.is_admin" class="badge badge-private">Admin</span>
                   </div>
                   <div class="muted small mono">{{ one.username }}</div>
                 </div>

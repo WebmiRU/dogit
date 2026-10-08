@@ -110,132 +110,17 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 	// crashes without keeping the credentials is a module with an empty database
 	// nobody will point it at again, which is why the names are also returned — a
 	// module that lost them can show an administrator what to restore.
-	var database any
-	if integration.Capabilities.Database {
-		// Only ever once per module.
-		//
-		// Re-registering is normal — a module that restarts comes back with a new
-		// address and says so — and provisioning again would leave the module holding
-		// the password to a second, empty database while its first, which has the
-		// history in it, is orphaned. So a module that already has one is told nothing
-		// and keeps what it kept, and a module that has lost its password is a module
-		// whose administrator has to hand it a new one: that is a deliberate act rather
-		// than something a restart does to somebody.
-		// A module that has a name in this column is not necessarily a module that has a
-		// database. The name is left behind when its resource is deleted, and until now
-		// nothing read that back — so a module whose database was taken away went on being
-		// told it had one, and was never given the one somebody had described for it. It
-		// kept trying to reach a database that no longer had its data, which is a failure
-		// that looks like a network problem and is not one.
-		//
-		// The resource is the authority on whether there is a database: if it is gone, the
-		// name is a word with nothing behind it, and it is cleared before the switch so that
-		// the module goes on to be given what there is now. Clearing it inside a case of this
-		// switch and falling through to the next would land in "already has one", which is
-		// exactly where a module with a stale name used to end up: told nothing, and told it
-		// had the database it no longer had.
-		if integration.DatabaseName != "" &&
-			!s.moduleHoldsResource(r.Context(), integration.ID) {
-			s.log.Warn("the module had the name of a database that is no longer recorded; "+
-				"the name is cleared and the module is given whatever there is now",
-				"kind", integration.Kind, "database", integration.DatabaseName)
-			if err := s.store.Integrations().ClearModuleDatabase(r.Context(), integration.ID); err != nil {
-				s.log.Warn("the stale database name could not be cleared",
-					"kind", integration.Kind, "error", err)
-			}
-			integration.DatabaseName = ""
-		}
-
-		switch {
-		case integration.DatabaseName != "":
-			s.log.Info("the module already has a database; keeping it",
-				"kind", integration.Kind, "database", integration.DatabaseName)
-
-		// A resource an administrator wrote down for this kind of module. Taken before
-		// anything is created, and this is the whole of "let a module have its own": somebody
-		// writes down a database on a host they already have, or one this instance should
-		// not be able to reach, and the next module of that kind to arrive is given it
-		// rather than a new one inside this cluster.
-		//
-		// Matched on what the resource was last given to, not merely on being free. A free
-		// resource with nothing written about who wanted it is a resource somebody described
-		// for a module that has not arrived yet, and handing it to whatever turns up next is
-		// how the wrong module ends up on somebody's production database.
-		case s.adoptedResource(r.Context(), integration) != nil:
-			adopted := s.adoptedResource(r.Context(), integration)
-			if err := s.store.Resources().Grant(r.Context(), adopted.ID, integration.ID); err != nil {
-				s.log.Warn("the described database could not be given to the module",
-					"kind", integration.Kind, "error", err)
-			} else {
-				s.log.Info("the module was given the database an administrator described",
-					"kind", integration.Kind, "resource", adopted.Coordinate(),
-					"name", adopted.Name)
-			}
-			if err := s.store.Integrations().SetModuleDatabase(r.Context(), integration.ID,
-				adopted.Name, ""); err != nil {
-				s.log.Warn("the database was given but its name could not be recorded",
-					"kind", integration.Kind, "error", err)
-			}
-			// Read again rather than reusing what adoptedResource returned: the secret is not
-			// in what that function reads, because the list it reads has every secret shut and
-			// opening it for a lookup that only wants a name would mean every registration
-			// unseals a password on the chance of needing one.
-			granted, err := s.store.Resources().ByID(r.Context(), adopted.ID)
-			if err != nil {
-				s.log.Warn("the database was given but could not be read back",
-					"kind", integration.Kind, "error", err)
-				break
-			}
-			database = databaseHandover(*granted)
-
-		default:
-			provisioned, err := s.store.Integrations().ProvisionModuleDatabase(
-				r.Context(), s.cfg.DatabaseURL, integration.Kind)
-			if err != nil {
-				s.log.Error("could not provision a database for the module",
-					"kind", integration.Kind, "error", err)
-				s.writeError(w, r, err)
-				return
-			}
-
-			if err := s.store.Integrations().SetModuleDatabase(r.Context(), integration.ID,
-				provisioned.Name, provisioned.Role); err != nil {
-				s.log.Warn("the database was created but its name could not be recorded",
-					"kind", integration.Kind, "error", err)
-			}
-
-			// And the same database as a resource, so that the thing this instance gave away
-			// is on a list of things this instance gave away, with its kind and its version on
-			// it. The password is written sealed, from the only copy there will ever be: this
-			// is the moment the module is told, and afterwards nobody has it — which is why
-			// adopting a database from before this table existed cannot fill that column in.
-			if _, err := s.store.Resources().Put(r.Context(), models.Resource{
-				Kind:          ResourceKindDatabase,
-				Software:      DatabaseSoftware,
-				Name:          provisioned.Name,
-				Origin:        models.OriginManaged,
-				Parts:         provisioned.Parts,
-				IntegrationID: &integration.ID,
-			}); err != nil {
-				s.log.Warn("the database was created but not recorded as a resource",
-					"kind", integration.Kind, "error", err)
-			}
-
-			handover := databaseHandover(models.Resource{
-				Kind:  ResourceKindDatabase,
-				Name:  provisioned.Name,
-				Parts: provisioned.Parts,
-			})
-			// The role is the user a database this instance made has, and it is already in
-			// the payload under its own name. Kept beside it as well because it is the one
-			// part an administrator is asked for by name when the database has to be dropped
-			// by hand, and a handover that only carried it inside a payload would have it
-			// read out of there.
-			handover["role"] = provisioned.Role
-			database = handover
-			s.log.Info("provisioned a database for the module",
-				"kind", integration.Kind, "database", provisioned.Name)
-		}
+	// Every need this module declared, filled.
+	//
+	// Slots rather than one database, because a module can want a database and an object
+	// store and later two object stores, and a single `database` field cannot say which of a
+	// module's resources it is looking at.
+	needs, failed := s.fillResourceSlots(r.Context(), integration)
+	if failed != nil {
+		s.log.Error("a database could not be provisioned for the module",
+			"kind", integration.Kind, "error", failed)
+		s.writeError(w, r, failed)
+		return
 	}
 
 	s.publishInstanceEvent(r, models.EventModuleRegistered, integration, map[string]any{
@@ -245,7 +130,7 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"integration":        s.integrationView(r, integration, nil, nil),
 		"token":              plaintext,
-		"database":           database,
+		"resources":          needs,
 		"heartbeat_interval": moduleHeartbeatInterval.String(),
 		"expires_at":         time.Now().Add(maxHeartbeatWindow).Format(time.RFC3339),
 	})
@@ -371,9 +256,28 @@ func (s *Server) databaseView(ctx context.Context, integration *models.Integrati
 			s.log.Warn("the resource this module holds could not be read",
 				"module", integration.Name, "kind", integration.Kind, "error", err)
 		}
+	} else {
+		view["resource"] = held
+	}
+
+	// What is waiting for a module of this kind.
+	//
+	// Asked for because it is the one thing an administrator cannot see anywhere else and
+	// needs to: somebody described a database for `deploy:kubernetes` and the module that
+	// would get it is not here yet, or is here and already has one. Without this the resource
+	// sits on a page under "nobody holds these" looking like something nobody will ever take,
+	// which is exactly the state it is in and exactly the state worth noticing.
+	//
+	// Asked for whether the module holds something or not, which is the point: a resource
+	// waiting is worth seeing most when the module in front of you has none, and that is the
+	// moment this used to return early and skip it.
+	awaiting, err := s.store.Resources().AwaitingKind(ctx, integration.Kind)
+	if err != nil {
+		s.log.Warn("the resources waiting for this kind of module could not be read",
+			"kind", integration.Kind, "error", err)
 		return view
 	}
-	view["resource"] = held
+	view["awaiting"] = awaiting
 	return view
 }
 
@@ -2238,7 +2142,7 @@ func (s *Server) moduleHoldsResource(ctx context.Context, id uuid.UUID) bool {
 // The class is in the same object rather than beside it, so that a module handed an object store
 // and one handed a database are told apart by reading one field instead of by remembering which
 // key they were looking at.
-func databaseHandover(one models.Resource) map[string]any {
+func resourceHandover(one models.Resource) map[string]any {
 	descriptor := one.Descriptor()
 	parts := descriptor.Payload(one.Parts)
 	// Secrets are added after, and not by Payload, because Payload works from one map and
@@ -2269,20 +2173,50 @@ func databaseHandover(one models.Resource) map[string]any {
 // module that has not arrived yet, and handing it to whatever turns up next is how the wrong
 // module ends up on somebody's production database. To offer one to a particular module is a
 // deliberate act, made by naming the module's kind when the resource was written down.
-func (s *Server) adoptedResource(ctx context.Context,
-	integration *models.Integration) *models.Resource {
+func (s *Server) adoptedResource(ctx context.Context, integration *models.Integration,
+	need models.ResourceNeed) *models.Resource {
 	free, err := s.store.Resources().Free(ctx)
 	if err != nil {
 		s.log.Warn("the resources this instance is holding could not be read", "error", err)
 		return nil
 	}
 	for _, one := range free {
-		if one.Kind == ResourceKindDatabase &&
-			one.LastIntegrationKind == integration.Kind {
-			return &one
+		if !resourceSatisfies(one, need) {
+			continue
 		}
+		// A resource that names its slot must be going to that slot, and not to a module
+		// that merely wants the same kind: a registry with two stores — one for images
+		// anyone may read and one for what it writes — is describing two things by kind
+		// alone is indistinguishable.
+		if one.LastIntegrationKind != integration.Kind {
+			continue
+		}
+		if one.NeedKey != "" && one.NeedKey != need.Key {
+			continue
+		}
+		found := one
+		return &found
 	}
 	return nil
+}
+
+// resourceSatisfies says whether a resource can answer this need, by what it is rather than by
+// what it was written for.
+//
+// The kind has to match and the software has to be compatible. A module asking for
+// `db:postgresql` is not answered by a MySQL however good the password is; a module that
+// named no software is answered by either, because it said it did not mind.
+func resourceSatisfies(one models.Resource, need models.ResourceNeed) bool {
+	if one.Kind != need.Kind {
+		return false
+	}
+	if need.Software != "" && one.Software != "" && !strings.EqualFold(need.Software, one.Software) {
+		return false
+	}
+	if need.Version != "" && one.Version != "" && one.Version != need.Version {
+		return false
+	}
+	return true
 }
 
 func moduleDeclaresSetting(integration *models.Integration, key string) bool {

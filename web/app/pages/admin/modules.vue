@@ -111,7 +111,7 @@ const statusClass: Record<string, string> = {
               <span class="badge" :class="statusClass[module.status] ?? 'badge-neutral'">
                 {{ module.status }}
               </span>
-              <span v-if="!module.enabled" class="badge badge-warning">forbidden</span>
+              <span v-if="!module.enabled" class="badge badge-warning">Forbidden</span>
             </td>
             <td>
               <span v-if="module.public_url" class="mono small">{{ module.public_url }}</span>
