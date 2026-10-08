@@ -196,7 +196,7 @@ service. Each one runs on its own, registers with the core, and asks the core wh
 its callers are instead of keeping a user directory of its own.
 
 ```sh
-# 1. mint an instance token (printed once)
+# 1. mint a token for the module (printed once)
 docker compose exec app dogit module token create --name registry-docker
 
 # 2. give it to the module and start it
@@ -207,11 +207,28 @@ docker compose exec app dogit module list
 docker compose exec app dogit module status cache:demo
 ```
 
+A module holds one token, and it is the one it registered with. It presents it
+when it introduces itself, the core binds that token to the module, and every
+request afterwards carries the same secret — so there is no second credential to
+place, store, rotate or revoke, and no moment at which the core holds a token
+the operator cannot see. A token can be given an end:
+
+```sh
+docker compose exec app dogit module token create --name runner --expires 90d
+```
+
+The end is enforced on every request, not only at registration, so a module with
+a token that expired yesterday is refused rather than carried on until it next
+happens to restart. Cancelling a token removes the module, and deleting a module
+takes its token with it: there is no state in which one exists without the other.
+Give each module its own token — one token belongs to one module, so a token
+shared by several cannot register more than one of them.
+
 How a module works with the core:
 
 | Step | What happens |
 |---|---|
-| register | the module posts its kind, name, endpoint and manifest with an instance token, and receives a module token |
+| register | the module posts its kind, name, endpoint and manifest with its token; the core binds that token to the module and hands back the same one |
 | heartbeat | it calls back every 30s; the core marks it offline after three missed beats |
 | settings | the module declares a settings schema; the core stores values per instance, group or project and cascades them |
 | token minting | a user asks the core for a short-lived token scoped to a project; the core decides the scopes from the access level |
