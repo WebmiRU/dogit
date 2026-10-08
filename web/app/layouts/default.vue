@@ -70,10 +70,11 @@ const navItems = computed<NavItem[]>(() => [
     to: '/registry',
     icon: '⬓',
     match: '/registry',
+    // Only what this instance can answer. A sidebar that lists a kind of registry this
+    // build cannot hold says the feature is planned, which is a plan rather than a fact —
+    // and it says it in the same place the reader looks to find out what is here.
     parts: [
       { label: 'Docker', to: '/registry/docker' },
-      { label: 'PHP (Composer)', note: 'not implemented yet' },
-      { label: 'NPM (Node.js)', note: 'not implemented yet' },
     ],
   },
   {
@@ -94,7 +95,7 @@ const navItems = computed<NavItem[]>(() => [
       { label: 'Modules', to: '/admin/modules' },
       { label: 'Users', to: '/admin/users' },
       { label: 'Runners', to: '/admin/runners' },
-      { label: 'Settings', note: 'not implemented yet' },
+      { label: 'Resources', to: '/admin/resources' },
     ],
   },
 ])
