@@ -68,6 +68,8 @@ const pollInterval = 2000
 /** A log line, and which stream it came from. */
 interface LogLine {
   stream: 'out' | 'err'
+  /** Unix milliseconds, when the line was written after the times were added. */
+  at?: number
   text: string
 }
 
@@ -366,6 +368,16 @@ function parseLog(text: string): LogLine[] {
   for (const line of text.split('\n')) {
     if (!line) continue
 
+    const stamped = /^((?:out|err)\| )(\d+)\| (.*)$/.exec(line)
+    if (stamped) {
+      // A line with a moment on it. Kept, because it is the only thing that makes a gap in the
+      // log visible — a page that joined halfway through can tell from the times that it did.
+      result.push({ stream: stamped[1] === 'err|' ? 'err' : 'out', at: Number(stamped[2]), text: stamped[3] })
+      continue
+    }
+    // A line without one, which is every line written before the times were added. Shown the
+    // same way rather than as an error: it is a fact about when it was written, not about
+    // whether it is true.
     if (line.startsWith('err| ')) {
       result.push({ stream: 'err', text: line.slice(5) })
       continue

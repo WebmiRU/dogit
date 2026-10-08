@@ -468,6 +468,19 @@ func relayOf(line []byte, jobID int64, record map[string]any, kind string) map[s
 		payload["message"] = strings.TrimSpace(string(line))
 	}
 	payload["job_id"] = jobID
+	// When this line happened, in this core's milliseconds.
+	//
+	// Not for ordering — the stream already arrives in order, and a client that reorders by this
+	// would be sorting by when the core read the line rather than by when the work was done. It is
+	// there so that a hole is visible: a page that fetched its list and then subscribed can see
+	// that the first line it received is older than the moment it subscribed, and knows it missed
+	// something instead of drawing a log that starts in the middle and looks whole.
+	//
+	// Only ever added when the module did not say one, so a module that stamps its own line is not
+	// overridden — and a line carrying two clocks is worse than a line carrying one.
+	if _, stamped := payload["at"]; !stamped {
+		payload["at"] = time.Now().UnixMilli()
+	}
 	// The module's own record wins. What the core adds is a place to hang it on, for the
 	// operations where the module has no record to send — a rollback's own lines carry
 	// theirs — and overwriting a record that says which image is going back, with one that

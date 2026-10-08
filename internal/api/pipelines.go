@@ -1413,13 +1413,27 @@ func (s *Server) publishPipeline(ctx context.Context, projectID uuid.UUID, actor
 // The file stays plain text and still reads sensibly in a terminal — "out" and
 // "err" in front of each line — rather than becoming a format that only this
 // program can interpret.
+// markStream prefixes every line with which stream it came from and when it was written.
+//
+// The time is the core's, taken here rather than asked of the module. That is not a detail: the
+// operation's start and end on the same card come from this clock, so a line stamped by another
+// process's clock would sort against them across two timepieces and produce an order that is
+// wrong in a way nothing can detect.
+//
+// And it is written into the stored line, not only onto the live event. A card read back after the
+// fact and a card watched while it happened have to say the same thing about the same line, or the
+// first is a log of something else.
+//
+// Milliseconds, for the same reason the operation list uses them: two lines in the same second are
+// ordinary, and a rollout that reports three times a second is unreadable at one-second resolution.
 func markStream(stream, text string) string {
 	if text == "" {
 		return ""
 	}
-	tag := "out| "
+	at := time.Now().UnixMilli()
+	tag := fmt.Sprintf("out| %d| ", at)
 	if stream == "err" {
-		tag = "err| "
+		tag = fmt.Sprintf("err| %d| ", at)
 	}
 
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
