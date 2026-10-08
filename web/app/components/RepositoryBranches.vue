@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** Branch list with a deletion action for maintainers. */
 import type { RefsResponse } from '~/types/repository'
+import { timeAgo } from '~/utils/format'
 
 const props = defineProps<{
   projectId: string
@@ -79,6 +80,7 @@ async function remove(name: string) {
           </NuxtLink>
           <span v-if="isDefault(branch.name)" class="badge">Default</span>
           <span v-if="branch.name === refName" class="badge">Current</span>
+          <span v-if="branch.created_at" class="meta">{{ timeAgo(branch.created_at) }}</span>
           <span class="meta mono">{{ branch.target.slice(0, 8) }}</span>
           <!-- The default branch is not offered: the server refuses it, and a
                button that always fails reads as a broken page. -->

@@ -37,6 +37,16 @@ export interface Ref {
   short: string
   target: string
   type: 'branch' | 'tag'
+  /**
+   * When the ref came to be, or absent when there was nothing to read.
+   *
+   * Absent rather than a zero date: a ref with no date is a fact, and a caller that prints a
+   * year that nobody has heard of is drawing a page about the wrong thing.
+   */
+  created_at?: string
+  /** Who tagged it, and what they said. Annotated tags only; a bare tag said nothing. */
+  created_by?: string
+  message?: string
 }
 
 export interface RefsResponse {

@@ -32,6 +32,19 @@ type Ref struct {
 	Short  string `json:"short"`
 	Target string `json:"target"`
 	Type   string `json:"type"` // branch or tag
+
+	// CreatedAt is when this ref came to be. For a branch that is its last commit; for a tag
+	// it is the tagger's date for an annotated tag and the commit's own date for a lightweight
+	// one, because a lightweight tag carries nothing else.
+	//
+	// A zero value means git had no date to give, which is not the same as 1970: it is what a
+	// caller has to be able to tell apart from a real date before it prints one.
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy and Message are set for an annotated tag only. A lightweight tag is a name
+	// and a commit, with nobody behind it and nothing said.
+	CreatedBy string `json:"created_by,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 // CommitInfo is the subset of commit metadata the UI needs.
@@ -261,7 +274,12 @@ func (g *Git) Branches(ctx context.Context, repoPath string) ([]Ref, error) {
 	// for-each-ref takes a pretty format, which has no %xNN escape: literal
 	// characters are passed through, so a pipe separator is used instead. Ref
 	// names and object IDs never contain one.
-	const format = "%(refname:short)|%(objectname)|%(committerdate:unix)"
+	// `iso-strict`, not `iso8601`: the latter prints "2026-10-08 20:23:47 +0300" with a space
+	// where RFC 3339 wants a "T", and every caller of this package parses these as RFC 3339.
+	// Asking git for its own strict form means the string arrives in a shape that parses rather
+	// than in one that has to be coaxed — and a date that fails to parse quietly becomes the
+	// zero time, which a page then prints as a date thousands of years ago.
+	const format = "%(refname:short)|%(objectname)|%(committerdate:iso-strict)"
 	// The second sort is what makes the order predictable. Half the branches in a
 	// repository usually share one commit — everything branched off main — and then
 	// the first sort alone leaves the tie to git, which is not an order anyone
@@ -280,14 +298,37 @@ func (g *Git) Branches(ctx context.Context, repoPath string) ([]Ref, error) {
 		if len(f) != 3 {
 			continue
 		}
-		refs = append(refs, Ref{Name: f[0], Short: f[0], Target: f[1], Type: "branch"})
+		refs = append(refs, Ref{
+			Name: f[0], Short: f[0], Target: f[1], Type: "branch",
+			CreatedAt: parseRefDate(f[2]),
+		})
 	}
 	return refs, nil
 }
 
+// parseRefDate is how a ref's date is read, and it is strict about failure.
+//
+// A date that does not parse becomes the zero time rather than being guessed at, and the zero
+// time is what the interface is told to treat as "no date" — so a format this does not
+// understand shows nothing instead of showing a year nobody has heard of.
+func parseRefDate(raw string) time.Time {
+	created, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return created
+}
+
 // Tags lists tags with their dereferenced commit target.
 func (g *Git) Tags(ctx context.Context, repoPath string) ([]Ref, error) {
-	const format = "%(refname:short)|%(objectname)|%(*objectname)|%(objecttype)"
+	// `iso-strict` for the same reason as Branches: a date that has to be reparsed is a date
+	// that will not be.
+	//
+	// The last two fields are empty for a lightweight tag, which has no tagger and no message.
+	// Empty is what they are rather than anything invented: a caller that wants to show a date
+	// and a name can show them for an annotated tag and must not pretend otherwise for the rest.
+	const format = "%(refname:short)|%(objectname)|%(*objectname)|%(objecttype)|" +
+		"%(creatordate:iso-strict)|%(taggername)|%(contents:subject)"
 	out, err := g.run(ctx, repoPath, nil, "for-each-ref", "--sort=-creatordate",
 		"--format="+format, "refs/tags/")
 	if err != nil {
@@ -299,14 +340,32 @@ func (g *Git) Tags(ctx context.Context, repoPath string) ([]Ref, error) {
 			continue
 		}
 		f := strings.Split(line, "|")
-		if len(f) < 3 {
+		if len(f) < 7 {
 			continue
 		}
 		target := f[1]
 		if f[2] != "" {
 			target = f[2] // annotated tag: use the commit it points to
 		}
-		refs = append(refs, Ref{Name: f[0], Short: f[0], Target: target, Type: "tag"})
+
+		// The message and the tagger only for an annotated tag, and the check is on the type
+		// rather than on whether the fields came back empty.
+		//
+		// `%(contents:subject)` on a *lightweight* tag is the subject of the commit it points
+		// at, because a lightweight tag is a name and the object it names is that commit. So
+		// reading it unconditionally puts a commit message on a page under a heading that says
+		// the tag said it — which is a thing nobody would believe and everybody would have to
+		// explain. A lightweight tag said nothing, and says so here.
+		var tagger, message string
+		if f[3] == "tag" {
+			tagger, message = f[5], strings.TrimSpace(f[6])
+		}
+
+		refs = append(refs, Ref{
+			Name: f[0], Short: f[0], Target: target, Type: "tag",
+			CreatedAt: parseRefDate(f[4]),
+			CreatedBy: tagger, Message: message,
+		})
 	}
 	return refs, nil
 }
