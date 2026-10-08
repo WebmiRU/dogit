@@ -229,24 +229,27 @@ func (s *Server) placeRegistry(ctx context.Context, project *models.Project,
 func (s *Server) instanceRegistryPull(ctx context.Context, project *models.Project,
 	image, address string) (*placePull, error) {
 
-	registry, err := s.store.Integrations().ByKind(ctx, registryKind)
+	// By the address being pulled from, not by "the registry". A pull that names an address is
+	// a pull from whoever answers there, and with more than one registry installed those are not
+	// the same module.
+	registry, published, err := s.registryServing(ctx, address)
 	if err != nil {
-		return nil, fmt.Errorf("no registry is installed on this instance")
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("no registry on this instance publishes %s", address)
+		}
+		return nil, err
 	}
 	token, err := s.resolveToken(ctx, registry, project.Path)
 	if err != nil {
 		return nil, err
 	}
-	pull := &placePull{
+	return &placePull{
 		Address:             address,
 		Token:               token,
 		Image:               image,
 		TheInstanceRegistry: true,
-	}
-	if published, perr := s.registryAddress(ctx, registry); perr == nil {
-		pull.InsecureTLS = servesWithoutTLS(published)
-	}
-	return pull, nil
+		InsecureTLS:         servesWithoutTLS(published),
+	}, nil
 }
 
 // servesWithoutTLS is whether an address the registry module published is one with no
@@ -258,6 +261,46 @@ func (s *Server) instanceRegistryPull(ctx context.Context, project *models.Proje
 // client that guessed wrong there reports the registry as unreachable when it is not.
 func servesWithoutTLS(address string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(address)), "http://")
+}
+
+// registryServing finds the registry module that answers at an address, and says where it
+// published itself.
+//
+// The address is the only thing in a request that can name a registry, so it is what the core
+// matches on. Comparing against the one registry the instance used to have was the whole of the
+// old answer, and it happened to be right for the single-registry case and for nothing else: a
+// second registry could never serve a pull, because nothing ever asked whether it published the
+// address being pulled from. Two registries with the same address cannot be told apart, and the
+// oldest wins — there is nothing better to do with an ambiguous answer than refuse it, and this
+// is not one: it is a pull, and refusing it would break a deployment over a misconfiguration
+// nobody can see.
+//
+// Returns store.ErrNotFound when no enabled registry publishes that address, which is not an
+// error here: the caller may have registries the core has never heard of, written down by an
+// administrator, and those are looked up next.
+func (s *Server) registryServing(ctx context.Context, address string) (*models.Integration, string, error) {
+	address = registryAddressOf(address)
+	if address == "" {
+		return nil, "", store.ErrNotFound
+	}
+
+	candidates, err := s.store.Integrations().ByKindAll(ctx, registryKind)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, candidate := range candidates {
+		if !candidate.Enabled {
+			continue
+		}
+		published, err := s.registryAddress(ctx, candidate)
+		if err != nil {
+			return nil, "", err
+		}
+		if sameRegistry(published, address) {
+			return candidate, published, nil
+		}
+	}
+	return nil, "", store.ErrNotFound
 }
 
 // registryCredentialFor is what the core knows about one address, and the refusal when it
@@ -277,22 +320,19 @@ func (s *Server) registryCredentialFor(ctx context.Context, project *models.Proj
 	address = registryAddressOf(address)
 	pull := &placePull{Address: address, Anonymous: true}
 
-	registry, err := s.store.Integrations().ByKind(ctx, registryKind)
+	registry, published, err := s.registryServing(ctx, address)
 	switch {
-	case err == nil && registry.Enabled:
-		if published, perr := s.registryAddress(ctx, registry); perr == nil && published != "" &&
-			sameRegistry(published, address) {
-			token, terr := s.resolveToken(ctx, registry, project.Path)
-			if terr != nil {
-				return nil, terr
-			}
-			pull.Token = token
-			pull.Anonymous = false
-			pull.TheInstanceRegistry = true
-			pull.InsecureTLS = servesWithoutTLS(published)
-			return pull, nil
+	case err == nil:
+		token, terr := s.resolveToken(ctx, registry, project.Path)
+		if terr != nil {
+			return nil, terr
 		}
-	case err != nil && !errors.Is(err, store.ErrNotFound):
+		pull.Token = token
+		pull.Anonymous = false
+		pull.TheInstanceRegistry = true
+		pull.InsecureTLS = servesWithoutTLS(published)
+		return pull, nil
+	case !errors.Is(err, store.ErrNotFound):
 		return nil, err
 	}
 

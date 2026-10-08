@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1085,9 +1086,16 @@ func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image, 
 		tag = fromName
 	}
 
-	registry, err := s.store.Integrations().ByKind(ctx, registryKind)
+	// The image names the registry it lives at, and that is what picks the module: the credential
+	// has to be one the registry holding the image will accept, and on an instance with several
+	// of them that is not whichever is oldest.
+	registry, _, err := s.registryServing(ctx, imageHost(image))
 	if err != nil {
-		return "", fmt.Errorf("no registry is installed, so an image cannot be pinned")
+		if errors.Is(err, store.ErrNotFound) {
+			return "", fmt.Errorf(
+				"no registry on this instance publishes %s, so an image cannot be pinned", imageHost(image))
+		}
+		return "", err
 	}
 
 	// The credential is the project's, minted for a pull and nothing else, and it
@@ -1225,6 +1233,24 @@ func splitImage(image string) (repository, tag string) {
 		repository = repository[:colon]
 	}
 	return repository, tag
+}
+
+// imageHost is the registry an image name points at, or "" when the name carries none.
+//
+// Docker's own rule: the first path segment is a host only if it looks like one, so
+// "mygroup/myproject" is a project on the default registry and "registry.example.com/myproject"
+// is a project on a named one. Reading it any other way turns every unqualified name into a host,
+// and then every unqualified image asks this instance for a registry that does not exist.
+//
+// The tag and the digest are stripped first, since "registry:5000/a/b:tag" ends in neither the
+// repository nor the host.
+func imageHost(image string) string {
+	repository, _ := splitImage(image)
+	first, _, _ := strings.Cut(repository, "/")
+	if !strings.ContainsAny(first, ".:") {
+		return ""
+	}
+	return first
 }
 
 // buildTag is the tag the run pushed, which is not in the image name.

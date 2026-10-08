@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -14,7 +13,7 @@ import (
 
 	"github.com/ewolf/dogit/internal/app"
 	"github.com/ewolf/dogit/internal/auth"
-	"github.com/ewolf/dogit/internal/store"
+	"github.com/ewolf/dogit/internal/models"
 )
 
 // Module administers the module system: the instance tokens that let modules
@@ -235,13 +234,34 @@ func moduleStatus(ctx context.Context, args []string) error {
 	defer a.Close()
 
 	kind := args[0]
-	integration, err := a.Store.Integrations().ByKind(ctx, kind)
-	if errors.Is(err, store.ErrNotFound) {
+
+	// Every module of this kind, not the oldest one.
+	//
+	// The command takes a kind, so a kind with two modules installed has two answers, and
+	// printing one of them is how the other stayed invisible for as long as it did. With one
+	// module the output is byte for byte what it always was; with several there is one block
+	// and one machine-readable line per module.
+	integrations, err := a.Store.Integrations().ByKindAll(ctx, kind)
+	if err != nil {
+		return err
+	}
+	usable := make([]*models.Integration, 0, len(integrations))
+	for _, candidate := range integrations {
+		if candidate.Enabled {
+			usable = append(usable, candidate)
+		}
+	}
+	if len(usable) == 0 {
 		fmt.Fprintf(os.Stdout, "module %s: not installed\n", kind)
 		return exitCode(1)
 	}
-	if err != nil {
-		return err
+	if len(usable) > 1 {
+		names := make([]string, 0, len(usable))
+		for _, candidate := range usable {
+			names = append(names, candidate.Name)
+		}
+		fmt.Fprintf(os.Stdout, "module %s: %d are installed (%s)\n\n",
+			kind, len(usable), strings.Join(names, ", "))
 	}
 
 	var projectID *uuid.UUID
@@ -253,34 +273,40 @@ func moduleStatus(ctx context.Context, args []string) error {
 		projectID = &project.ID
 	}
 
-	settings, err := a.Store.Integrations().SettingsFor(ctx, integration.ID, nil, projectID, integration.Capabilities.Settings)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintf(os.Stdout, "kind:     %s\n", integration.Kind)
-	fmt.Fprintf(os.Stdout, "name:     %s\n", integration.Name)
-	fmt.Fprintf(os.Stdout, "endpoint: %s\n", integration.Endpoint)
-	fmt.Fprintf(os.Stdout, "status:   %s\n", integration.Status)
-	fmt.Fprintf(os.Stdout, "scopes:   %s\n", strings.Join(integration.Capabilities.Scopes, " "))
-	if len(settings) > 0 {
-		fmt.Fprintln(os.Stdout, "settings:")
-		for key, raw := range settings {
-			fmt.Fprintf(os.Stdout, "  %s=%s\n", key, string(raw))
+	for i, integration := range usable {
+		if i > 0 {
+			fmt.Fprintln(os.Stdout)
 		}
-	}
+		settings, err := a.Store.Integrations().SettingsFor(ctx, integration.ID, nil, projectID, integration.Capabilities.Settings)
+		if err != nil {
+			return err
+		}
 
-	// Scripts consume this line, so it is machine-readable on its own.
-	compact, err := json.Marshal(map[string]any{
-		"kind":     integration.Kind,
-		"name":     integration.Name,
-		"endpoint": integration.Endpoint,
-		"status":   integration.Status,
-		"settings": settings,
-	})
-	if err != nil {
-		return err
+		fmt.Fprintf(os.Stdout, "kind:     %s\n", integration.Kind)
+		fmt.Fprintf(os.Stdout, "name:     %s\n", integration.Name)
+		fmt.Fprintf(os.Stdout, "endpoint: %s\n", integration.Endpoint)
+		fmt.Fprintf(os.Stdout, "status:   %s\n", integration.Status)
+		fmt.Fprintf(os.Stdout, "scopes:   %s\n", strings.Join(integration.Capabilities.Scopes, " "))
+		if len(settings) > 0 {
+			fmt.Fprintln(os.Stdout, "settings:")
+			for key, raw := range settings {
+				fmt.Fprintf(os.Stdout, "  %s=%s\n", key, string(raw))
+			}
+		}
+
+		// Scripts consume this line, so it is machine-readable on its own. One per module,
+		// which is the only shape that can describe more than one.
+		compact, err := json.Marshal(map[string]any{
+			"kind":     integration.Kind,
+			"name":     integration.Name,
+			"endpoint": integration.Endpoint,
+			"status":   integration.Status,
+			"settings": settings,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "json: %s\n", compact)
 	}
-	fmt.Fprintf(os.Stdout, "json: %s\n", compact)
 	return nil
 }
