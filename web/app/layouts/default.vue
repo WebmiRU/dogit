@@ -95,7 +95,6 @@ const navItems = computed<NavItem[]>(() => [
       { label: 'Modules', to: '/admin/modules' },
       { label: 'Users', to: '/admin/users' },
       { label: 'Runners', to: '/admin/runners' },
-      { label: 'Resources', to: '/admin/resources' },
     ],
   },
 ])

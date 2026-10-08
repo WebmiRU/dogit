@@ -100,26 +100,22 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 		"kind", integration.Kind, "name", integration.Name,
 		"version", integration.ModuleVersion, "endpoint", integration.Endpoint)
 
-	// A module that asks for a database gets one, here, and the credentials come back
-	// exactly once.
+	// What this module says it needs in order to work, checked before it is registered.
 	//
-	// Provisioning happens at registration rather than on first use because a module
-	// cannot work out for itself whether it has one: it has nothing to connect to and
-	// nothing to compare against, and "no database" and "not asked for" are the same
-	// silence from the other side. A module that declares it wants one and then
-	// crashes without keeping the credentials is a module with an empty database
-	// nobody will point it at again, which is why the names are also returned — a
-	// module that lost them can show an administrator what to restore.
-	// Every need this module declared, filled.
-	//
-	// Slots rather than one database, because a module can want a database and an object
-	// store and later two object stores, and a single `database` field cannot say which of a
-	// module's resources it is looking at.
-	needs, failed := s.fillResourceSlots(r.Context(), integration)
-	if failed != nil {
-		s.log.Error("a database could not be provisioned for the module",
-			"kind", integration.Kind, "error", failed)
-		s.writeError(w, r, failed)
+	// Not provisioned and not handed over: a module can have no database, two of them, or
+	// keep everything in a file, and it can be somebody else's program on a host this
+	// instance cannot reach. The only thing the core can honestly answer is whether the
+	// administrator has filled in what the module asked for — and refusing here, where the
+	// administrator is installing it, beats a module that runs and quietly does less.
+	if missing := s.missingRequiredSettings(r.Context(), integration); len(missing) > 0 {
+		s.log.Warn("a module registered without what it says it needs",
+			"kind", integration.Kind, "missing", strings.Join(missing, ", "))
+		s.writeError(w, r, errBadRequestf(
+			"this module says it cannot work without %s, and nothing is set for %s. "+
+				"Set it in the module's settings and register again — it will not start "+
+				"without it, and a module that runs without it looks exactly like one that "+
+				"has never done any work",
+			pluralSettings(len(missing)), strings.Join(missing, " and ")))
 		return
 	}
 
@@ -130,7 +126,6 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"integration":        s.integrationView(r, integration, nil, nil),
 		"token":              plaintext,
-		"resources":          needs,
 		"heartbeat_interval": moduleHeartbeatInterval.String(),
 		"expires_at":         time.Now().Add(maxHeartbeatWindow).Format(time.RFC3339),
 	})
@@ -217,99 +212,7 @@ func (s *Server) handleGetModule(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"module":   s.integrationView(r, integration, nil, nil),
 		"settings": settings,
-		"database": s.databaseView(r.Context(), integration),
 	})
-}
-
-// databaseView says where this module's data lives, in one object.
-//
-// The first thing on the module's settings page, because that is where somebody goes to find
-// out what a module is connected to — and a module on a database whose name is nowhere on that
-// page is a module whose data lives somewhere nobody wrote down. Buildkit is the case that made
-// this asked for: it declares no database, has none, and says nothing about either, which reads
-// from the page exactly like a module that has one and is not telling.
-//
-// Three answers, kept apart rather than merged, because each needs a different person to act:
-//
-//   - a resource being held: what it is, and whether this instance made it or an administrator
-//     described one on a host it does not run;
-//   - a database name with no resource behind it — provisioned before resources existed, or by a
-//     version that did not record one. Left alone rather than tidied: it belongs to the module,
-//     and only the module's own registration decides what it keeps;
-//   - nothing, which for a module that asked for a database is a gap, not an answer.
-//
-// Read without the secret. This is a page that gets screenshotted, and a view of a database
-// is worth nothing that a password would add to it.
-func (s *Server) databaseView(ctx context.Context, integration *models.Integration) map[string]any {
-	// The slots this module asked for, each with what is in it and what could go in it.
-	//
-	// Answered as a list of slots rather than as a held resource and a list of free ones,
-	// because those are two answers to one question and they go out of step the moment a slot
-	// is filled — the page would show a slot as empty while the free list still offered it.
-	needs := integration.Capabilities.Needs()
-	slots := make([]map[string]any, 0, len(needs))
-	for _, need := range needs {
-		slot := map[string]any{
-			"key":      need.Key,
-			"kind":     need.Kind,
-			"software": need.Software,
-			"required": need.Required,
-			"held":     nil,
-			"free":     []any{},
-		}
-		if held, err := s.store.Resources().HeldSlot(ctx, integration.ID, need.Key); err == nil {
-			slot["held"] = held
-		} else if !errors.Is(err, store.ErrNotFound) {
-			s.log.Warn("a resource for a module's slot could not be read",
-				"kind", integration.Kind, "slot", need.Key, "error", err)
-		}
-		if free, err := s.store.Resources().FreeFor(ctx, need); err == nil {
-			slot["free"] = free
-		} else {
-			s.log.Warn("the free resources that could fill a module's slot could not be read",
-				"kind", integration.Kind, "slot", need.Key, "error", err)
-		}
-		slots = append(slots, slot)
-	}
-	view := map[string]any{
-		"wants_one": integration.Capabilities.WantsDatabase(),
-		"name":      integration.DatabaseName,
-		"role":      integration.DatabaseRole,
-		"slots":     slots,
-	}
-
-	held, err := s.store.Resources().ByIDFor(ctx, integration.ID)
-	if err != nil {
-		// A module that holds nothing is the ordinary case, not a failure to report: most
-		// modules never ask for a database, and a log line per heartbeat saying so would be
-		// a way of training the reader to skip the log.
-		if !errors.Is(err, store.ErrNotFound) {
-			s.log.Warn("the resource this module holds could not be read",
-				"module", integration.Name, "kind", integration.Kind, "error", err)
-		}
-	} else {
-		view["resource"] = held
-	}
-
-	// What is waiting for a module of this kind.
-	//
-	// Asked for because it is the one thing an administrator cannot see anywhere else and
-	// needs to: somebody described a database for `deploy:kubernetes` and the module that
-	// would get it is not here yet, or is here and already has one. Without this the resource
-	// sits on a page under "nobody holds these" looking like something nobody will ever take,
-	// which is exactly the state it is in and exactly the state worth noticing.
-	//
-	// Asked for whether the module holds something or not, which is the point: a resource
-	// waiting is worth seeing most when the module in front of you has none, and that is the
-	// moment this used to return early and skip it.
-	awaiting, err := s.store.Resources().AwaitingKind(ctx, integration.Kind)
-	if err != nil {
-		s.log.Warn("the resources waiting for this kind of module could not be read",
-			"kind", integration.Kind, "error", err)
-		return view
-	}
-	view["awaiting"] = awaiting
-	return view
 }
 
 // handleSetModuleState enables or forbids a module.
@@ -539,32 +442,11 @@ func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
 	// truth is that a module was using it until this moment. Released on purpose it carries
 	// the date and the module it belonged to, and an administrator looking at it months later
 	// can answer whose it was — which is the question an orphan exists to answer.
-	//
-	// Nothing is destroyed. That is the rule the whole resources table is built on, and this
-	// is where it is kept: a module can be reinstalled and given the same database back, with
-	// its data in it.
-	orphaned := ""
-	if released, relErr := s.store.Resources().Release(r.Context(), integration.ID,
-		integration.Kind); relErr == nil {
-		orphaned = released.Coordinate()
-		if released.Name != "" {
-			orphaned += ` ("` + released.Name + `")`
-		}
-	} else if !errors.Is(relErr, store.ErrNotFound) {
-		s.log.Warn("the module's resource could not be given up and may still name it",
-			"kind", integration.Kind, "error", relErr)
-	}
-
 	if err := s.store.Integrations().Delete(r.Context(), integration.ID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.log.Info("module removed", "kind", integration.Kind, "name", integration.Name,
-		"resource_left", orphaned)
-	if orphaned != "" {
-		s.log.Info("a resource was left behind and was not destroyed",
-			"kind", integration.Kind, "resource", orphaned)
-	}
+	s.log.Info("module removed", "kind", integration.Kind, "name", integration.Name)
 	s.publishInstanceEvent(r, models.EventModuleRemoved, integration, nil)
 	s.writeJSON(w, r, http.StatusNoContent, nil)
 }
@@ -2116,138 +1998,6 @@ func settingIsSecret(integration *models.Integration, key string) bool {
 		return spec.Secret
 	}
 	return false
-}
-
-// The kinds of resource this instance knows about.
-//
-// Named here rather than left to the rows: a kind is what a requirement is written against
-// and what a page groups by, and a kind that exists only because somebody typed it into a
-// column cannot be listed, checked, or offered in a form.
-const (
-	// ResourceKindDatabase is a SQL database. The only kind that is issued automatically,
-	// because it is the only one this instance knows how to create.
-	ResourceKindDatabase = "db"
-
-	// ResourceKindObjectStore is an S3-compatible object store.
-	//
-	// Declared and nothing else. It exists so that the kind is a thing the instance can
-	// name — a requirement of `s3:*` is answered, a page groups by it, and a manual resource
-	// of that kind can be written down. No S3 bucket is created, nothing negotiates with one,
-	// and no module is given one by this code: an object store is described by an
-	// administrator who already has it, and pretending otherwise would be a promise.
-	ResourceKindObjectStore = "s3"
-)
-
-// DatabaseSoftware is what the database this instance creates is: PostgreSQL, out of the one
-// cluster the core itself keeps its own tables in. Recorded on the resource rather than
-// looked up, so that what a resource says it is does not change under it when the cluster
-// underneath is upgraded.
-const DatabaseSoftware = "postgresql"
-
-// moduleHoldsResource answers "is there a resource behind this module's database name", and
-// says yes when it cannot tell.
-//
-// The bias is on purpose and it is the opposite of the obvious one. A module that already has a
-// database must not be given a second one, and the two are separated only by this answer — so on
-// a database that cannot be reached, "I do not know" has to mean "leave it alone". Answering no
-// would clear a name that is perfectly good and hand out a new database, orphaning the one with
-// the deployment history in it.
-func (s *Server) moduleHoldsResource(ctx context.Context, id uuid.UUID) bool {
-	held, err := s.store.Resources().IsHeldBy(ctx, id)
-	if err != nil {
-		s.log.Warn("it could not be said whether this module holds a resource, so its "+
-			"database is left alone", "module", id.String(), "error", err)
-		return true
-	}
-	return held
-}
-
-// databaseHandover is what a module is told about its database at registration.
-//
-// The parts, and not a connection string assembled here. What a driver accepts is the driver's
-// business: a module that wants `postgres://…` and one that wants a keyword/value DSN both start
-// from these six facts and disagree about everything else, and a core that picked one of them
-// would be picking on the module's behalf. So the core hands over what the database *is* and the
-// module builds what it opens.
-//
-// The class is in the same object rather than beside it, so that a module handed an object store
-// and one handed a database are told apart by reading one field instead of by remembering which
-// key they were looking at.
-func resourceHandover(one models.Resource) map[string]any {
-	descriptor := one.Descriptor()
-	parts := descriptor.Payload(one.Parts)
-	// Secrets are added after, and not by Payload, because Payload works from one map and
-	// the facts and the secret arrive in two — one from the columns, one from the envelope.
-	for key, value := range one.Secret {
-		parts[key] = value
-	}
-	return map[string]any{
-		"kind":    one.Kind,
-		"name":    one.Name,
-		"payload": parts,
-	}
-}
-
-// adoptedResource is a free database that a module of this kind had before.
-//
-// The reinstall case, and the only one where a resource is not created: a module is removed,
-// its resource is left behind rather than destroyed, and the same kind of module comes back —
-// which is what makes the resource worth keeping at all. It is given the database it had, with
-// its data in it, because a module reinstalled onto an empty database has silently lost
-// everything it was keeping.
-//
-// Matched on the kind rather than on the module's own id, because removing the module deletes
-// the row that id pointed at. Matching on it would make this fire on the first registration
-// and never again, which is precisely the case it exists for.
-//
-// A resource that was never given to anybody is not a candidate. Somebody described it for a
-// module that has not arrived yet, and handing it to whatever turns up next is how the wrong
-// module ends up on somebody's production database. To offer one to a particular module is a
-// deliberate act, made by naming the module's kind when the resource was written down.
-func (s *Server) adoptedResource(ctx context.Context, integration *models.Integration,
-	need models.ResourceNeed) *models.Resource {
-	free, err := s.store.Resources().Free(ctx)
-	if err != nil {
-		s.log.Warn("the resources this instance is holding could not be read", "error", err)
-		return nil
-	}
-	for _, one := range free {
-		if !resourceSatisfies(one, need) {
-			continue
-		}
-		// A resource that names its slot must be going to that slot, and not to a module
-		// that merely wants the same kind: a registry with two stores — one for images
-		// anyone may read and one for what it writes — is describing two things by kind
-		// alone is indistinguishable.
-		if one.LastIntegrationKind != integration.Kind {
-			continue
-		}
-		if one.NeedKey != "" && one.NeedKey != need.Key {
-			continue
-		}
-		found := one
-		return &found
-	}
-	return nil
-}
-
-// resourceSatisfies says whether a resource can answer this need, by what it is rather than by
-// what it was written for.
-//
-// The kind has to match and the software has to be compatible. A module asking for
-// `db:postgresql` is not answered by a MySQL however good the password is; a module that
-// named no software is answered by either, because it said it did not mind.
-func resourceSatisfies(one models.Resource, need models.ResourceNeed) bool {
-	if one.Kind != need.Kind {
-		return false
-	}
-	if need.Software != "" && one.Software != "" && !strings.EqualFold(need.Software, one.Software) {
-		return false
-	}
-	if need.Version != "" && one.Version != "" && one.Version != need.Version {
-		return false
-	}
-	return true
 }
 
 func moduleDeclaresSetting(integration *models.Integration, key string) bool {

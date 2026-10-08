@@ -205,11 +205,6 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Get("/admin/users", s.handleListUsers)
 		authenticated.Get("/admin/runners", s.handleListRunners)
 		authenticated.Get("/modules/{integrationID}", s.handleGetModule)
-		// What a module's resources are, put and taken back. At the module's level because
-		// that is where the question is asked: a module with a database and an object store
-		// cannot say which is which from a list of resources.
-		authenticated.Post("/modules/{integrationID}/resources/attach", s.handleAttachResource)
-		authenticated.Post("/modules/{integrationID}/resources/{needKey}/detach", s.handleDetachResource)
 		authenticated.Put("/modules/{integrationID}/state", s.handleSetModuleState)
 		authenticated.Delete("/modules/{integrationID}", s.handleDeleteModule)
 		authenticated.Post("/modules/{integrationID}/uninstall", s.handleStartModuleUninstall)
@@ -233,22 +228,6 @@ func (s *Server) Register(r chi.Router) {
 		// Under /registry rather than /admin: an address is not a thing only the
 		// administration looks after, and this path sits beside the module's own
 		// /registry/access, which asks about the same word from the other direction.
-		// The resources this instance has given to modules, and the ones it is holding for
-		// nobody. Administrators only: a resource is a thing with a password, and the list is
-		// a page that says what exists.
-		authenticated.Route("/resources", func(resources chi.Router) {
-			resources.Get("/", s.handleListResources)
-			// What each kind is made of, for the form that describes one. Asked for rather
-			// than written down there: the fields, the check and the columns are one list, and
-			// a form holding its own copy asks for a field the core then refuses.
-			resources.Get("/kinds", s.handleResourceKinds)
-			resources.Post("/", s.handleCreateResource)
-			resources.Get("/{resourceID}", s.handleGetResource)
-			resources.Delete("/{resourceID}", s.handleForgetResource)
-			resources.Post("/{resourceID}/release", s.handleReleaseResource)
-			resources.Post("/{resourceID}/destroy", s.handleDestroyResource)
-		})
-
 		authenticated.Route("/registry", func(registries chi.Router) {
 			registries.Get("/docker", s.handleListDockerRegistries)
 			registries.Get("/docker/{registryID}", s.handleGetDockerRegistry)

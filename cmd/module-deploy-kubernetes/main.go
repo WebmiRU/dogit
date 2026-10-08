@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -87,21 +86,17 @@ func main() {
 		return nil
 	}
 
-	// The credentials arrive exactly once, at registration, and the module keeps them.
-	// There is nowhere else to keep them: a module is a separate process with its own
-	// secret, and a history that lives only in memory is a history that is empty after
-	// a restart — which is exactly when somebody asks what was deployed.
-	// The credentials arrive exactly once, at registration, so they are written down
-	// here. Nothing else in the process keeps them, and a history that is empty after
-	// a restart is a history that is empty exactly when somebody asks what was
-	// deployed — a question nobody asks at the moment they are deploying.
-	if core.databaseURL != "" {
-		if err := rememberDatabase(cfg.stateDir+"/database", core.databaseURL); err != nil {
-			log.Printf("module-deploy: the database could not be saved: %v", err)
-		}
-	} else if saved, ok := recallDatabase(cfg.stateDir + "/database"); ok {
-		core.databaseURL = saved
-		log.Printf("module-deploy: using the database saved earlier")
+	// Where its history lives, from the setting an administrator filled in.
+	//
+	// Read on every start rather than remembered from registration. The credentials used to
+	// arrive exactly once and be written down here forever, which meant a password nobody
+	// could rotate: the core did not keep it, so changing it meant changing it in the
+	// database and re-issuing it by hand to a module that would not ask again. A setting is
+	// read, not remembered.
+	core.databaseURL = core.databaseSetting(ctx)
+	if core.databaseURL == "" {
+		log.Printf("module-deploy: no database is configured, and this module keeps no history " +
+			"without one — deployments will run and nothing will be remembered")
 	}
 
 	if core.databaseURL != "" {
@@ -178,24 +173,33 @@ func manifest() map[string]any {
 		// undo it, and it can only decide that about scopes a module says it has.
 		"scopes": []string{"deploy:read", "deploy:write"},
 
-		// It asks the core for a database of its own, under the name it calls it by. The
-		// history is this module's business and nobody else's, and a module without one
-		// would be asking the core to keep deployment records — which is how the core
-		// starts knowing what a cluster is.
+		// Its database is a setting, and an administrator fills it in.
 		//
-		// Named and required rather than the bare `database: true` this used to ask for:
-		// a module may want several resources, and the name is what tells the core which
-		// of them this one is. Required, because this module works without a database and
-		// records nothing — which is a module that looks like it has never deployed
-		// anything, and is told so here instead.
-		"resources": []map[string]any{{
-			"key":      historySlot,
-			"kind":     "db",
-			"software": "postgresql",
-			"required": true,
-		}},
+		// Not something the core provisions: a module can have no database, can have two,
+		// or can keep everything in a file, and it can be somebody else's program on a host
+		// this instance cannot reach. The one thing the core can honestly do is refuse to let
+		// this module register until somebody has said where its data lives.
+		//
+		// Required for the reason the flag exists at all: without it this module still
+		// deploys, still answers, and records nothing, which from the outside is exactly a
+		// module that has never deployed anything. Secret because it is a password.
+		//
+		// The value is the connection string, whole, rather than five fields: what a driver
+		// accepts is the driver's business, and a core that picked a shape would be picking
+		// it on this module's behalf.
 
-		"settings": []map[string]any{
+		"settings": []map[string]any{{
+			"key":      databaseSettingKey,
+			"type":     "text",
+			"label":    "Database",
+			"secret":   true,
+			"required": true,
+			"description": "Where this module keeps what it deployed. It deploys without one " +
+				"and records nothing, which looks exactly like a module that has never deployed " +
+				"anything — so it will not register until this is filled in. Any form the " +
+				"driver accepts.",
+		},
+
 			{
 				// The value a new place starts with, and the only thing this setting is.
 				//
@@ -400,29 +404,3 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 var errNoHistory = errors.New("this module has no history store, so it cannot remember deployments")
-
-// rememberDatabase writes the connection string to the module's own state.
-//
-// The core hands it over exactly once, at registration, and never again — that is the
-// whole point of not storing a password in a table everybody can read. So the module
-// keeps it, in a file on a volume that is its own, with permissions only it can read.
-func rememberDatabase(path, url string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(url), 0o600)
-}
-
-// recallDatabase is what was written earlier, if it is still there.
-//
-// A missing file is not a failure: a module being run without a volume is a module
-// whose history lasts until it restarts, which is better than a module that refuses
-// to deploy anything at all.
-func recallDatabase(path string) (string, bool) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	url := strings.TrimSpace(string(contents))
-	return url, url != ""
-}

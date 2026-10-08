@@ -8,53 +8,7 @@ await ensureLoaded()
 
 const moduleId = computed(() => String(route.params.id ?? ''))
 
-/**
- * Where this module's data lives, as the core puts it.
- *
- * Three shapes and none of them is a boolean, because "does this module have a database" has
- * three different answers and each of them needs somebody to do something: it is holding a
- * resource, it has a name nobody kept a resource for, or it declared from the start that it
- * keeps its data elsewhere. The address is not here and is not fetched — it is a password.
- */
-interface ModuleResource {
-  id: string
-  kind: string
-  software?: string
-  version?: string
-  name?: string
-  origin: 'managed' | 'manual' | string
-  /** Where it is. Never a secret — a page can show a host without opening a password. */
-  parts?: Record<string, string>
-  created_at: string
-  released_at?: string
-}
-
-interface ModuleSlot {
-  key: string
-  kind: string
-  software?: string
-  required: boolean
-  held?: ModuleResource | null
-  free?: ModuleResource[]
-}
-
-interface ModuleDatabase {
-  /** Whether the module asked the core for a database when it registered. */
-  wants_one: boolean
-  /** The name given to it, empty when it has none. */
-  name: string
-  role?: string
-  /** The resource being held for it, absent when there is none. */
-  resource?: ModuleResource
-  /** One slot the module asked for, with what is in it and what could go in it. */
-  slots?: ModuleSlot[]
-}
-
-/** Whether this module is one that asks for a resource at all, from its own manifest. */
-const wantsResource = computed(() => Boolean(module.value?.manifest?.database))
-
 const module = ref<ModuleRow | null>(null)
-const database = ref<ModuleDatabase | null>(null)
 const stats = ref<ModuleStats | null>(null)
 const series = ref<ModuleStats[]>([])
 const loading = ref(true)
@@ -96,7 +50,6 @@ const tabNames = computed(() => [
   // form, because there is more to say about it than one line holds: what it is, where it
   // is, where it came from, what is waiting for it, and — the part that matters — that a
   // module which asked for a database and has none is a gap rather than a choice.
-  ...(wantsResource.value || database.value?.slots?.length ? ['resources'] : []),
   'removal',
 ])
 
@@ -105,7 +58,6 @@ const tabTitles: Record<string, string> = {
   images: 'Images',
   notifications: 'Notifications',
   deployments: 'Deployments',
-  resources: 'Resources',
   settings: 'Settings',
   removal: 'Removal',
 }
@@ -129,14 +81,13 @@ async function load(quiet = false) {
   error.value = ''
   try {
     const [answer, statsAnswer] = await Promise.all([
-      api.get<{ module: ModuleRow; settings: Record<string, unknown>; database?: ModuleDatabase }>(`/modules/${moduleId.value}`),
+      api.get<{ module: ModuleRow; settings: Record<string, unknown> }>(`/modules/${moduleId.value}`),
       // A module that has never reported answers with nothing, which is not an
       // error: statistics are new, and a module may not have been restarted since.
       api.get<{ latest: ModuleStats | null; series?: ModuleStats[] }>(`/modules/${moduleId.value}/stats`, { series: 1 })
         .catch(() => ({ latest: null })),
     ])
     module.value = answer.module
-    database.value = answer.database ?? null
     // Which tabs this module gets is its own kind's business: only a registry has
     // images, and the page says so rather than offering an empty tab to everything.
     moduleKind.value = answer.module.kind
@@ -175,79 +126,6 @@ async function setEnabled(enabled: boolean) {
     busy.value = false
   }
 }
-
-/**
- * The database line, worded once so that the four cases cannot drift apart.
- *
- * Each carries its consequence rather than its state alone. "None" means two different things
- * depending on whether the module wanted one, and a page that said only the word would leave
- * the reader to work out which of them they are looking at — and the one where they are looking
- * at a gap is the one somebody has to go and fix.
- */
-const databaseLine = computed(() => {
-  const db = database.value
-  if (!db) return null
-
-  const held = db.resource
-  if (held) {
-    return {
-      name: held.name || db.name || 'unnamed',
-      badges: [held.kind, held.software, held.version].filter(Boolean).join(':') || '',
-      // Short, because this sits in a row with other facts in it, and a badge that needs
-      // two lines stops being a badge. The consequence goes in the note below instead.
-      origin: held.origin === 'manual'
-        ? 'described by an administrator'
-        : 'made by this instance',
-      since: held.created_at,
-      link: held.id,
-      // The difference decides who may act on it: this instance made the one it may destroy,
-      // and may only forget the one somebody else owns.
-      note: held.origin === 'manual'
-        ? 'on a host this instance does not run, so it is never dropped from here — only forgotten'
-        : '',
-      warn: false,
-    }
-  }
-
-  if (db.name) {
-    // A database with no resource behind it: provisioned before this instance kept a list of
-    // them. Said plainly rather than hidden, because it is the answer to "why is this one not
-    // on the Resources page", and a reader who cannot get there will assume the page is broken.
-    return {
-      name: db.name,
-      badges: '',
-      origin: '',
-      since: '',
-      link: '',
-      note: 'made before this instance kept a list of resources, so it is on no page; the '
-          + 'module still uses it, and only the module decides to let go of it',
-      warn: false,
-    }
-  }
-
-  if (db.wants_one) {
-    return {
-      name: 'none',
-      badges: '',
-      origin: '',
-      since: '',
-      link: '',
-      note: 'this module asked for a database when it registered and has none — a gap, not a '
-          + 'choice, and worth telling somebody about',
-      warn: true,
-    }
-  }
-
-  return {
-    name: 'none',
-    badges: '',
-    origin: '',
-    since: '',
-    link: '',
-    note: 'this module declared from the start that it keeps its data elsewhere',
-    warn: false,
-  }
-})
 
 const storageFraction = computed(() => {
   const current = stats.value
@@ -418,15 +296,6 @@ const storageFraction = computed(() => {
         </div>
       </section>
 
-      <!-- Where this module's data lives, and what is waiting for it. -->
-      <section v-else-if="tab === 'resources'">
-        <ModuleResources
-          :needs="database?.slots ?? []"
-          :wants-any="Boolean(database?.wants_one)"
-          @reload="load(true)"
-        />
-      </section>
-
       <!-- Instance-wide: every project's deployments through this module, which is
            what somebody who installed it wants to see. A project is not in scope here
            because a project can be reached through any of them. -->
@@ -484,15 +353,6 @@ const storageFraction = computed(() => {
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
-}
-
-/* The database line, set apart from the form below it without a card of its own: it is one
-   fact about the module, not a section of its own, and a box around it would make the eye
-   read it as something to be filled in. */
-.facts-db {
-  padding: 0 0 14px;
-  margin: 0 0 16px;
-  border-bottom: 1px solid var(--border);
 }
 
 .section-title {

@@ -39,13 +39,15 @@ type coreClient struct {
 }
 
 // registrationAnswer is what the core says when a module introduces itself.
+//
+// It carries no credentials, and that is the shape of things now: a module is configured with
+// settings, and the ones it marks secret are its own. Nothing is handed over once at
+// registration, because a credential given once and kept in a file is a credential that
+// cannot be rotated — and the administrator is the one who has the database.
 type registrationAnswer struct {
-	Integration json.RawMessage `json:"integration"`
-	Token       string          `json:"token"`
-	// Resources are this module's slots, filled, keyed by the name the manifest asked
-	// under. See resourceHandover.
-	Resources         map[string]resourceHandover `json:"resources"`
-	HeartbeatInterval string                      `json:"heartbeat_interval"`
+	Integration       json.RawMessage `json:"integration"`
+	Token             string          `json:"token"`
+	HeartbeatInterval string          `json:"heartbeat_interval"`
 }
 
 // register introduces this module, or introduces it again.
@@ -83,86 +85,7 @@ func (c *coreClient) register(ctx context.Context, token, name, endpoint string)
 	if err := json.Unmarshal(data, &answer); err != nil {
 		return "", fmt.Errorf("the core's answer could not be read: %w", err)
 	}
-	if c.databaseURL == "" {
-		assembled, err := applyHandover(&answer)
-		if err != nil {
-			return "", err
-		}
-		c.databaseURL = assembled
-	}
 	return answer.Token, nil
-}
-
-// historySlot is the name this module asks its database under, and the only one it asks for.
-//
-// Named because the core keys the handover by it, and the name is this module's own: the core
-// carries whatever a module calls its needs without knowing what they are for. Renaming it
-// here without renaming it in the manifest below would leave the module asking for nothing.
-const historySlot = "history"
-
-// applyHandover turns this module's slot in a registration answer into a connection string.
-//
-// The slot is required: without a database this module still deploys and still answers, and
-// records nothing — which from the outside is a module that has never deployed anything. So a
-// handover without it is refused here, where the administrator installing it can read why,
-// rather than accepted and carried on from, which is what a missing field used to do.
-func applyHandover(answer *registrationAnswer) (string, error) {
-	given, ok := answer.Resources[historySlot]
-	if !ok {
-		return "", fmt.Errorf("the core registered this module and gave it no %q, and without "+
-			"a database it deploys and remembers nothing — that failure looks exactly like a "+
-			"module that has never deployed anything", historySlot)
-	}
-	return given.connectionString()
-}
-
-// resourceHandover is one resource, as the core describes it: its parts, not a connection
-// string. Assembling that string is this module's business — see connectionString.
-//
-// The payload keys are written out rather than taken as a map, so that a core which renames
-// or drops one stops compiling here rather than handing this module a DSN with an empty user
-// in it. A slot this module did not ask for, or did not get, is simply absent from the map.
-type resourceHandover struct {
-	Kind    string `json:"kind"`
-	Name    string `json:"name"`
-	Role    string `json:"role"`
-	Payload struct {
-		Host     string `json:"host"`
-		Port     string `json:"port"`
-		Database string `json:"database_name"`
-		User     string `json:"username"`
-		Password string `json:"password"`
-	} `json:"payload"`
-}
-
-// connectionString turns the parts into what this module opens its history store with.
-//
-// A keyword/value DSN rather than a URL, because a password with a `@` in it is legal in a
-// database and has to be escaped in a URL; escaping it wrong is a connection refused with a
-// message about authentication, on the one database whose whole purpose is to be reached.
-//
-// Every part is required and said so by name. A half-filled DSN is the same string as an empty
-// one to the driver, and the resulting error names a socket rather than a missing field.
-func (d *resourceHandover) connectionString() (string, error) {
-	missing := []string{}
-	for _, part := range []struct{ name, value string }{
-		{"host", d.Payload.Host},
-		{"port", d.Payload.Port},
-		{"database", d.Payload.Database},
-		{"user", d.Payload.User},
-		{"password", d.Payload.Password},
-	} {
-		if strings.TrimSpace(part.value) == "" {
-			missing = append(missing, part.name)
-		}
-	}
-	if len(missing) > 0 {
-		return "", fmt.Errorf("the core described a database with no %s; a connection string "+
-			"missing any of these fails at connect time with an error about a socket rather "+
-			"than about the field that was left out", strings.Join(missing, ", "))
-	}
-	return fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=disable",
-		d.Payload.Host, d.Payload.Port, d.Payload.Database, d.Payload.User, d.Payload.Password), nil
 }
 
 // settings asks the core what a project has configured for this module.
@@ -250,3 +173,30 @@ func mustMarshal(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
 }
+
+// databaseSetting is where an administrator said this module's history lives.
+//
+// Asked of the core without a project, because this is a setting about the module and not
+// about anything a project deploys: a project scope on it would mean a project's
+// configuration choosing where a module keeps its own records, and two projects would then be
+// able to point one module at two databases.
+//
+// Empty is an ordinary answer rather than a failure — the core refuses to let this module
+// register without it, so an empty value here means somebody removed it afterwards — and the
+// caller says what is lost rather than refusing to deploy.
+func (c *coreClient) databaseSetting(ctx context.Context) string {
+	answer, err := c.settings(ctx, "")
+	if err != nil {
+		return ""
+	}
+	text, isText := answer[databaseSettingKey].(string)
+	if !isText {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+// databaseSettingKey is the name the manifest declares the setting under. Written out here as
+// well as in the manifest because the two are used from opposite ends and a rename of one
+// without the other is a module that asks for a setting it cannot read.
+const databaseSettingKey = "database_url"
