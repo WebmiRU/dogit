@@ -166,6 +166,11 @@ func (s *Server) startRun(ctx context.Context, project *models.Project, config *
 	s.log.Info("pipeline created", "project", project.Path, "pipeline", run.IID,
 		"ref", ref.Name, "source", string(source), "by", actor)
 
+	// Told after the commit, never inside it. A runner that heard this before the rows were
+	// there would call claim and be told the queue was empty, and go back to sleep — which is
+	// exactly the state this is meant to end.
+	s.announceWork(ctx)
+
 	s.publishPipeline(ctx, project.ID, nil, models.EventPipelineCreated, map[string]any{
 		"pipeline_iid": run.IID,
 		"ref":          ref.Name,
@@ -667,8 +672,13 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 // deep the queue is, is telling it the queue is empty. A runner that believes it is idle on
 // an empty queue is behaving correctly, and the panel would be the only thing saying
 // otherwise. Nil means "not known", which a runner can pass on and a person can act on.
-func (s *Server) pendingJobCount(r *http.Request) any {
-	count, err := s.store.Pipelines().CountPendingJobs(r.Context())
+// pendingJobCount is how deep the queue is, for whoever wants to know.
+//
+// A context rather than the request, because the queue is also asked about from the channel and
+// from anywhere else that is not a request at all — and a function that takes a request can only
+// be called from one.
+func (s *Server) pendingJobCount(ctx context.Context) any {
+	count, err := s.store.Pipelines().CountPendingJobs(ctx)
 	if err != nil {
 		s.log.Warn("count the queue", "error", err)
 		return nil
@@ -712,7 +722,7 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 			// those two want opposite responses from whoever is watching.
 			s.writeJSON(w, r, http.StatusOK, map[string]any{
 				"job":     nil,
-				"waiting": s.pendingJobCount(r),
+				"waiting": s.pendingJobCount(r.Context()),
 			})
 			return
 		}
@@ -725,7 +735,7 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 
 	answer := map[string]any{
 		"job":     s.runnerJobView(r, job),
-		"waiting": s.pendingJobCount(r),
+		"waiting": s.pendingJobCount(r.Context()),
 	}
 
 	// A job that builds an image needs a credential for the registry, and the

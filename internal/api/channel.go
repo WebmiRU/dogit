@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -149,6 +150,40 @@ func (ch *ModuleChannel) Send(ctx context.Context, moduleID uuid.UUID,
 		delivered++
 	}
 	return delivered, nil
+}
+
+// announceWork tells the runners that there is something to take.
+//
+// A fact, not a command, and that is what makes it free of the machinery the other messages
+// need: nothing is cached for it and nothing waits on it, because it cannot be stale. A runner
+// that hears this in four minutes calls claim and either takes the job or is told the queue is
+// empty, which is the answer it would have got by polling anyway.
+//
+// Which means a missed announcement costs a runner its usual polling interval and nothing else.
+// That is why this is a plain call after the commit rather than something hooked into the store
+// transaction: a failure to announce is a failure to be quick, and it must not be able to fail a
+// pipeline that has already been created.
+func (s *Server) announceWork(ctx context.Context) {
+	installed, err := s.store.Integrations().List(ctx)
+	if err != nil {
+		s.log.Warn("could not tell the runners that there is work", "error", err)
+		return
+	}
+
+	waiting := s.pendingJobCount(ctx)
+	for _, module := range installed {
+		if !module.Enabled || !strings.HasPrefix(module.Kind, "runner:") {
+			continue
+		}
+		delivered, err := s.moduleChannel().Send(ctx, module.ID, modulechan.WorkAvailable,
+			map[string]any{"waiting": waiting})
+		if err != nil {
+			s.log.Warn("could not send work to a runner", "module", module.Name, "error", err)
+			continue
+		}
+		s.log.Debug("work announced", "module", module.Name, "waiting", waiting,
+			"connections", delivered)
+	}
 }
 
 // handleModuleChannel is the upgrade, and then nothing but a read loop.

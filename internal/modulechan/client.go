@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,6 +12,20 @@ import (
 
 	"github.com/coder/websocket"
 )
+
+// Log is where the client says what happened to its connection.
+//
+// Two methods, because two things happen and the difference matters: the channel opening is
+// routine and the channel ending is not.
+type Log interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+}
+
+type discardLog struct{}
+
+func (discardLog) Info(string, ...any) {}
+func (discardLog) Warn(string, ...any) {}
 
 // Client is a module's end of the channel.
 //
@@ -38,8 +51,13 @@ type Client struct {
 	// guessing which is wrong.
 	OnMessage func(context.Context, Message)
 
-	// Logger says what happened. Optional; a nil logger discards.
-	Logger *slog.Logger
+	// Log says what happened. Optional; nil discards.
+	//
+	// An interface rather than a logger, because this half of the channel runs inside somebody
+	// else's program and that program has its own logging — the core has slog, this module
+	// has log.Printf, and neither should be asked to change for the other. *slog.Logger
+	// satisfies it as it stands.
+	Log Log
 
 	// Backoff is the wait between connection attempts, doubled each time up to MaxBackoff.
 	// The default is a second, which is short enough that a restarted module is working
@@ -228,11 +246,11 @@ func (c *Client) endpoint() (string, error) {
 	return parsed.String(), nil
 }
 
-func (c *Client) log() *slog.Logger {
-	if c.Logger != nil {
-		return c.Logger
+func (c *Client) log() Log {
+	if c.Log != nil {
+		return c.Log
 	}
-	return slog.New(slog.DiscardHandler)
+	return discardLog{}
 }
 
 // isExpectedClose says whether an error is a close either end meant.

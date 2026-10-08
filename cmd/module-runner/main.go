@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ewolf/dogit/internal/coreerr"
+	"github.com/ewolf/dogit/internal/modulechan"
 	"github.com/ewolf/dogit/internal/runner"
 )
 
@@ -151,7 +152,18 @@ func main() {
 	}()
 
 	log.Printf("module-runner: working in %s, docker %s", cfg.workspace, cfg.dockerBinary)
-	loop(ctx, core, runtime, cfg)
+
+	// The channel, and what it changes: the runner no longer has to be asleep when the core
+	// says there is work.
+	//
+	// The poll stays. It is not a fallback for a broken channel — a broken channel reconnects
+	// by itself — it is the answer to an announcement that did not arrive, and an announcement
+	// that does not arrive is exactly what a core that has just been restarted looks like. One
+	// mechanism removed the wait; it did not make waiting impossible.
+	wake := make(chan struct{}, 1)
+	go channel(ctx, cfg, wake)
+
+	loop(ctx, core, runtime, cfg, wake)
 
 	log.Printf("module-runner: stopped")
 }
@@ -350,8 +362,61 @@ type registryAccess struct {
 	Token       string `json:"token"`
 }
 
+// channel listens for the core saying there is work, and says so once.
+//
+// The signal carries nothing. What the runner does about it is to ask, over HTTP as it always
+// has: the claim is atomic and belongs in the database where two runners cannot both be given
+// the same job. All the channel removes is the wait before asking.
+func channel(ctx context.Context, cfg config, wake chan<- struct{}) {
+	client := &modulechan.Client{
+		URL:   cfg.coreURL,
+		Token: cfg.registrationToken,
+		Log:   runnerLog{},
+		OnMessage: func(_ context.Context, message modulechan.Message) {
+			if message.Kind != modulechan.WorkAvailable {
+				// Not an error: a core with more to say than this runner knows about is
+				// still a core to listen to.
+				return
+			}
+			// One wake is enough however many announcements arrive, because asking takes
+			// everything on offer: a runner told "there is work" twice does not take two
+			// jobs, it takes what there is and asks again when there is more.
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		},
+	}
+	client.Run(ctx)
+}
+
+// runnerLog is where this runner says what happened on the channel.
+//
+// The module is a program with log.Printf in it and a stdlib logger that is already told what
+// the prefix is, so the channel's two-method interface is met by printing rather than by
+// carrying a second logging setup through a binary that has no use for one.
+type runnerLog struct{}
+
+func (runnerLog) Info(msg string, args ...any) {
+	log.Print("module-runner: ", msg, " ", attrs(args))
+}
+
+func (runnerLog) Warn(msg string, args ...any) {
+	log.Print("module-runner: ", msg, " ", attrs(args))
+}
+
+// attrs renders the key/value pairs the channel logs with, in the slog spelling it uses: the
+// keys arrive as plain values rather than as slog.Attr, so they are printed as they come.
+func attrs(args []any) string {
+	parts := make([]string, 0, len(args)/2)
+	for i := 0; i+1 < len(args); i += 2 {
+		parts = append(parts, fmt.Sprint(args[i]), "=", fmt.Sprint(args[i+1]))
+	}
+	return strings.Join(parts, " ")
+}
+
 // loop takes work until the context is cancelled.
-func loop(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg config) {
+func loop(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg config, wake <-chan struct{}) {
 	slots := make(chan struct{}, cfg.concurrency)
 	runnerSlots = slots
 	ticker := time.NewTicker(cfg.poll)
@@ -371,6 +436,8 @@ func loop(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg con
 			}
 			return
 		case <-ticker.C:
+			take(ctx, core, runtime, cfg, slots)
+		case <-wake:
 			take(ctx, core, runtime, cfg, slots)
 		}
 	}
