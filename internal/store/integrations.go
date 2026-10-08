@@ -199,6 +199,42 @@ func (r *IntegrationRepo) ByKind(ctx context.Context, kind string) (*models.Inte
 		kind))
 }
 
+// ByKindAll returns every module of a kind, oldest first, enabled or not.
+//
+// The counterpart to ByKind, and the one most callers should reach for. ByKind answers "the
+// module of this kind", which was true when a kind had one module and is a guess now that it can
+// have several: it takes the oldest enabled one and says nothing about the rest, so a second
+// module is not an error, it is a module nobody mentions.
+//
+// Disabled modules are included on purpose. A caller that asks "is there a registry" and gets
+// nothing back cannot tell "never installed" from "installed and forbidden", and those are
+// different answers — one is a page that offers to install something, the other is one that
+// says it is switched off. Filtering in the query would make that distinction impossible to
+// express, which is why ByKindAll says what it says and leaves the choice to the caller.
+//
+// Kept next to ByKind rather than replacing it, because for some questions the oldest enabled is
+// the right answer and saying so in the query is cheaper than a comment in each caller. Where
+// several modules really are a choice, the caller has to make it — this returns all of them so
+// it can.
+func (r *IntegrationRepo) ByKindAll(ctx context.Context, kind string) ([]*models.Integration, error) {
+	rows, err := r.s.pool.Query(ctx,
+		`SELECT `+integrationColumns+` FROM integrations WHERE kind = $1 ORDER BY created_at`, kind)
+	if err != nil {
+		return nil, fmt.Errorf("list modules of a kind: %w", err)
+	}
+	defer rows.Close()
+
+	out := []*models.Integration{}
+	for rows.Next() {
+		module, err := scanIntegration(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, module)
+	}
+	return out, rows.Err()
+}
+
 func (r *IntegrationRepo) List(ctx context.Context) ([]*models.Integration, error) {
 	rows, err := r.s.pool.Query(ctx,
 		`SELECT `+integrationColumns+` FROM integrations ORDER BY kind, name`)

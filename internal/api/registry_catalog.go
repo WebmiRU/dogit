@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/modulehost"
-	"github.com/ewolf/dogit/internal/store"
 )
 
 // catalogTokenTTL is how long an administrator's credential for the registry's
@@ -45,50 +43,89 @@ func (s *Server) handleRegistryCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	answer := map[string]any{
-		"reason":  "",
-		"groups":  []any{},
-		"address": "",
+		"reason":     "",
+		"groups":     []any{},
+		"address":    "",
+		"registries": []any{},
 	}
 
-	integration, err := s.store.Integrations().ByKind(r.Context(), registryKind)
-	if errors.Is(err, store.ErrNotFound) {
-		answer["reason"] = "no_registry_module"
-		s.writeJSON(w, r, http.StatusOK, answer)
-		return
-	}
+	// Every registry on the instance, and a credential for each.
+	//
+	// The page asks each registry what it holds, so with several of them it needs an address and
+	// a token per registry — a token minted for one module is refused by another, which is the
+	// whole of "one token belongs to one module" arriving as a constraint on this endpoint. The
+	// list is the answer, not a convenience: an instance with two registries used to show
+	// whichever happened to be older and say nothing, which is how a mirror silently takes over
+	// the page of the registry it mirrors.
+	//
+	// One token for the whole instance rather than one per project: this page asks each registry
+	// once, and a token per project would mean one credential for every project an installation
+	// has, all of them live in a tab at the same time. No project, so this token covers the whole
+	// instance and is only handed to an administrator. The registry's own guard still decides per
+	// image name — this credential says "an administrator is asking", not "anything goes".
+	registries, err := s.store.Integrations().ByKindAll(r.Context(), registryKind)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if !integration.Enabled {
+	if len(registries) == 0 {
+		answer["reason"] = "no_registry_module"
+		s.writeJSON(w, r, http.StatusOK, answer)
+		return
+	}
+
+	usable := make([]*models.Integration, 0, len(registries))
+	for _, candidate := range registries {
+		if candidate.Enabled {
+			usable = append(usable, candidate)
+		}
+	}
+	if len(usable) == 0 {
 		answer["reason"] = "registry_forbidden"
 		s.writeJSON(w, r, http.StatusOK, answer)
 		return
 	}
 
-	address, err := s.registryAddress(r.Context(), integration)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
+	listedRegistries := make([]map[string]any, 0, len(usable))
+	for _, candidate := range usable {
+		address, err := s.registryAddress(r.Context(), candidate)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if address == "" {
+			// Registry that nobody can reach. Skipped rather than fatal: the page is a
+			// catalogue of what exists, and one registry missing its address says nothing
+			// about the others. registryAddress has already said so in the log.
+			continue
+		}
+		token, err := s.issuePackageToken(r, user, candidate, nil,
+			[]string{models.ScopeRegistryPull, models.ScopeRegistryDelete})
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		listedRegistries = append(listedRegistries, map[string]any{
+			"name":           candidate.Name,
+			"kind":           candidate.Kind,
+			"address":        address,
+			"token":          token,
+			"dedicated_host": modulehost.IsDedicatedHost(s.cfg.PublicHost, candidate.Capabilities.Routing),
+		})
 	}
-	if address == "" {
+	if len(listedRegistries) == 0 {
 		answer["reason"] = "registry_not_published"
 		s.writeJSON(w, r, http.StatusOK, answer)
 		return
 	}
-
-	// One token for the whole instance rather than one per project: this page asks
-	// the registry once, and a token per project would mean one credential for every
-	// project an installation has, all of them live in a tab at the same time.
-	// No project: this token covers the whole instance, and it is only handed to an
-	// administrator. The registry's own guard still decides per image name — this
-	// credential says "an administrator is asking", not "anything goes".
-	token, err := s.issuePackageToken(r, user, integration, nil,
-		[]string{models.ScopeRegistryPull, models.ScopeRegistryDelete})
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
+	answer["registries"] = listedRegistries
+	// Kept so that one field of the old shape still describes an instance with one registry,
+	// and so that anything reading it gets the registry rather than nothing. Not a fallback:
+	// with several it is simply the first, and `registries` is what to read.
+	first := listedRegistries[0]
+	answer["address"] = first["address"]
+	answer["kind"] = first["kind"]
+	answer["token"] = first["token"]
 
 	// Which projects exist, and which group each is in. Names are resolved here
 	// rather than in the page because a group is a thing the core owns, and a page
@@ -119,9 +156,6 @@ func (s *Server) handleRegistryCatalog(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	answer["address"] = address
-	answer["kind"] = integration.Kind
-	answer["token"] = token
 	answer["expires_in"] = int(catalogTokenTTL.Seconds())
 	answer["projects"] = listed
 	answer["group_names"] = groupNames

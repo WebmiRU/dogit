@@ -1,10 +1,7 @@
 package api
 
 import (
-	"encoding/json"
-	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,20 +50,39 @@ func (s *Server) handleProjectImages(w http.ResponseWriter, r *http.Request) {
 		"can_delete": false,
 	}
 
-	integration, err := s.store.Integrations().ByKind(r.Context(), registryKind)
-	if errors.Is(err, store.ErrNotFound) {
-		s.writeJSON(w, r, http.StatusOK, answer)
-		return
-	}
+	// Every registry on the instance, not the first one.
+	//
+	// The page asks two things and only one of them has an answer that survives more than one
+	// registry: whether this project may push *anywhere* is decided by whether at least one
+	// registry is usable. The other — which registry to talk to, and the token scoped to it —
+	// cannot be answered from this request, because nothing here names a registry. So the page
+	// is told how many there are and given one to look at, rather than being left to believe
+	// there is only ever one.
+	registries, err := s.store.Integrations().ByKindAll(r.Context(), registryKind)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	if !integration.Enabled {
+	if len(registries) == 0 {
+		s.writeJSON(w, r, http.StatusOK, answer)
+		return
+	}
+
+	usable := make([]*models.Integration, 0, len(registries))
+	for _, candidate := range registries {
+		if candidate.Enabled {
+			usable = append(usable, candidate)
+		}
+	}
+	if len(usable) == 0 {
+		// Installed and switched off is not the same as never installed, and the page says
+		// something different about each: one offers to install a registry, the other reports
+		// that there is one and it is off.
 		answer["reason"] = "registry_forbidden"
 		s.writeJSON(w, r, http.StatusOK, answer)
 		return
 	}
+	answer["registries"] = len(usable)
 
 	pull, err := s.store.Permissions().Can(r.Context(), user, project, store.ActionRegistryPull)
 	if err != nil {
@@ -84,32 +100,41 @@ func (s *Server) handleProjectImages(w http.ResponseWriter, r *http.Request) {
 	// be right when the module answers somewhere the instance's name does not reach.
 	// An unset setting means the module's own declared default, which is what a
 	// default is: the module said where it publishes itself when it started.
-	override := ""
-	settings, err := s.store.Integrations().SettingsFor(r.Context(), integration.ID, nil, nil, integration.Capabilities.Settings)
-	if err == nil {
-		if raw, ok := settings["public_address"]; ok {
-			_ = json.Unmarshal(raw, &override)
+	// The one this page talks to: the first usable registry that says where it is.
+	//
+	// A registry that published no address is a misconfiguration, and registryAddress says so
+	// in the log itself. The search continues rather than stopping on the first one, so that a
+	// second registry being configured properly is enough for the page to work — the alternative
+	// is a page that fails because of a registry nobody was going to use.
+	//
+	// registryAddress rather than the copy of it that used to be inline here: two places
+	// answering "where does this module publish itself" is two places to forget the declared
+	// default in, and this is the setting the whole image page depends on.
+	var integration *models.Integration
+	var address string
+	for _, candidate := range usable {
+		found, err := s.registryAddress(r.Context(), candidate)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
 		}
-	}
-	if strings.TrimSpace(override) == "" {
-		if spec, found := settingSpecOf(integration, "public_address"); found {
-			if value, ok := spec.Default.(string); ok {
-				override = value
-			}
+		if found == "" {
+			continue
 		}
+		integration, address = candidate, found
+		break
 	}
-
-	address, published := modulehost.BaseURLAs(s.cfg.PublicHost, integration.Capabilities.Routing, override)
-	if !published {
-		// A registry nobody can reach is a misconfiguration, not a state to hide: the
-		// module registered without saying where it is.
-		s.log.Warn("the registry module published no address",
-			"module_id", integration.ID, "endpoint", integration.Endpoint)
+	if integration == nil {
 		answer["reason"] = "registry_not_published"
 		s.writeJSON(w, r, http.StatusOK, answer)
 		return
 	}
 
+	// From here on there is at least one usable registry, which is what the answer to "can this
+	// project push" means: not this particular one, but some registry on this instance that is
+	// switched on and reachable. Whether a push to a named registry will work is checked where
+	// the registry is known — the address is in the image name — because that is the only place
+	// where the question has an address to answer with.
 	scopes := []string{models.ScopeRegistryPull}
 	canDelete := false
 	if allowed, err := s.store.Permissions().Can(r.Context(), user, project, store.ActionRegistryDelete); err == nil && allowed {

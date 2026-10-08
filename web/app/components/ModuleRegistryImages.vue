@@ -27,6 +27,23 @@ interface CatalogRepository {
   size_bytes: number
   tag_count: number
   tags: CatalogTag[]
+  /**
+   * Which registry holds it, when the instance has more than one.
+   *
+   * Not decoration: a credential is minted for one module and refused by another, so deleting
+   * a tag needs the registry it came from. An image whose registry is not named could only be
+   * deleted by trying every registry until one accepted, and the one that accepted would be
+   * whichever answered first rather than whichever holds the image.
+   */
+  registry?: string
+}
+
+/** One registry on this instance, and a credential for it. */
+interface RegistryAccess {
+  name: string
+  kind: string
+  address: string
+  token: string
 }
 
 interface CatalogProject {
@@ -59,6 +76,10 @@ const groups = ref<CatalogGroup[]>([])
 const loading = ref(true)
 const error = ref('')
 const unavailable = ref('')
+/** Registries that could not be reached, named. Empty when all of them answered. */
+const unreachable = ref<string[]>([])
+/** Names of the registries that answered. More than one changes what the page has to show. */
+const registryNames = ref<string[]>([])
 const busyTag = ref('')
 const collapsed = ref<Record<string, boolean>>({})
 
@@ -103,12 +124,12 @@ async function load(quiet = false) {
   if (!quiet) loading.value = true
   error.value = ''
   unavailable.value = ''
+  unreachable.value = []
 
   try {
     const access = await api.get<{
       reason: string
-      address: string
-      token: string
+      registries: RegistryAccess[]
       projects: { path: string; group: string | null }[]
       group_names: Record<string, string>
     }>('/registry/catalog')
@@ -125,18 +146,40 @@ async function load(quiet = false) {
       total: 0,
     }
 
-    const response = await fetch(`${access.address}/catalog`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access.token}` },
-      body: JSON.stringify({}),
-    })
-    if (!response.ok) {
-      const detail = await response.json().catch(() => null)
-      throw new Error(detail?.errors?.[0]?.message ?? `the registry answered ${response.status}`)
+    // Every registry, and one that fails does not hide the others.
+    //
+    // An instance with a registry that is down and one that is fine is an ordinary state, and a
+    // page that goes blank because of it tells the operator less than a page that lists what it
+    // could reach and names what it could not. The failure is remembered and shown; it is not
+    // thrown away.
+    const collected: CatalogRepository[] = []
+    const failed: string[] = []
+    for (const registry of access.registries ?? []) {
+      try {
+        const response = await fetch(`${registry.address}/catalog`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${registry.token}` },
+          body: JSON.stringify({}),
+        })
+        if (!response.ok) {
+          const detail = await response.json().catch(() => null)
+          throw new Error(detail?.errors?.[0]?.message ?? `the registry answered ${response.status}`)
+        }
+        const result = await response.json()
+        for (const repo of (result.repos ?? []) as CatalogRepository[]) {
+          collected.push({ ...repo, registry: registry.name })
+        }
+      } catch {
+        failed.push(registry.name)
+      }
     }
 
-    const result = await response.json()
-    groups.value = arrange(result.repos ?? [], placement.value)
+    if (collected.length === 0 && failed.length > 0) {
+      throw new Error(`the registry could not be reached: ${failed.join(', ')}`)
+    }
+    unreachable.value = failed
+    registryNames.value = (access.registries ?? []).map((one) => one.name)
+    groups.value = arrange(collected, placement.value)
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the registry could not be reached'
   } finally {
@@ -209,10 +252,18 @@ async function removeTag(repo: CatalogRepository, tag: CatalogTag) {
   busyTag.value = full
   error.value = ''
   try {
-    const access = await api.get<{ address: string; token: string }>('/registry/catalog')
-    const response = await fetch(`${access.address}/packages/delete`, {
+    // The credential belongs to one registry, so the registry the image came from decides
+    // which one to present. With a single registry this is the same call as before; with
+    // several, presenting the wrong one is refused by the module that holds the image.
+    const access = await api.get<{ registries: RegistryAccess[] }>('/registry/catalog')
+    const registry = (access.registries ?? []).find((one) => one.name === repo.registry)
+      ?? access.registries?.[0]
+    if (!registry) {
+      throw new Error('this instance has no registry to delete from')
+    }
+    const response = await fetch(`${registry.address}/packages/delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${access.token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${registry.token}` },
       body: JSON.stringify({ project: repo.project, repository: repo.repository, tag: tag.name }),
     })
     if (!response.ok) {
@@ -287,6 +338,9 @@ onBeforeUnmount(() => stopWatching?.())
 
     <div v-if="error" class="alert alert-error">{{ error }}</div>
     <div v-if="unavailable" class="alert alert-warning">{{ unavailable }}</div>
+    <div v-else-if="unreachable.length" class="alert alert-warning">
+      Not reachable: {{ unreachable.join(', ') }}. What the other registries hold is below.
+    </div>
 
     <div v-if="loading && groups.length === 0" class="spinner">Reading the registry…</div>
 
@@ -296,6 +350,7 @@ onBeforeUnmount(() => stopWatching?.())
 
     <div v-else class="summary">
       <span class="badge badge-green">Online</span>
+      <span v-if="registryNames.length > 1">{{ registryNames.length }} registries</span>
       <span>{{ groups.length }} {{ groups.length === 1 ? 'group' : 'groups' }}</span>
       <span>{{ images }} {{ images === 1 ? 'image' : 'images' }}</span>
       <span>{{ repositories }} {{ repositories === 1 ? 'repository' : 'repositories' }}</span>
@@ -329,9 +384,10 @@ onBeforeUnmount(() => stopWatching?.())
             <span class="muted small mono">{{ size(project.size) }}</span>
           </div>
 
-          <table v-for="repo in project.repositories" :key="repo.repository" class="images">
+          <table v-for="repo in project.repositories" :key="`${repo.registry}/${repo.repository}`" class="images">
             <thead>
               <tr>
+                <th>Repository</th>
                 <th>Tag</th>
                 <th>Digest</th>
                 <th>Built</th>
@@ -341,6 +397,14 @@ onBeforeUnmount(() => stopWatching?.())
             </thead>
             <tbody>
               <tr v-for="tag in repo.tags" :key="tag.name">
+                <td class="mono small">
+                  {{ repo.repository }}
+                  <span
+                    v-if="registryNames.length > 1"
+                    class="badge"
+                    :title="`Held by the registry module ${repo.registry}`"
+                  >{{ repo.registry }}</span>
+                </td>
                 <td class="tag">{{ tag.name }}</td>
                 <td class="mono muted small">{{ tag.digest.slice(0, 19) }}</td>
                 <td class="muted small">{{ created(tag) }}</td>
