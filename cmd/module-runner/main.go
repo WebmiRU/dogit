@@ -36,6 +36,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ewolf/dogit/internal/coreerr"
 	"github.com/ewolf/dogit/internal/runner"
 )
 
@@ -1345,7 +1346,7 @@ func (c *coreClient) postAs(ctx context.Context, path string, body any, token st
 	// nothing to return answers with, and treating it as a failure made every
 	// progress report look like something that had gone wrong.
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return coreRefusal(response)
+		return coreerr.Refusal(response)
 	}
 	if out == nil {
 		return nil
@@ -1360,23 +1361,6 @@ func (c *coreClient) postAs(ctx context.Context, path string, body any, token st
 // sees "core said 400" and has nothing to act on. The core writes its reason into a small JSON
 // object; the reason is taken out of it, and anything unparseable is passed through rather than
 // dropped, because a body this code does not understand is still more than a number.
-func coreRefusal(response *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-
-	var answer struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &answer); err == nil && answer.Error.Message != "" {
-		return fmt.Errorf("the core refused (%d): %s", response.StatusCode, answer.Error.Message)
-	}
-	if text := strings.TrimSpace(string(body)); text != "" {
-		return fmt.Errorf("the core refused (%d): %s", response.StatusCode, text)
-	}
-	return fmt.Errorf("the core refused with %d and said nothing", response.StatusCode)
-}
-
 var errUnauthorized = errors.New("unauthorized")
 
 func (c *coreClient) register(ctx context.Context, token, name, endpoint string, man map[string]any) (string, error) {

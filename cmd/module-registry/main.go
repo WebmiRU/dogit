@@ -26,6 +26,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ewolf/dogit/internal/coreerr"
 )
 
 const (
@@ -286,16 +288,7 @@ func (c *coreClient) post(ctx context.Context, path string, body any, token stri
 	switch response.StatusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent:
 	default:
-		// The body is short and useful: the core explains refusals in words.
-		var problem struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := json.NewDecoder(response.Body).Decode(&problem); err == nil && problem.Error.Message != "" {
-			return fmt.Errorf("core said %d: %s", response.StatusCode, problem.Error.Message)
-		}
-		return fmt.Errorf("core said %d", response.StatusCode)
+		return coreerr.Refusal(response)
 	}
 
 	if out == nil {
@@ -318,7 +311,7 @@ func (c *coreClient) get(ctx context.Context, path, token string, out any) error
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("core said %d", response.StatusCode)
+		return coreerr.Refusal(response)
 	}
 	return json.NewDecoder(response.Body).Decode(out)
 }
@@ -391,7 +384,7 @@ func (c *coreClient) resolveImage(ctx context.Context, name string) (string, err
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("core said %d", response.StatusCode)
+		return "", coreerr.Refusal(response)
 	}
 	if err := json.NewDecoder(response.Body).Decode(&answer); err != nil {
 		return "", err

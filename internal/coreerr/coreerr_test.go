@@ -1,4 +1,4 @@
-package main
+package coreerr
 
 import (
 	"io"
@@ -8,8 +8,8 @@ import (
 )
 
 // A module that cannot start prints its error, and "core said 400" is not something an operator
-// can act on. The reason is written into the body and was being dropped on the floor, which is
-// why a stand that refused a module for half an hour had nothing in its logs but a number.
+// can act on. The reason is written into the body and was being dropped on the floor, which is why
+// a stand that refused a module for half an hour had nothing in its logs but a number.
 func TestARefusalIsReportedWithItsReason(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -46,7 +46,7 @@ func TestARefusalIsReportedWithItsReason(t *testing.T) {
 				StatusCode: c.status,
 				Body:       io.NopCloser(strings.NewReader(c.body)),
 			}
-			err := coreRefusal(response)
+			err := Refusal(response)
 			if err == nil {
 				t.Fatal("a refusal produced no error")
 			}
@@ -54,5 +54,21 @@ func TestARefusalIsReportedWithItsReason(t *testing.T) {
 				t.Fatalf("the reason is missing from %q, wanted it to name %q", err, c.wants)
 			}
 		})
+	}
+}
+
+// The status code is in every message, including the one that says the core said nothing at all.
+//
+// Without it, "the core refused and said nothing" is not traceable to a request, and a module
+// making fifty calls a minute produces fifty identical lines with nothing to tell them apart.
+func TestEveryRefusalNamesTheStatus(t *testing.T) {
+	for _, body := range []string{"", "{}", `{"error":{"message":"a reason"}}`} {
+		response := &http.Response{
+			StatusCode: 401,
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}
+		if err := Refusal(response); err == nil || !strings.Contains(err.Error(), "401") {
+			t.Fatalf("body %q produced %v, which does not name the status", body, err)
+		}
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ewolf/dogit/internal/coreerr"
 )
 
 // The core, as this module sees it.
@@ -78,7 +80,7 @@ func (c *coreClient) register(ctx context.Context, token, name, endpoint string)
 		return "", err
 	}
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("the core said %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
+		return "", coreerr.Refusal(response)
 	}
 
 	var answer registrationAnswer
@@ -164,7 +166,7 @@ func (c *coreClient) heartbeat(ctx context.Context) error {
 		return fmt.Errorf("the core no longer recognises this module")
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("the core said %d", response.StatusCode)
+		return coreerr.Refusal(response)
 	}
 	return nil
 }
