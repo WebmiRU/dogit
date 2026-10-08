@@ -63,8 +63,13 @@ func (o DeployOperation) Running() bool {
 // begun has no start time, so "is it running" says no, and a page that drew that as finished
 // would show a deployment that is going to happen as one that is over — on a run where an
 // earlier place is still rolling out and this one is plainly next.
+//
+// Asked of the status as well as the times, and that is the whole difficulty. A deploy step that
+// was skipped also has no start time, and it is not waiting for anything: it was declined before
+// it began and never will run. Called by the absence of a start time, it would be drawn "Waiting"
+// for ever — a card promising a deployment that is never coming.
 func (o DeployOperation) Queued() bool {
-	return o.StartedAt == nil && o.FinishedAt == nil
+	return o.StartedAt == nil && o.FinishedAt == nil && o.Status == JobPending
 }
 
 // Finished reports whether this operation is over.
@@ -74,7 +79,18 @@ func (o DeployOperation) Queued() bool {
 // and an end time that never came. Treating that as finished is how a list ends up with cards for
 // steps the pipeline decided to skip.
 func (o DeployOperation) Finished() bool {
-	return o.FinishedAt != nil
+	if o.FinishedAt != nil {
+		return true
+	}
+	// A step that was declined before it began has no end time to be found by — nothing
+	// ran, so there was no last moment of running — and it is over all the same. Leaving it
+	// off both lists is how a card somebody was watching vanished: the job was skipped, the
+	// page had never heard of skipped, and there was nothing left to draw.
+	switch o.Status {
+	case JobSuccess, JobFailed, JobRefused, JobSkipped, JobCanceled, JobAbandoned, JobInterrupted:
+		return true
+	}
+	return false
 }
 
 // DeployOperations lists a project's deployments, running ones first.
@@ -84,9 +100,16 @@ func (o DeployOperation) Finished() bool {
 // finished ones. `finished` says how many of those to keep — ten on the page, and a page that
 // shows a hundred finished deployments is a page nobody reads the running ones off.
 //
-// Ordered by when each began, newest first, with milliseconds kept. Two deployments in the same
-// second are a normal thing to happen and a coin toss otherwise, and a card that moves about
-// between two reloads is a page that cannot be looked at.
+// Ordered by when each became visible to a reader, newest first, with milliseconds kept. Two
+// deployments in the same second are a normal thing to happen and a coin toss otherwise, and a
+// card that moves about between two reloads is a page that cannot be looked at.
+//
+// A deployment that has not started has no start time, and that is not a reason to put it last.
+// It was asked for at a known moment — the run that wants it was created then — and that is the
+// moment a reader watching the page first saw a card for it. Ordering on the start time alone
+// sent it to the bottom of the page: a card somebody had been watching for a minute jumped below
+// every deployment that finished before it was even queued, which reads as the page forgetting
+// it rather than as the page sorting it.
 //
 // `place` is a place's name and nothing else — not a cluster, not a namespace. One name is one
 // place: a deploy step says `target: jabjab.ru`, and what that row of the module's settings holds
@@ -106,11 +129,6 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		FROM jobs j
 		JOIN pipelines p ON p.id = j.pipeline_id
 		WHERE p.project_id = $1 AND j.deploy IS NOT NULL
-		  -- A deploy step nobody has reached yet. It was asked for, it is going to happen,
-		  -- and it is the answer to "why is nothing happening" while an earlier place in the
-		  -- same run is still rolling out. Left out, a page shows one deployment and no sign
-		  -- that a second is waiting behind it, which reads as the run having one job.
-		  AND (j.started_at IS NOT NULL OR j.status = 'pending')
 		  AND ($2 = '' OR COALESCE(NULLIF(j.deploy->>'Cluster', ''), j.deploy->>'Target') = $2)
 		  AND (j.finished_at IS NULL
 		       OR j.id IN (
@@ -121,7 +139,7 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		           AND ($2 = '' OR COALESCE(NULLIF(j2.deploy->>'Cluster', ''), j2.deploy->>'Target') = $2)
 		         ORDER BY j2.started_at DESC, j2.id DESC LIMIT $3
 		       ))
-		ORDER BY j.started_at DESC NULLS LAST, j.id DESC`,
+		ORDER BY COALESCE(j.started_at, p.started_at, p.created_at) DESC, j.id DESC`,
 		projectID, place, finished)
 	if err != nil {
 		return nil, fmt.Errorf("list deploy operations: %w", err)

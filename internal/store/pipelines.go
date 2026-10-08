@@ -44,6 +44,9 @@ const (
 	JobFailed   = "failed"
 	JobCanceled = "canceled"
 	JobSkipped  = "skipped"
+	// JobAbandoned is a step the pipeline stopped waiting for. Distinct from failed, and from
+	// skipped, in the same way refused is: nothing was attempted and nothing broke.
+	JobAbandoned = "abandoned"
 	// JobRefused is a job that was carried out and declined: the module was asked and
 	// said no, in words, having done nothing to the cluster.
 	//

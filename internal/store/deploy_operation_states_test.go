@@ -97,18 +97,25 @@ func TestWaitingRunningAndOverAreEachOnTheList(t *testing.T) {
 // The three states are asked of the row and never inferred from the absence of the other two, so
 // that a fourth state appearing later does not quietly become "finished".
 func TestTheThreeStatesAreEachDecidedOnTheirOwn(t *testing.T) {
-	none := store.DeployOperation{JobID: 1}
-	running := store.DeployOperation{JobID: 2, StartedAt: ptr(time.Now())}
-	finished := store.DeployOperation{JobID: 3, StartedAt: ptr(time.Now()), FinishedAt: ptr(time.Now())}
+	// Waiting is a status as well as a missing start time: a step that was declined before it
+	// began is in exactly the same position and is never going to run.
+	none := store.DeployOperation{JobID: 1, Status: store.JobPending}
+	running := store.DeployOperation{JobID: 2, Status: store.JobRunning, StartedAt: ptr(time.Now())}
+	finished := store.DeployOperation{JobID: 3, Status: store.JobSuccess,
+		StartedAt: ptr(time.Now()), FinishedAt: ptr(time.Now())}
+	skipped := store.DeployOperation{JobID: 4, Status: store.JobSkipped}
+	refused := store.DeployOperation{JobID: 5, Status: store.JobRefused}
 
 	cases := map[string]struct {
 		op                                    store.DeployOperation
 		wantRunning, wantQueued, wantFinished bool
 	}{
-		"never started":    {none, false, true, false},
+		"waiting":          {none, false, true, false},
 		"under way":        {running, true, false, false},
 		"over":             {finished, false, false, true},
 		"started and over": {finished, false, false, true},
+		"skipped":          {skipped, false, false, true},
+		"refused":          {refused, false, false, true},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -126,3 +133,60 @@ func TestTheThreeStatesAreEachDecidedOnTheirOwn(t *testing.T) {
 }
 
 func ptr(at time.Time) *time.Time { return &at }
+
+// A card somebody is watching does not jump to the bottom of the page.
+//
+// A deployment that has not started has no start time to sort by, and sorting on the start time
+// alone puts it last — so a card a reader had been watching for a minute dropped below every
+// deployment that finished before it was even queued. The page had not forgotten it; the page
+// had sorted it out of sight, which looks exactly like forgetting.
+//
+// It is ordered by when the run that wants it was created, which is when a reader first saw a
+// card for it. A skipped deployment — refused, switched off, or never reached — is the case that
+// shows this best: it has no start time at all, and it is precisely the card a reader was
+// watching a moment before.
+func TestADeploymentThatNeverStartedKeepsItsPlaceInTheOrder(t *testing.T) {
+	st := dbtest.Open(t)
+	project := dbtest.NewProject(t, st, "ops-order", nil)
+
+	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
+
+	// Three that began, oldest first.
+	for i, name := range []string{"older", "old", "newest"} {
+		at := began.Add(time.Duration(i) * time.Minute)
+		anOperationAt(t, st, project.ID, name, &at, ptr(at.Add(time.Second)), "success")
+	}
+	// And one that never began at all, in a run created after all three.
+	anOperationAt(t, st, project.ID, "never", nil, nil, "skipped")
+	// And one refused before it began, which is the same shape and the same argument.
+	anOperationAt(t, st, project.ID, "refused", nil, nil, "refused")
+
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(found) != 5 {
+		t.Fatalf("read %d operations, want 5 — every deploy step, started or not: %+v", len(found), found)
+	}
+
+	// The two runs were created last, so their cards belong on top: the reader saw them last,
+	// and they are the ones they were watching. A step that was declined before it began is on
+	// the list and is not waiting for anything.
+	names := make([]string, 0, len(found))
+	for _, one := range found {
+		names = append(names, one.Name)
+	}
+	for _, one := range found {
+		if one.Name == "deploy:never" || one.Name == "deploy:refused" {
+			if one.Queued() {
+				t.Errorf("%s is drawn as waiting its turn, and it is never going to run", one.Name)
+			}
+			if !one.Finished() {
+				t.Errorf("%s is on neither list, so its card is not drawn at all", one.Name)
+			}
+		}
+	}
+	if len(names) < 2 || names[0] == "deploy:older" || names[1] == "deploy:older" {
+		t.Errorf("the steps that never began sorted to the bottom: %v", names)
+	}
+}
