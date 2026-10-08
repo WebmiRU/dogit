@@ -252,7 +252,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	request.Expect.Secrets = spec.Expect.Secrets
 	request.Expect.ConfigMaps = spec.Expect.ConfigMaps
 
-	target, err := s.deployModule(ctx, spec.Module)
+	target, err := s.deployModuleForPlace(ctx, project, spec.Target, spec.Module)
 	if err != nil {
 		return err
 	}
@@ -701,11 +701,30 @@ func deploySpecForJob(job *store.Job, config *pipeline.Config) pipeline.DeploySp
 	return config.Deploy
 }
 
-// deployModule is the module that does this kind of deployment.
-func (s *Server) deployModule(ctx context.Context, target string) (*models.Integration, error) {
-	kind := fmt.Sprintf(deployTargetKind, target)
-	module, err := s.store.Integrations().ByKind(ctx, kind)
+// deployModuleForPlace is the module that does this kind of deployment to this place.
+//
+// The place is what tells two modules of one kind apart, and it is already in everything that
+// asks: a job carries both a target kind and the cluster it is going to, and a cluster is
+// configured on exactly one module. So the question was never really "which module of kind
+// deploy:kubernetes" — it was "which module has jabjab-deploy2", and the kind was only ever a
+// filter on the answer.
+//
+// Where there is no place to go by, the only module of that kind is the answer, because there is
+// nothing to choose between. Where there is more than one and no place, this refuses rather than
+// takes the oldest: the choice decides which cluster a deployment lands on, and the core does not
+// know enough to make it. The refusal names the modules, so the fix is a word rather than a
+// reading of somebody else's configuration.
+func (s *Server) deployModuleForPlace(ctx context.Context, project *models.Project,
+	place, target string) (*models.Integration, error) {
+
+	kind := fmt.Sprintf(deployTargetKind, strings.TrimSpace(target))
+	place = strings.TrimSpace(place)
+
+	installed, err := s.store.Integrations().ByKindAll(ctx, kind)
 	if err != nil {
+		return nil, err
+	}
+	if len(installed) == 0 {
 		// A 404 and not a plain error, because it is one.
 		//
 		// Left as it was, this came back as "an unexpected error occurred" with a 500,
@@ -719,10 +738,72 @@ func (s *Server) deployModule(ctx context.Context, target string) (*models.Integ
 			"no deploy module of kind %q is installed; this instance has %s",
 			kind, s.installedDeployKinds(ctx))
 	}
-	if !module.Enabled {
+
+	usable := make([]*models.Integration, 0, len(installed))
+	for _, candidate := range installed {
+		if candidate.Enabled {
+			usable = append(usable, candidate)
+		}
+	}
+	if len(usable) == 0 {
 		return nil, errForbiddenf("the %q module has been forbidden on this instance", kind)
 	}
-	return module, nil
+
+	if place != "" {
+		for _, candidate := range usable {
+			if s.hasPlace(ctx, project, candidate, place) {
+				return candidate, nil
+			}
+		}
+		// Said plainly rather than falling through to "no module": the module is there,
+		// this cluster is not on it, and those are different mistakes with different fixes.
+		return nil, errNotFoundf(
+			"cluster %q is not configured on any installed %q module (they are %s)",
+			place, kind, s.moduleNames(usable))
+	}
+
+	if len(usable) == 1 {
+		return usable[0], nil
+	}
+	return nil, errBadRequestf(
+		"this instance has %d %q modules (%s) and nothing says which one to use, because no "+
+			"cluster was named. Name the cluster, or take the module out of the instance.",
+		len(usable), kind, s.moduleNames(usable))
+}
+
+// moduleNames is how a list of modules is shown to somebody who has to pick one.
+func (s *Server) moduleNames(modules []*models.Integration) string {
+	names := make([]string, 0, len(modules))
+	for _, module := range modules {
+		names = append(names, module.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// hasPlace says whether a cluster of that name is configured on a module.
+//
+// Read at the project's own level, because that is where somebody would have written it: a
+// cluster inherited from the group is not the same cluster as one written here, and treating them
+// as the same would send a deployment somewhere the project never configured.
+func (s *Server) hasPlace(ctx context.Context, project *models.Project,
+	module *models.Integration, place string) bool {
+
+	if project == nil {
+		return false
+	}
+	id := project.ID
+	settings, err := s.store.Integrations().SettingsFor(ctx, module.ID,
+		project.GroupID, &id, module.Capabilities.Settings)
+	if err != nil {
+		s.log.Warn("could not read the places of a module",
+			"module", module.Name, "place", place, "error", err)
+		return false
+	}
+	// placeField rather than a loop of our own: it already knows how a place is named in a
+	// settings row, and a second way of reading that is a second thing to get wrong when the
+	// format moves.
+	_, said := placeField(placesOf(settings), place, "name")
+	return said
 }
 
 // installedDeployKinds are the deploy modules this instance actually has, said the way a

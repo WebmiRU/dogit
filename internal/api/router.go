@@ -172,7 +172,11 @@ func (s *Server) Register(r chi.Router) {
 
 		// Module administration: an administrator sees and configures modules,
 		// and a user mints the tokens they present to them.
-		authenticated.Post("/modules/{kind}/token", s.handleMintModuleToken)
+		// By id, like every other module route here. Addressing it by kind asked for "the" module
+		// of a kind, which is one module while a kind has one and a guess once it has several — and
+		// a token minted for the wrong module is a credential the registry that holds the image will
+		// refuse. Nothing outside this file called it by kind, so there was nothing to keep working.
+		authenticated.Post("/modules/{integrationID}/token", s.handleMintModuleToken)
 		authenticated.Get("/modules", s.handleListModules)
 		authenticated.Get("/modules/routes", s.handleModuleRoutes)
 		// Asks for one message to be sent, so settings can be checked before anything

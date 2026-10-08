@@ -776,19 +776,80 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, answer)
 }
 
-// registryCredentialsFor works out what a job needs to push an image.
-func (s *Server) registryCredentialsFor(r *http.Request, job *store.Job) (map[string]any, error) {
-	registry, err := s.store.Integrations().ByKind(r.Context(), registryKind)
-	if err != nil {
-		return nil, errBadRequest("no registry is installed on this instance, so nothing can be pushed")
-	}
-	if !registry.Enabled {
-		return nil, errBadRequest("the registry module has been forbidden")
+// pushRegistryFor is the registry module a job pushes to.
+//
+// The cluster decides, and this is how: a place names the registry it pulls from, and a build
+// pushes where the cluster will pull from, or the deployment fails on the cluster's side with a
+// pull error that says nothing about the push. The same field already chooses what a deployment
+// pulls with, so push and pull read one thing and cannot disagree.
+//
+// A place that names no registry falls back to "the one registry on this instance", which is the
+// whole of what the old code ever did — it took whichever module was oldest. With several and
+// nowhere to choose from, this refuses instead: the choice decides where an image is written, and
+// a build that pushes to the wrong registry is a build whose output nobody asked for.
+//
+// A job with no deploy target at all — a library, a test run, anything that builds and never
+// deploys — is in the same position, and gets the same answer.
+func (s *Server) pushRegistryFor(ctx context.Context, project *models.Project,
+	job *store.Job) (*models.Integration, error) {
+
+	place := strings.TrimSpace(asString(job.Deploy["Target"]))
+	if place != "" {
+		if module, err := s.deployModuleForPlace(ctx, project, place,
+			strings.TrimSpace(asString(job.Deploy["Module"]))); err == nil && module != nil {
+
+			// A place with no registry of its own pulls from the instance's own registry, which
+			// is the address the image carries rather than a configured one — so there is
+			// nothing to match on and the fallback below is the right answer.
+			if address := s.placesRegistry(ctx, project, module, place, nil); address != "" {
+				if registry, _, err := s.registryServing(ctx, address); err == nil {
+					return registry, nil
+				} else if !errors.Is(err, store.ErrNotFound) {
+					return nil, err
+				}
+				return nil, errBadRequestf(
+					"cluster %q names the registry %s, and no registry module on this instance "+
+						"publishes that address, so there is nowhere to push", place, address)
+			}
+		}
 	}
 
+	registries, err := s.store.Integrations().ByKindAll(ctx, registryKind)
+	if err != nil {
+		return nil, err
+	}
+	usable := make([]*models.Integration, 0, len(registries))
+	for _, candidate := range registries {
+		if candidate.Enabled {
+			usable = append(usable, candidate)
+		}
+	}
+	switch len(usable) {
+	case 0:
+		if len(registries) > 0 {
+			return nil, errBadRequest("the registry module has been forbidden")
+		}
+		return nil, errBadRequest("no registry is installed on this instance, so nothing can be pushed")
+	case 1:
+		return usable[0], nil
+	default:
+		return nil, errBadRequestf(
+			"this instance has %d registry modules (%s) and this build does not say which cluster "+
+				"it is for, so there is no way to tell where its image should go",
+			len(usable), s.moduleNames(usable))
+	}
+}
+
+// registryCredentialsFor works out what a job needs to push an image.
+func (s *Server) registryCredentialsFor(r *http.Request, job *store.Job) (map[string]any, error) {
 	project, err := s.store.Projects().ByPath(r.Context(), job.ProjectPath)
 	if err != nil {
 		return nil, errBadRequestf("project %q no longer exists", job.ProjectPath)
+	}
+
+	registry, err := s.pushRegistryFor(r.Context(), project, job)
+	if err != nil {
+		return nil, err
 	}
 
 	// The credential belongs to the project, not to the person who pressed the

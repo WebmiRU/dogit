@@ -1663,23 +1663,13 @@ type mintTokenRequest struct {
 func (s *Server) handleMintModuleToken(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 
-	kind := strings.TrimSpace(pathParam(r, "kind"))
-	if kind == "" {
-		s.writeError(w, r, errBadRequest("a module kind is required"))
-		return
-	}
-
-	integration, err := s.store.Integrations().ByKind(r.Context(), kind)
-	if errors.Is(err, store.ErrNotFound) {
-		s.writeError(w, r, errNotFoundf("module %q is not installed", kind))
-		return
-	}
+	integration, err := s.moduleFromPath(r)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	if !integration.Enabled {
-		s.writeError(w, r, errForbiddenf("module %q is disabled", kind))
+		s.writeError(w, r, errForbiddenf("module %q is disabled", integration.Kind))
 		return
 	}
 

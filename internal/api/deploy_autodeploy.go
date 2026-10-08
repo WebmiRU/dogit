@@ -38,7 +38,7 @@ func (s *Server) autodeployAllowed(ctx context.Context, project *models.Project,
 		return true
 	}
 
-	integration, err := s.deployModule(ctx, target)
+	integration, err := s.deployModuleForPlace(ctx, project, place, target)
 	if err != nil || integration == nil {
 		// A module that cannot be answered for is not a reason to refuse to deploy, and
 		// it is said rather than swallowed: somebody asking why nothing happened wants
@@ -103,7 +103,7 @@ func (s *Server) placeInUse(ctx context.Context, project *models.Project,
 		return true
 	}
 
-	integration, err := s.deployModule(ctx, strings.TrimSpace(target))
+	integration, err := s.deployModuleForPlace(ctx, project, place, strings.TrimSpace(target))
 	if err != nil || integration == nil {
 		return true
 	}
@@ -181,7 +181,8 @@ func (s *Server) placesOfRun(ctx context.Context, project *models.Project,
 			continue
 		}
 
-		module, err := s.deployModule(ctx, strings.TrimSpace(asString(job.Deploy["Module"])))
+		module, err := s.deployModuleForPlace(ctx, project, place,
+			strings.TrimSpace(asString(job.Deploy["Module"])))
 		if err != nil || module == nil {
 			continue
 		}

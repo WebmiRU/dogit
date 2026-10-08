@@ -644,7 +644,10 @@ func (s *Server) deployModuleFor(r *http.Request, project *models.Project) (*mod
 			"say which deploy module this is about: the request names none")
 	}
 
-	found, err := s.deployModule(r.Context(), target)
+	// No place here: this is a page about a target, not a deployment to one. So the answer is
+	// the only module of that kind, and an error naming them all when the instance has more —
+	// the page would otherwise show one module's history and call it the target's.
+	found, err := s.deployModuleForPlace(r.Context(), project, "", target)
 	if err != nil {
 		return nil, err
 	}

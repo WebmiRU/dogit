@@ -244,7 +244,8 @@ func (s *Server) placeRecordOf(ctx context.Context, project *models.Project,
 	}
 	record := map[string]any{"cluster": place}
 
-	module, err := s.deployModule(ctx, strings.TrimSpace(asString(job.Deploy["Module"])))
+	module, err := s.deployModuleForPlace(ctx, project, place,
+		strings.TrimSpace(asString(job.Deploy["Module"])))
 	if err != nil || module == nil {
 		return record
 	}
