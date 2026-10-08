@@ -479,9 +479,11 @@ func relayOf(line []byte, jobID int64, record map[string]any, kind string) map[s
 	// Which operation this is, stamped on whichever record is going out.
 	//
 	// After the choice above and not before it, because the module's record is the one that
-	// travels in a rollback, and stamping only the core's own would have named the
-	// operation on a map that is then thrown away — the field would arrive on deployments
-	// and never on rollbacks, which is precisely the half that needed it.
+	// travels in a rollback — stamping only the core's own would have named the operation on
+	// a map that is then thrown away, and the field would arrive on deployments and never on
+	// rollbacks, which is the half that needed it. It is passed in by both callers rather
+	// than read off the record for the same reason: the record the core builds for a
+	// rollback is also the one that loses.
 	if carried, ok := payload["deployment"].(map[string]any); ok && kind != "" {
 		if _, said := carried["kind"]; !said {
 			carried["kind"] = kind

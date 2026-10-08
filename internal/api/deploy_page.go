@@ -570,7 +570,7 @@ func (s *Server) carryOutRevert(ctx context.Context, module *models.Integration,
 			return
 		}
 		s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation,
-			relayOf(line, 0, place, ""))
+			relayOf(line, 0, place, "revert"))
 	})
 	if err != nil {
 		s.log.Warn("a rollback did not finish", "project", project.Path,
