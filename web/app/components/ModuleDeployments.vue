@@ -1472,11 +1472,7 @@ watch(() => props.module.id, load)
     <div v-show="tab === 'now'">
       <!-- One card per operation, which is what this tab is for. A single card cannot draw two
            rollouts apart: it has one set of steps and whichever operation spoke last owns them. -->
-      <DeployOperations
-        :project-id="projectId"
-        :cluster="scopedCluster || ''"
-        :namespace="scopedNamespace || ''"
-      />
+      <DeployOperations :project-id="projectId" :place="scopedCluster" />
     </div>
 
     <template v-if="!reason && !loading">

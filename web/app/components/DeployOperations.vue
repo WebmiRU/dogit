@@ -22,8 +22,8 @@ interface DeployOperation {
   job_id: number
   status: string
   name: string
-  cluster: string
-  namespace: string
+  /** Which place, by name. Empty only on a page that was not told about a place. */
+  place: string
   error: string
   /** Unix milliseconds. Null when the operation never began, which the core does not list. */
   started_at: number | null
@@ -52,9 +52,16 @@ interface Watching {
 
 const props = defineProps<{
   projectId: string
-  /** The place this card is about, or empty for a page that was not told about one. */
-  cluster?: string
-  namespace?: string
+  /**
+   * The name of the place this card is about, or empty for a page that was not told about one.
+   *
+   * A name and not a cluster, because that is what a deploy step says: `target: jabjab.ru`. The
+   * name is a row of the deploy module's own settings, and what that row holds inside it is the
+   * module's business. Asking for a cluster instead would be asking a question the step never
+   * answered, and a project with two places in one cluster would get a page for each rather than
+   * one for the place.
+   */
+  place?: string
 }>()
 
 /** How many finished operations to keep. Ten fills a page and still scrolls. */
@@ -85,8 +92,7 @@ let gapNoticed = false
 
 const query = computed(() => {
   const parts = [`finished=${FINISHED}`]
-  if (props.cluster) parts.push(`cluster=${encodeURIComponent(props.cluster)}`)
-  if (props.namespace) parts.push(`namespace=${encodeURIComponent(props.namespace)}`)
+  if (props.place) parts.push(`place=${encodeURIComponent(props.place)}`)
   return parts.join('&')
 })
 
@@ -130,14 +136,16 @@ watch(() => [props.projectId, query.value], load)
  * once, and one card showing both says the first place is deploying while it waits its turn.
  */
 function isMine(payload: Record<string, unknown>): boolean {
-  if (!props.cluster) return true
+  if (!props.place) return true
   const said = payload.deployment as { cluster?: string; namespace?: string } | undefined
   if (!said || typeof said !== 'object') return false
-  if ((said.cluster ?? '') !== props.cluster) return false
-  // A card that was told no namespace makes no claim about one, which is what the history asks
-  // the same rows about.
-  if (props.namespace && (said.namespace ?? '') !== props.namespace) return false
-  return true
+  // Either spelling of the place, for the same reason the query asks by name and matches both:
+  // a module of the current vintage reports the name it was given, and an older one reports the
+  // cluster and namespace it was configured with. Comparing only the new one drops every line of
+  // an operation already under way, and the card then shows its state and none of its steps.
+  const cluster = said.cluster ?? ''
+  const namespace = said.namespace ?? ''
+  return cluster === props.place || namespace === props.place
 }
 
 /**
@@ -201,8 +209,8 @@ function note(payload: Record<string, unknown>) {
   if (!operations.value.some((one) => one.job_id === jobID)) {
     operations.value = [
       ...operations.value,
-      { job_id: jobID, status: 'running', name: '', cluster: props.cluster ?? '',
-        namespace: props.namespace ?? '', error: '', started_at: Date.now(),
+      { job_id: jobID, status: 'running', name: '', place: props.place ?? '',
+        error: '', started_at: Date.now(),
         finished_at: null, running: true },
     ]
   }
@@ -349,9 +357,7 @@ watchEvents({
             {{ operation.running ? 'Running' : operation.status }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
-          <span v-if="operation.cluster" class="place-chip mono">
-            {{ operation.cluster }}{{ operation.namespace ? '/' + operation.namespace : '' }}
-          </span>
+          <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
           <span class="spacer" />
 
@@ -444,6 +450,17 @@ watchEvents({
 .operation-log .mono {
   flex: 0 0 auto;
   opacity: 0.65;
+}
+
+/* The place, as a chip rather than as text among text. It repeats on every card of a project with
+   one place, so it is not news — but on a page whose cards are the unit, the place is the question
+   a reader answers first, and a line that mixes it in with the step name makes it the second. */
+.place-chip {
+  font-size: 12px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
 }
 
 /* A card for something happening now is worth noticing before anything else on the page, so it is

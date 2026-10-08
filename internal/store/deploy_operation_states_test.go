@@ -57,7 +57,7 @@ func TestADeployStepNobodyHasClaimedIsOnNeitherList(t *testing.T) {
 	anOperationAt(t, st, project.ID, "running", &began, nil, "running")
 	anOperationAt(t, st, project.ID, "done", &began, &ended, "success")
 
-	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", "", 10)
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}

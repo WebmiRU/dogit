@@ -46,6 +46,31 @@ func anOperation(t *testing.T, st *store.Store, projectID uuid.UUID, name string
 	return id
 }
 
+// namedOperation is one deploy job written the current way: the step names a place, and the
+// module says which module it is.
+func namedOperation(t *testing.T, st *store.Store, projectID uuid.UUID, name, place string,
+	started, finished *time.Time, status string) int64 {
+	t.Helper()
+
+	pipeline, err := st.Pipelines().CreatePipeline(context.Background(), projectID, "main",
+		"abc123", "manual", nil, nil, store.Commit{}, []store.Job{{Name: "deploy:" + name}})
+	if err != nil {
+		t.Fatalf("create a pipeline: %v", err)
+	}
+
+	var id int64
+	err = st.Pool().QueryRow(context.Background(), `
+		UPDATE jobs SET status = $2, started_at = $3, finished_at = $4, deploy = $5::jsonb
+		WHERE pipeline_id = $1 RETURNING id`,
+		pipeline.ID, status, started, finished,
+		`{"Name":"`+name+`","Module":"kubernetes","Target":"`+place+`","Rollout":true}`,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("put the deploy job into the state %q: %v", status, err)
+	}
+	return id
+}
+
 // A deployment under way is in the running list and not the finished one, whatever its status says.
 // A job that has started and not finished is running; the status is there to be drawn on the card.
 func TestAnUnfinishedDeploymentIsRunning(t *testing.T) {
@@ -55,7 +80,7 @@ func TestAnUnfinishedDeploymentIsRunning(t *testing.T) {
 	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
 	anOperation(t, st, project.ID, "in flight", "local-k3s", "dogit-dev", &began, nil, "running")
 
-	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", "", 10)
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}
@@ -88,7 +113,7 @@ func TestTheFinishedOnesAreCappedAndKeepTheRecent(t *testing.T) {
 			&began, &ended, "success")
 	}
 
-	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", "", 10)
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}
@@ -125,7 +150,7 @@ func TestARunningDeploymentIsNeverPagedOut(t *testing.T) {
 			&started, &ended, "success")
 	}
 
-	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", "", 3)
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 3)
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}
@@ -156,7 +181,7 @@ func TestZeroFinishedAsksForNoHistory(t *testing.T) {
 			&began, &ended, "success")
 	}
 
-	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", "", 0)
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 0)
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}
@@ -166,34 +191,103 @@ func TestZeroFinishedAsksForNoHistory(t *testing.T) {
 }
 
 // A card is about one place. A project with two places has deployments in both, and a page that
-// showed one card for each of them on every card would put a place's rollout on the other
-// place's page.
-func TestOperationsAreFilteredByPlace(t *testing.T) {
+// showed a place's rollout on the other place's page would put one project's work under another's
+// name.
+//
+// Asked by the place's name, which is what a deploy step gives: `target: jabjab.ru`. Two places in
+// two namespaces of one cluster are two names, and each answers for itself — filtering by cluster
+// instead would put both of them on one page and neither of them where it belongs.
+func TestOperationsAreFilteredByPlaceName(t *testing.T) {
 	st := dbtest.Open(t)
 	project := dbtest.NewProject(t, st, "ops-place", nil)
 
 	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
-	anOperation(t, st, project.ID, "dev", "local-k3s", "dogit-dev", &began, nil, "running")
-	anOperation(t, st, project.ID, "staging", "local-k3s", "dogit-staging", &began, nil, "running")
-	anOperation(t, st, project.ID, "elsewhere", "other-cluster", "web", &began, nil, "running")
+	namedOperation(t, st, project.ID, "dev", "jabjab.ru", &began, nil, "running")
+	namedOperation(t, st, project.ID, "second", "jabjab-deploy2", &began, nil, "running")
+	namedOperation(t, st, project.ID, "elsewhere", "other.host", &began, nil, "running")
 
 	for _, c := range []struct {
-		cluster, namespace string
-		want               int
+		place string
+		want  int
 	}{
-		{"", "", 3},
-		{"local-k3s", "", 2},
-		{"local-k3s", "dogit-dev", 1},
-		{"other-cluster", "web", 1},
-		{"no-such-cluster", "", 0},
+		{"", 3},
+		{"jabjab.ru", 1},
+		{"jabjab-deploy2", 1},
+		{"other.host", 1},
+		{"no-such-place", 0},
 	} {
-		found, err := st.Pipelines().DeployOperations(context.Background(), project.ID,
-			c.cluster, c.namespace, 10)
+		found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, c.place, 10)
 		if err != nil {
-			t.Fatalf("list operations for %q/%q: %v", c.cluster, c.namespace, err)
+			t.Fatalf("list operations for %q: %v", c.place, err)
 		}
 		if len(found) != c.want {
-			t.Errorf("for %q/%q read %d operations, want %d", c.cluster, c.namespace, len(found), c.want)
+			t.Errorf("for %q read %d operations, want %d: %+v", c.place, len(found), c.want, found)
+		}
+	}
+}
+
+// A record written the older way still belongs to its place, and still says which one.
+//
+// This is the whole reason the filter looks in two fields. Deployments made before the
+// configuration changed are in every database there is, they name a `Cluster` and a `Namespace`,
+// and their `Target` names the module. A filter that read only the current field would answer
+// correctly about everything deployed since the change and nothing at all about everything
+// deployed before it — and the deployments somebody opens this page for are overwhelmingly the
+// ones that already went wrong.
+func TestAnOlderRecordIsStillClaimedByItsPlace(t *testing.T) {
+	st := dbtest.Open(t)
+	project := dbtest.NewProject(t, st, "ops-older", nil)
+
+	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
+	anOperation(t, st, project.ID, "dev", "local-k3s", "dogit-dev", &began, nil, "running")
+
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "local-k3s", 10)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("read %d operations, want 1: %+v", len(found), found)
+	}
+	if found[0].Place != "local-k3s" {
+		t.Errorf("the operation is filed under %q, want local-k3s", found[0].Place)
+	}
+
+	// And not under the module, which is what its Target says.
+	byModule, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "kubernetes", 10)
+	if err != nil {
+		t.Fatalf("list operations by module name: %v", err)
+	}
+	if len(byModule) != 0 {
+		t.Errorf("a module name was taken for a place, and matched %d operations", len(byModule))
+	}
+}
+
+// Two places in two namespaces of one cluster, asked for by name, each answering for itself.
+//
+// The case that a cluster-and-namespace filter got wrong in the other direction: it split one
+// logical place into two pages, so a deployment of the second namespace never appeared on the
+// page of the first, and neither page could be said to be about the cluster.
+func TestTwoNamespacesOfOneClusterAreTwoPlaces(t *testing.T) {
+	st := dbtest.Open(t)
+	project := dbtest.NewProject(t, st, "ops-two-namespaces", nil)
+
+	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
+	anOperation(t, st, project.ID, "first", "shared-cluster", "one", &began, nil, "running")
+	anOperation(t, st, project.ID, "second", "shared-cluster", "two", &began, nil, "running")
+
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "shared-cluster", 10)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("one cluster holding two namespaces answered with %d operations, want 2: %+v",
+			len(found), found)
+	}
+	// Both claim the same place name, because as far as a place is concerned they are the
+	// same place, and the namespaces are a detail of what is inside it.
+	for _, one := range found {
+		if one.Place != "shared-cluster" {
+			t.Errorf("an operation is filed under %q, want shared-cluster", one.Place)
 		}
 	}
 }
@@ -210,7 +304,7 @@ func TestABuildIsNotADeployment(t *testing.T) {
 		t.Fatalf("create a build job: %v", err)
 	}
 
-	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", "", 10)
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}

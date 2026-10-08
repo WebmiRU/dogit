@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ewolf/dogit/internal/store"
@@ -35,8 +36,14 @@ func (s *Server) handleProjectDeployOperations(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	operations, err := s.store.Pipelines().DeployOperations(r.Context(), project.ID,
-		r.URL.Query().Get("cluster"), r.URL.Query().Get("namespace"), finished)
+	// One parameter, named for what it is. It was two, `cluster` and `namespace`, and both were
+	// guesses about how a place is written down: the step names a place, and the two fields were
+	// the shape the configuration used to have. A request that filters on a field the step never
+	// sets does not return the wrong rows — it returns none, and a page with no rows on it is
+	// indistinguishable from a page where nothing has ever been deployed.
+	place := strings.TrimSpace(r.URL.Query().Get("place"))
+
+	operations, err := s.store.Pipelines().DeployOperations(r.Context(), project.ID, place, finished)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -70,11 +77,16 @@ func (s *Server) handleProjectDeployOperations(w http.ResponseWriter, r *http.Re
 // and a page whose cards swap places between two loads cannot be read.
 func deployOperationView(one store.DeployOperation) map[string]any {
 	return map[string]any{
-		"job_id":      one.JobID,
-		"status":      one.Status,
-		"name":        one.Name,
+		"job_id": one.JobID,
+		// The place by name, which is how a deploy step says it and how the page knows its
+		// rows. Cluster and Namespace come along for records written the older way, and are
+		// empty for the current ones — a page that drew "cluster/namespace" on every card
+		// would print a slash and two blanks on every deployment made since the change.
+		"place":       one.Place,
 		"cluster":     one.Cluster,
 		"namespace":   one.Namespace,
+		"status":      one.Status,
+		"name":        one.Name,
 		"error":       one.Error,
 		"started_at":  millisOf(one.StartedAt),
 		"finished_at": millisOf(one.FinishedAt),

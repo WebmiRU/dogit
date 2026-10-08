@@ -32,8 +32,15 @@ type DeployOperation struct {
 	StartedAt  *time.Time
 	FinishedAt *time.Time
 
-	// Cluster and Namespace are which place it was for, or empty when the page was not told
-	// about a place and so claims nothing about one.
+	// Place is which place it was for, by the name the deploy step gave — a row of the deploy
+	// module's own settings. Empty when the page was not told about a place and so claims
+	// nothing about one.
+	Place string
+
+	// Cluster and Namespace are the place as the older generation of the configuration wrote
+	// it down: a cluster and a namespace rather than a name. Kept because those rows are still
+	// in databases and still drawn, and a card that could be read only one way would go blank on
+	// exactly the deployments it is easiest to want to look at.
 	Cluster   string
 	Namespace string
 
@@ -70,8 +77,15 @@ func (o DeployOperation) Finished() bool {
 // Ordered by when each began, newest first, with milliseconds kept. Two deployments in the same
 // second are a normal thing to happen and a coin toss otherwise, and a card that moves about
 // between two reloads is a page that cannot be looked at.
+//
+// `place` is a place's name and nothing else — not a cluster, not a namespace. One name is one
+// place: a deploy step says `target: jabjab.ru`, and what that row of the module's settings holds
+// inside it is the module's business, not the pipeline's and not this list's. Filtering on a
+// cluster instead would be filtering on something the step never said, and a project deploying
+// into two namespaces of one cluster would answer with a page for each namespace rather than one
+// for the place.
 func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID,
-	cluster, namespace string, finished int) ([]DeployOperation, error) {
+	place string, finished int) ([]DeployOperation, error) {
 
 	if finished < 0 {
 		finished = 0
@@ -83,20 +97,18 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		JOIN pipelines p ON p.id = j.pipeline_id
 		WHERE p.project_id = $1 AND j.deploy IS NOT NULL
 		  AND j.started_at IS NOT NULL
-		  AND ($2 = '' OR j.deploy->>'Cluster' = $2)
-		  AND ($3 = '' OR j.deploy->>'Namespace' = $3)
+		  AND ($2 = '' OR COALESCE(NULLIF(j.deploy->>'Cluster', ''), j.deploy->>'Target') = $2)
 		  AND (j.finished_at IS NULL
 		       OR j.id IN (
 		         SELECT j2.id FROM jobs j2
 		         JOIN pipelines p2 ON p2.id = j2.pipeline_id
 		         WHERE p2.project_id = $1 AND j2.deploy IS NOT NULL
 		           AND j2.started_at IS NOT NULL AND j2.finished_at IS NOT NULL
-		           AND ($2 = '' OR j2.deploy->>'Cluster' = $2)
-		           AND ($3 = '' OR j2.deploy->>'Namespace' = $3)
-		         ORDER BY j2.started_at DESC, j2.id DESC LIMIT $4
+		           AND ($2 = '' OR COALESCE(NULLIF(j2.deploy->>'Cluster', ''), j2.deploy->>'Target') = $2)
+		         ORDER BY j2.started_at DESC, j2.id DESC LIMIT $3
 		       ))
 		ORDER BY j.started_at DESC NULLS LAST, j.id DESC`,
-		projectID, cluster, namespace, finished)
+		projectID, place, finished)
 	if err != nil {
 		return nil, fmt.Errorf("list deploy operations: %w", err)
 	}
@@ -119,7 +131,34 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		decodeJSONB(deploy, &described)
 		op.Cluster, _ = described["Cluster"].(string)
 		op.Namespace, _ = described["Namespace"].(string)
+		op.Place = placeOf(described, op.Cluster)
 		operations = append(operations, op)
 	}
 	return operations, rows.Err()
+}
+
+// placeOf is the place a deploy record names, whichever way that record was written down.
+//
+// The same rule as the `COALESCE(NULLIF(Cluster,”), Target)` in the query above, written twice
+// because a filter has to run in the database and a card has to be labelled in Go. They are kept
+// in step by a test that asks for a module name and gets nothing: the two rules drifting apart
+// would not break any single case, it would break exactly the records that carry both fields.
+//
+// Databases hold two generations of the deploy step, and they do not agree about which field
+// carries the place. The current one names a place in `Target` — a row of the module's own
+// settings. The older one wrote a `Cluster` and a `Namespace` and used `Target` for the *module*,
+// which is why a record of that vintage has `Target: kubernetes` beside `Cluster: local-k3s`.
+//
+// The cluster is preferred where both are present, because in that generation `Target` names a
+// module and preferring it would file every deployment of that repository under the module's
+// name — a page that answers a question about places with a list of module names. The other
+// order gets this right for the newer records and silently empties the tab for every deployment
+// made before the configuration changed, which is the worse of the two failures: it is invisible,
+// and it is invisible exactly where somebody goes looking for the deployment that broke.
+func placeOf(record map[string]any, cluster string) string {
+	if cluster != "" {
+		return cluster
+	}
+	target, _ := record["Target"].(string)
+	return target
 }
