@@ -1709,6 +1709,9 @@ watch(() => props.module.id, load)
   <div class="deploy-admin">
     <div v-if="error" class="alert alert-error">{{ error }}</div>
     <div v-else-if="reason" class="muted">{{ reason }}</div>
+    <!-- Only while there is nothing to draw yet. Once the operations list has arrived this
+         component's own content is on the page, and a spinner above it says it is still coming
+         when it is not — which is a spinner that never goes away on a slow load. -->
     <div v-else-if="loading" class="spinner">Loading…</div>
 
     <!-- What is happening right now.
@@ -1780,88 +1783,13 @@ watch(() => props.module.id, load)
          is the thing a page is opened for, and it answers one question, where the two
          lists below answer another. -->
     <div v-show="tab === 'now'">
-    <!-- One card, and it is the same card in every state.
-         The card at rest is the reference: the rows below say where, under which
-         names, which image and which workload is there. A deployment under way is the
-         same statement with different values in it, and it used to be a different set
-         of rows that said less — no tags, no image, no workload — so the interesting
-         half of a rollout was the half on screen with nothing on it. Three things
-         change between states: the badge, the log, and which record the rows are
-         built from. Nothing else. -->
-    <section class="card active-card" :class="[cardState, { idle: !deployBusy }]">
-      <div class="card-body">
-        <!-- The head is the whole of it: what state, where, under which names, which
-             image, which workload, and for how long. One line, one row, in every state
-             — not a heading with a title and then the same facts again underneath. A
-             heading on this card said nothing the badge does not, and it was the thing
-             that had to be reworded whenever a state was added. -->
-        <div class="block-head">
-          <span class="badge" :class="stateBadgeClass">{{ stateBadge }}</span>
-          <template v-for="row in rows" :key="row.place">
-            <span class="place-chip mono">{{ row.place }}</span>
-            <!-- The names it went out under, beside the digest it is addressed by.
-                 The digest says which image; the tags say what it was called, and a
-                 person comparing this against a release is looking for the name, not
-                 for sixty-four characters of hexadecimal. -->
-            <span v-if="row.tags.length" class="tags">
-              <span v-for="tag in row.tags" :key="tag" class="tag mono">{{ tag }}</span>
-            </span>
-            <!-- Not the image we do not have. While a run is under way there is a
-                 moment before the module has named its image, and there is no name
-                 to put there yet — the digest appears the moment it is known. -->
-            <span v-if="row.image" class="mono small">{{ shortImage(row.image) }}</span>
-            <span v-else-if="deployBusy" class="muted small">choosing the image…</span>
-            <span class="muted small">{{ row.workload || '—' }}</span>
-          </template>
-          <span class="spacer" />
-          <!-- How long, and how long ago. The same two facts in every state: a clock
-               that appears only while something is moving teaches people to look
-               elsewhere the moment it stops. While it runs the seconds count. -->
-          <span
-            v-if="runningFor"
-            class="muted small mono"
-            title="how long this has been going"
-          >{{ runningFor }}</span>
-          <!-- After it, the ends are given here only where nothing above already says
-               them. On a place's card the row that names the place carries "ran … , took
-               …" and its dot, and saying it a second time below squeezes out the tags
-               and the version the card is about. Drawn for a project on the module's own
-               page there is no such row above, so the card says it itself. -->
-          <span
-            v-else-if="!scopedCluster && whenRun"
-            class="muted small"
-            :title="whenRunExact"
-          >{{ whenRun }}</span>
-        </div>
-
-        <!-- Live while a run is under way, and still here afterwards: the list is
-             something to read when nothing is happening, which is when there is time
-             to read it. The arrow stands still when there is nothing to stand for. -->
-        <DeploySteps
-          v-if="active"
-          :progress="active"
-          :seen="activeSeen"
-          :plan="plan"
-          :active-phases="activePhases"
-          live
-        />
-        <DeploySteps
-          v-else-if="idleProgress && plan.length > 0"
-          :progress="idleProgress"
-          :plan="plan"
-          :active-phases="[]"
-        />
-        <DeployLog :lines="shownLog" :plan="plan" />
-
-        <details v-if="active" class="log">
-          <summary class="muted small">Where the whole of this is written down</summary>
-          <p class="muted small">
-            Every line is in the deploy job's log on the pipeline page, and it stays
-            there after the operation is over.
-          </p>
-        </details>
-      </div>
-    </section>
+      <!-- One card per operation, which is what this tab is for. A single card cannot draw two
+           rollouts apart: it has one set of steps and whichever operation spoke last owns them. -->
+      <DeployOperations
+        :project-id="projectId"
+        :cluster="scopedCluster || ''"
+        :namespace="scopedNamespace || ''"
+      />
     </div>
 
     <template v-if="!reason && !loading">

@@ -334,6 +334,10 @@ func (s *Server) projectRoutes() chi.Router {
 	// is a question about what this core knows it started, and a core that has to ask a module
 	// whether it is mid-deploy is a core that cannot answer while the module is busy deploying.
 	projects.Get(base+"/deploy-operations", s.handleProjectDeployOperations)
+	// One deployment's log, addressed by the deployment. The other log route is addressed by
+	// pipeline and job because a pipeline page is looking at a pipeline; a page whose unit is the
+	// operation names the operation.
+	projects.Get(base+"/deploy-operations/{jobID}/log", s.handleDeployOperationLog)
 	projects.Post(base+"/deployments/revert", s.handleRevertDeployment)
 	projects.Post(base+"/deploy-clusters/test", s.handleTestDeployCluster)
 	projects.Get(base+"/deploy-images", s.handleProjectDeployImages)

@@ -26,8 +26,13 @@ import (
 // picking is exactly the mistake this exists to stop being made.
 func moduleRefusalOf(module *models.Integration, asked string, answer []byte, err error) error {
 	// A refusal in the answer: a decision somebody wrote down, kept verbatim.
+	//
+	// And refused to the caller rather than thrown: the sentence is the answer, and a page that
+	// shows "an unexpected error occurred" over "this cluster has no kubeconfig" has thrown away
+	// the only thing the module knew. It was a client error over HTTP for the same reason — the
+	// request was fine, the module declined it, and a reader can act on that.
 	if reason, refused := modulechan.RefusalIn(answer); refused {
-		return fmt.Errorf("the %s module refused: %s", module.Kind, reason)
+		return errBadRequestf("the %s module said: %s", module.Kind, reason)
 	}
 
 	// No refusal and no failure is an answer. Nil here and not an error, because this function

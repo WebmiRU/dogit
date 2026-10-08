@@ -49,10 +49,78 @@ try {
     });
   }
 
-  await page.goto(base + path, { waitUntil: 'networkidle2', timeout: 30000 });
-  // Given a moment to render after the network settles: a Vue page finishes drawing a tick or two
-  // after its last request answers.
-  await new Promise((r) => setTimeout(r, 1200));
+  // Not `networkidle2`: this page holds an event socket open, so "the network is idle" is a state
+  // it never reaches and every check of it times out rather than reporting a page that is fine.
+  // Waiting for the document and then giving it a moment is what actually means "drawn".
+  await page.goto(base + path, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  // Long enough to see whether something is still arriving, because the difference between "slow"
+  // and "never" is only visible in a second screenshot.
+  const wait = Number(process.env.LOOK_WAIT ?? 2500);
+  await new Promise((r) => setTimeout(r, wait));
+
+  // A click before the read, for a page whose interesting part is behind a disclosure. Without it
+  // this reports the collapsed page and calls it the page, which is how a working feature reads as a
+  // missing one.
+  // Open the first disclosure of a given class, by setting `open` rather than clicking: a
+  // synthetic click on a <summary> does not toggle it in every engine, and a screenshot of a
+  // collapsed panel is evidence of nothing.
+  const openFirst = process.argv.includes('--open')
+    ? process.argv[process.argv.indexOf('--open') + 1]
+    : null;
+  if (openFirst) {
+    const opened = await page.evaluate((sel) => {
+      const hits = [...document.querySelectorAll(`details.${sel}`)];
+      if (!hits.length) return -1;
+      hits[0].open = true;
+      hits[0].dispatchEvent(new Event('toggle'));
+      return hits.length;
+    }, openFirst);
+    await new Promise((r) => setTimeout(r, 2000));
+    console.log(`opened the first details.${openFirst} (${opened} present)`);
+  }
+
+  // Open a disclosure whose label *contains* a given word. Scoped to <summary> and to an exact
+  // containment test, because the row that holds the name also holds two switches and clicking the
+  // row's box is how an inspection changes the thing it is inspecting.
+  const clickIn = process.argv.includes('--click-in')
+    ? process.argv[process.argv.indexOf('--click-in') + 1]
+    : null;
+  if (clickIn) {
+    const opened = await page.evaluate((wanted) => {
+      const hits = [...document.querySelectorAll('summary')]
+        .filter((el) => (el.textContent ?? '').includes(wanted));
+      if (!hits.length) return -1;
+      hits[0].click();
+      return hits.length;
+    }, clickIn);
+    // Long enough to see whether something is still arriving, because the difference between "slow"
+  // and "never" is only visible in a second screenshot.
+  const wait = Number(process.env.LOOK_WAIT ?? 2500);
+  await new Promise((r) => setTimeout(r, wait));
+    console.log(`opened the disclosure containing "${clickIn}" (${opened} matched)`);
+  }
+
+  const clickText = process.argv.includes('--click-text')
+    ? process.argv[process.argv.indexOf('--click-text') + 1]
+    : null;
+  if (clickText) {
+    // By the element's own text, and only an element whose whole text is that — so that asking
+    // to open a disclosure cannot land on a switch two lines above it. An inspection that changes
+    // what it is inspecting is worse than one that reports nothing.
+    const clicked = await page.evaluate((wanted) => {
+      const hits = [...document.querySelectorAll('summary, button, a, [role="button"]')]
+        .filter((el) => (el.textContent ?? '').trim() === wanted);
+      if (hits.length !== 1) return hits.length;
+      hits[0].click();
+      return 1;
+    }, clickText);
+    if (clicked !== 1) {
+      console.log(`click-text "${clickText}" matched ${clicked} elements; nothing was clicked`);
+    } else {
+      await new Promise((r) => setTimeout(r, 2000));
+      console.log('clicked:', clickText);
+    }
+  }
 
   console.log('URL:    ', page.url());
   console.log('title:  ', await page.title());
