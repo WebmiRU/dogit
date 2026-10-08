@@ -134,59 +134,71 @@ func TestTheThreeStatesAreEachDecidedOnTheirOwn(t *testing.T) {
 
 func ptr(at time.Time) *time.Time { return &at }
 
-// A card somebody is watching does not jump to the bottom of the page.
+// A card somebody is watching does not vanish, and does not jump to the bottom of the page.
 //
-// A deployment that has not started has no start time to sort by, and sorting on the start time
-// alone puts it last — so a card a reader had been watching for a minute dropped below every
-// deployment that finished before it was even queued. The page had not forgotten it; the page
-// had sorted it out of sight, which looks exactly like forgetting.
+// Somebody watching saw a deployment go to "Waiting" and then disappear, and read it as the page
+// forgetting it. The page had never had it: the query that chooses which finished operations to
+// keep asked for a start time and an end time, and a step declined before it began has neither.
+// It was excluded from the choice, so it never reached the outer query either — and being
+// excluded there it was not in the answer on any page size, which no sort can put right.
 //
-// It is ordered by when the run that wants it was created, which is when a reader first saw a
-// card for it. A skipped deployment — refused, switched off, or never reached — is the case that
-// shows this best: it has no start time at all, and it is precisely the card a reader was
-// watching a moment before.
-func TestADeploymentThatNeverStartedKeepsItsPlaceInTheOrder(t *testing.T) {
+// So the cap is exercised here rather than assumed. A cap of ten over five operations never
+// chooses anything, and the query that chooses is a different query from the one that lists.
+func TestAStepThatNeverBeganIsOnTheListAndKeepsItsPlace(t *testing.T) {
 	st := dbtest.Open(t)
 	project := dbtest.NewProject(t, st, "ops-order", nil)
 
 	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
-
-	// Three that began, oldest first.
 	for i, name := range []string{"older", "old", "newest"} {
 		at := began.Add(time.Duration(i) * time.Minute)
 		anOperationAt(t, st, project.ID, name, &at, ptr(at.Add(time.Second)), "success")
 	}
-	// And one that never began at all, in a run created after all three.
-	anOperationAt(t, st, project.ID, "never", nil, nil, "skipped")
-	// And one refused before it began, which is the same shape and the same argument.
-	anOperationAt(t, st, project.ID, "refused", nil, nil, "refused")
+	// Two that never began, in runs created after all three. One skipped, one refused: the
+	// same shape and the same argument, and a status the page had never heard of.
+	anOperationAt(t, st, project.ID, "skipped-one", nil, nil, "skipped")
+	anOperationAt(t, st, project.ID, "refused-one", nil, nil, "refused")
 
-	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 3)
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}
-	if len(found) != 5 {
-		t.Fatalf("read %d operations, want 5 — every deploy step, started or not: %+v", len(found), found)
+	if len(found) != 3 {
+		t.Fatalf("read %d operations, want the 3 most recent: %v", len(found), names(found))
 	}
 
-	// The two runs were created last, so their cards belong on top: the reader saw them last,
-	// and they are the ones they were watching. A step that was declined before it began is on
-	// the list and is not waiting for anything.
-	names := make([]string, 0, len(found))
+	byName := map[string]store.DeployOperation{}
 	for _, one := range found {
-		names = append(names, one.Name)
+		byName[one.Name] = one
 	}
-	for _, one := range found {
-		if one.Name == "deploy:never" || one.Name == "deploy:refused" {
-			if one.Queued() {
-				t.Errorf("%s is drawn as waiting its turn, and it is never going to run", one.Name)
-			}
-			if !one.Finished() {
-				t.Errorf("%s is on neither list, so its card is not drawn at all", one.Name)
-			}
+	for _, want := range []string{"deploy:skipped-one", "deploy:refused-one"} {
+		one, there := byName[want]
+		if !there {
+			t.Fatalf("%s is not among the three most recent, so a card the reader was watching was never drawn at all: %v",
+				want, names(found))
+		}
+		// Waiting is a status and not a missing start time. A step that was declined before it
+		// began is in the same position and is never going to run, and drawn as waiting it is
+		// a promise the page cannot keep.
+		if one.Queued() {
+			t.Errorf("%s is drawn as waiting its turn, and it is never going to run", want)
+		}
+		if !one.Finished() {
+			t.Errorf("%s is on neither list, so its card is not drawn", want)
 		}
 	}
-	if len(names) < 2 || names[0] == "deploy:older" || names[1] == "deploy:older" {
-		t.Errorf("the steps that never began sorted to the bottom: %v", names)
+
+	// And they are at the top, because their runs were created last: they are the cards the
+	// reader was watching a moment before.
+	if found[0].Name == "deploy:older" || found[1].Name == "deploy:older" {
+		t.Errorf("a step that never began sorted to the bottom: %v", names(found))
 	}
+}
+
+// names is the list in the order it came back, for a failure message.
+func names(found []store.DeployOperation) []string {
+	out := make([]string, 0, len(found))
+	for _, one := range found {
+		out = append(out, one.Name)
+	}
+	return out
 }

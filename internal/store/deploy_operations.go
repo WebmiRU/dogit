@@ -86,9 +86,10 @@ func (o DeployOperation) Finished() bool {
 	// ran, so there was no last moment of running — and it is over all the same. Leaving it
 	// off both lists is how a card somebody was watching vanished: the job was skipped, the
 	// page had never heard of skipped, and there was nothing left to draw.
-	switch o.Status {
-	case JobSuccess, JobFailed, JobRefused, JobSkipped, JobCanceled, JobAbandoned, JobInterrupted:
-		return true
+	for _, one := range finishedStatuses {
+		if o.Status == one {
+			return true
+		}
 	}
 	return false
 }
@@ -135,12 +136,18 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		         SELECT j2.id FROM jobs j2
 		         JOIN pipelines p2 ON p2.id = j2.pipeline_id
 		         WHERE p2.project_id = $1 AND j2.deploy IS NOT NULL
-		           AND j2.started_at IS NOT NULL AND j2.finished_at IS NOT NULL
+		           -- "Finished" as this file defines it, and not as a pair of timestamps. A
+		           -- step declined before it began has no start time and no end time, so
+		           -- asking for both excluded it — and being excluded here it never reached
+		           -- the outer query either, which is why a card somebody was watching was
+		           -- simply not in the answer. A cap that cannot see a card cannot show it
+		           -- on any page size.
+		           AND (j2.finished_at IS NOT NULL OR j2.status = ANY($3::text[]))
 		           AND ($2 = '' OR COALESCE(NULLIF(j2.deploy->>'Cluster', ''), j2.deploy->>'Target') = $2)
-		         ORDER BY j2.started_at DESC, j2.id DESC LIMIT $3
+		         ORDER BY COALESCE(j2.started_at, p2.started_at, p2.created_at) DESC, j2.id DESC LIMIT $4
 		       ))
 		ORDER BY COALESCE(j.started_at, p.started_at, p.created_at) DESC, j.id DESC`,
-		projectID, place, finished)
+		projectID, place, finishedStatuses, finished)
 	if err != nil {
 		return nil, fmt.Errorf("list deploy operations: %w", err)
 	}
@@ -187,6 +194,16 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 // order gets this right for the newer records and silently empties the tab for every deployment
 // made before the configuration changed, which is the worse of the two failures: it is invisible,
 // and it is invisible exactly where somebody goes looking for the deployment that broke.
+// finishedStatuses are the statuses that mean an operation is over whatever its timestamps say.
+//
+// One list, used by Finished() and by the query that picks the most recent finished ones, because
+// two definitions of "over" is how a card ends up drawn by one and not by the other — which is
+// exactly what happened: the page knew a declined step was over, and the query that chose what
+// to show did not.
+var finishedStatuses = []string{
+	JobSuccess, JobFailed, JobRefused, JobSkipped, JobCanceled, JobAbandoned, JobInterrupted,
+}
+
 func placeOf(record map[string]any, cluster string) string {
 	if cluster != "" {
 		return cluster
