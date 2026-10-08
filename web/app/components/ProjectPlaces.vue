@@ -814,7 +814,12 @@ watchEvents({
     <!-- Keyed by the core's identity of the row rather than by its name: a place that is
          renamed is the same place, and a page that tore it down and built it again over a
          name would close the fold and lose the tab somebody was on. -->
-    <details v-for="(place, index) in places" :key="place.id ?? place.name" class="place">
+    <details
+      v-for="(place, index) in places"
+      :key="place.id ?? place.name"
+      class="place"
+      :class="{ 'place-off': !place.inUse }"
+    >
       <summary class="place-head">
         <!-- Three things on one line, and three places for them: what this place is
              called and whose decision it is, the two answers this project has about it,
@@ -1039,6 +1044,23 @@ watchEvents({
    to be measured to find its place. Every cell is centred on the same line — the row
    is one line of text with a switch and a dot in it, and a dot that sits a few pixels
    below its own sentence reads as belonging to the row underneath it. */
+/* A place this project has switched off. Dimmed rather than marked, because nothing is
+   wrong with it: it is a place somebody keeps and does not use at the moment, and it is here
+   because it may be used again tomorrow. What must not be allowed is for it to read as one
+   of the places that is in use — the switches below it already say so, but the row itself is
+   what the eye lands on first, and at twenty rows the eye is the only reader there is. */
+.place-off .place-head {
+  opacity: 0.55;
+}
+
+/* Hover lifts it a little and opening it does not lift it at all. The dimming is how a
+   reader knows the row is off, and the row being open is exactly when somebody is reading
+   it — a place that brightened as you unfolded it would be saying the opposite in the one
+   moment its state matters. */
+.place-off .place-head:hover {
+  opacity: 0.7;
+}
+
 .place-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
