@@ -59,7 +59,7 @@ func TestTheSwitchIsAcceptedInARowNobodyDeclaredItFor(t *testing.T) {
 func TestTheSwitchIsRefusedInAListWithNoNames(t *testing.T) {
 	f := newModuleFixture(t)
 	module, err := f.store.Integrations().Register(t.Context(), "registry:mirror",
-		dbtest.Unique("mirror"), "http://module-registry:8095", []byte("hash"),
+		dbtest.Unique("mirror"), "http://module-registry:8095",
 		models.Manifest{Settings: []models.SettingSpec{{
 			Key:  "mirrors",
 			Type: "list",

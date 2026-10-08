@@ -26,7 +26,7 @@ func recipientModule(t *testing.T, f *moduleFixture) *models.Integration {
 	t.Helper()
 
 	integration, err := f.store.Integrations().Register(t.Context(), "notify:telegram",
-		dbtest.Unique("telegram"), "http://module-notify:8093", []byte("hash"), models.Manifest{
+		dbtest.Unique("telegram"), "http://module-notify:8093", models.Manifest{
 			Settings: []models.SettingSpec{
 				{Key: "bot_token", Label: "Bot token", Type: "string", Secret: true},
 				{Key: "chat_id", Label: "Chat id", Type: "string"},
@@ -233,7 +233,7 @@ func deployModule(t *testing.T, f *moduleFixture) (*models.Integration, string) 
 
 	target := dbtest.Unique("places")
 	integration, err := f.store.Integrations().Register(t.Context(), "deploy:"+target,
-		dbtest.Unique("k8s"), "http://module-deploy-kubernetes:8094", []byte("hash"),
+		dbtest.Unique("k8s"), "http://module-deploy-kubernetes:8094",
 		models.Manifest{
 			Settings: []models.SettingSpec{
 				{Key: "name", Label: "Name", Type: "string"},

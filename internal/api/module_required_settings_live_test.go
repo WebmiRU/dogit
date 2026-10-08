@@ -27,7 +27,7 @@ func TestAModuleWithNothingSetIsRefused(t *testing.T) {
 		}},
 	}
 	module, err := st.Integrations().Register(ctx, "deploy:kubernetes",
-		dbtest.Unique("needed"), "http://module:8094", []byte("hash"), manifest)
+		dbtest.Unique("needed"), "http://module:8094", manifest)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}

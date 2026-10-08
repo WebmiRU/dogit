@@ -71,28 +71,95 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	registrationToken, err := s.tokenFromHeader(r)
+	// The secret as presented, kept alongside its hash because the answer below has to hand the
+	// module back the credential it arrived with. The core never stores it; it already has a
+	// hash, and that is all it needs.
+	registrationToken, err := bearerPlaintext(r.Header.Get("Authorization"))
 	if err != nil {
 		s.writeError(w, r, errUnauthorized("a valid module registration token is required"))
 		return
 	}
-	if _, err := s.store.ModuleTokens().ByHash(r.Context(), registrationToken); err != nil {
-		s.writeError(w, r, errUnauthorized("a valid module registration token is required"))
+	registrationHash := auth.HashToken(registrationToken)
+	// The one token.
+	//
+	// It is checked here and then it is the module's own credential — the same secret, not a
+	// second one. A module used to register with one secret and be handed another to work with,
+	// which meant an operator who revoked the token they had created had locked out nothing, and
+	// a second secret nobody had a copy of and so could not rotate.
+	//
+	// The end date is checked here and on every request afterwards. Checking it only here would
+	// mean a module whose token expired yesterday carrying on until the next time it happened to
+	// register, which for a module that registers on start-up is most of the time.
+	token, err := s.store.ModuleTokens().ByHash(r.Context(), registrationHash)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.writeError(w, r, errUnauthorized("a valid module token is required"))
+		} else {
+			s.writeError(w, r, err)
+		}
+		return
+	}
+	if token.Expired(time.Now()) {
+		s.writeError(w, r, errUnauthorized(
+			"this token ended on "+token.ExpiresAt.Format("2 January 2006")+
+				", so a module cannot register with it"))
 		return
 	}
 
-	// The module gets its own token: from here on it authenticates as itself, not
-	// with the administrator secret that let it in.
-	plaintext, hash, err := auth.GenerateToken()
-	if err != nil {
-		s.writeError(w, r, err)
-		return
+	// Who, if anyone, this token already belongs to.
+	//
+	// Asked before anything is written, because both answers below are refusals and neither
+	// should leave a row behind. Registration is idempotent on (kind, name) precisely so that a
+	// module restarting in Kubernetes comes back as itself, and that is the door this is
+	// guarding: a token bound to a module can re-register that module and nothing else, and an
+	// unbound token can claim a name that nobody holds — but not a name that somebody does.
+	switch {
+	case token.Bound():
+		owner, err := s.store.Integrations().ByID(r.Context(), *token.IntegrationID)
+		if err != nil {
+			s.writeError(w, r, errUnauthorized("this token belongs to a module that no longer exists"))
+			return
+		}
+		if owner.Kind != req.Kind || owner.Name != req.Name {
+			s.writeError(w, r, errUnauthorized(fmt.Sprintf(
+				"this token belongs to %s/%s, and one token is one module's. A module presenting "+
+					"somebody else's token is refused rather than given a second identity.",
+				owner.Kind, owner.Name)))
+			return
+		}
+	default:
+		taken, err := s.store.Integrations().ByName(r.Context(), req.Kind, req.Name)
+		switch {
+		case err == nil:
+			s.writeError(w, r, errUnauthorized(fmt.Sprintf(
+				"%s/%s is already registered with a different token, so a new token cannot take "+
+					"its name. Re-register it with its own token, or delete the module first.",
+				taken.Kind, taken.Name)))
+			return
+		case !errors.Is(err, store.ErrNotFound):
+			s.writeError(w, r, err)
+			return
+		}
 	}
 
 	integration, err := s.store.Integrations().Register(r.Context(),
-		req.Kind, req.Name, req.Endpoint, hash, req.Manifest)
+		req.Kind, req.Name, req.Endpoint, req.Manifest)
 	if err != nil {
 		s.writeError(w, r, err)
+		return
+	}
+
+	// Bound after the module exists rather than before, because binding needs the module's id.
+	//
+	// If it cannot be bound the module is removed again: a module that exists and cannot
+	// authenticate is a module that looks installed, answers nothing, and is refused with a
+	// message naming a token the operator believes is fine.
+	if err := s.store.ModuleTokens().Bind(r.Context(), token.ID, integration.ID); err != nil {
+		if delErr := s.store.Integrations().Delete(r.Context(), integration.ID); delErr != nil {
+			s.log.Error("a module could not bind its token and could not be removed either",
+				"kind", integration.Kind, "name", integration.Name, "err", err)
+		}
+		s.writeError(w, r, errUnauthorized("this token could not be bound to the module: "+err.Error()))
 		return
 	}
 
@@ -124,8 +191,12 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 	})
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"integration":        s.integrationView(r, integration, nil, nil),
-		"token":              plaintext,
+		"integration": s.integrationView(r, integration, nil, nil),
+		// Echoed rather than replaced. A module asks with the token it has and is handed back
+		// the token it needs, which is the same one — so a module that stores the answer keeps
+		// working without knowing any of this changed, and there is no moment at which the
+		// core holds a credential the operator does not.
+		"token":              registrationToken,
 		"heartbeat_interval": moduleHeartbeatInterval.String(),
 		"expires_at":         time.Now().Add(maxHeartbeatWindow).Format(time.RFC3339),
 	})
@@ -2126,21 +2197,68 @@ func (s *Server) tokenFromHeaderValue(token string) ([]byte, error) {
 	return hashBearer("Bearer " + strings.TrimSpace(token))
 }
 
-func hashBearer(header string) ([]byte, error) {
+// bearerPlaintext returns the credential itself rather than its hash.
+//
+// Separate from hashBearer because one caller needs the hash and another needs the secret: the
+// core keeps only hashes, but a module registering for the first time has to be handed back the
+// token it just used, and handing back the hash instead hands it something base64 that
+// authenticates nothing — a module that stores that answer is locked out on its next request,
+// having been told it had succeeded.
+func bearerPlaintext(header string) (string, error) {
 	const prefix = "Bearer "
 	if len(header) <= len(prefix) || header[:len(prefix)] != prefix {
-		return nil, errors.New("no bearer token")
+		return "", errors.New("no bearer token")
 	}
-	return auth.HashToken(strings.TrimSpace(header[len(prefix):])), nil
+	return strings.TrimSpace(header[len(prefix):]), nil
+}
+
+func hashBearer(header string) ([]byte, error) {
+	plaintext, err := bearerPlaintext(header)
+	if err != nil {
+		return nil, err
+	}
+	return auth.HashToken(plaintext), nil
 }
 
 // integrationFromRequest authenticates the calling module by its own token.
+// integrationFromRequest answers "which module is this" from the token alone.
+//
+// The token is the whole of the module's identity: it is resolved to a row, the row says which
+// module it belongs to, and the module is that one. There is no second table to consult and no
+// secret to keep in step with anything else, which is the entire reason the two-token arrangement
+// went.
+//
+// An expired token says so and says when. A module that is refused with "authentication is
+// required" on every request looks like a broken core, and the one thing an operator needs to know
+// — that the credential ran out on a date somebody chose — is exactly what a bare refusal hides.
 func (s *Server) integrationFromRequest(r *http.Request) (*models.Integration, error) {
 	hash, err := s.tokenFromHeader(r)
 	if err != nil {
 		return nil, errUnauthorized("module authentication is required")
 	}
-	return s.store.Integrations().ByTokenHash(r.Context(), hash)
+
+	token, err := s.store.ModuleTokens().ByHash(r.Context(), hash)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+		return nil, errUnauthorized("module authentication is required")
+	}
+	if token.Expired(time.Now()) {
+		return nil, errUnauthorized(fmt.Sprintf(
+			"this token ended on %s, so the module presenting it is refused",
+			token.ExpiresAt.Format("2 January 2006")))
+	}
+	if !token.Bound() {
+		return nil, errUnauthorized(
+			"this token has not authenticated a module yet, so it cannot authenticate as one")
+	}
+
+	integration, err := s.store.Integrations().ByID(r.Context(), *token.IntegrationID)
+	if err != nil {
+		return nil, errUnauthorized("module authentication is required")
+	}
+	return integration, nil
 }
 
 func (s *Server) moduleFromPath(r *http.Request) (*models.Integration, error) {

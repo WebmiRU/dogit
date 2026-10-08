@@ -61,7 +61,7 @@ func TestAStaleDatabaseFieldChangesNothingAboutRegistration(t *testing.T) {
 
 	manifest := models.Manifest{Version: "0.1.0"}
 	module, err := st.Integrations().Register(ctx, "deploy:kubernetes",
-		dbtest.Unique("stale"), "http://module:8094", []byte("hash"), manifest)
+		dbtest.Unique("stale"), "http://module:8094", manifest)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}

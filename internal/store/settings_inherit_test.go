@@ -144,7 +144,7 @@ func setupSettings(t *testing.T) *settingsFixture {
 	// A module per test: registration is idempotent on (kind, name), so one name
 	// would hand every test the clusters the last one left behind.
 	module, err := st.Integrations().Register(t.Context(), "deploy:kubernetes",
-		dbtest.Unique("kubernetes"), "http://module-deploy:8094", []byte("hash"),
+		dbtest.Unique("kubernetes"), "http://module-deploy:8094",
 		models.Manifest{Settings: []models.SettingSpec{{Key: "clusters", Type: "list"}}})
 	if err != nil {
 		t.Fatalf("register the module: %v", err)

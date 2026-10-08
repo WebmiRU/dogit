@@ -32,7 +32,7 @@ func setupRecipients(t *testing.T) (*moduleFixture, *models.Project, *models.Int
 	project := dbtest.NewProject(t, f.store, "recipients", nil)
 
 	telegram, err := f.store.Integrations().Register(t.Context(), "notify:telegram",
-		dbtest.Unique("telegram"), "http://module-notify:8093", []byte("hash"), models.Manifest{})
+		dbtest.Unique("telegram"), "http://module-notify:8093", models.Manifest{})
 	if err != nil {
 		t.Fatalf("register the notification module: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestEachChannelIsToldOnce(t *testing.T) {
 	toChat := addRecipient(t, f, telegram.ID, "everyone", "-100a", nil)
 
 	mail, err := f.store.Integrations().Register(t.Context(), "notify:email",
-		dbtest.Unique("email"), "http://module-notify-email:8094", []byte("hash"),
+		dbtest.Unique("email"), "http://module-notify-email:8094",
 		models.Manifest{})
 	if err != nil {
 		t.Fatalf("register a second channel: %v", err)

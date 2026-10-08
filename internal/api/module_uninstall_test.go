@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -77,9 +76,8 @@ func registerUninstallingModule(t *testing.T, f *moduleFixture, endpoint string,
 	// The module comes back as a module that declares how it is removed, which is
 	// how a real one does it: by registering with a new manifest, not by being
 	// asked to fill in a form.
-	hash := sha256.Sum256([]byte(f.module.Kind + "-instance-token"))
 	_, err := f.store.Integrations().Register(t.Context(), f.module.Kind, f.module.Name,
-		endpoint, hash[:], models.Manifest{
+		endpoint, models.Manifest{
 			Version: "0.1.0",
 			Scopes:  []string{models.ScopeRegistryPush},
 			Uninstall: models.UninstallSpec{

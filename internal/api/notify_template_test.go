@@ -169,7 +169,7 @@ func withRecipients(t *testing.T, f *moduleFixture) store.NotificationAddress {
 	t.Helper()
 
 	module, err := f.store.Integrations().Register(t.Context(), "notify:telegram",
-		dbtest.Unique("telegram"), "http://module-notify:8093", []byte("hash"), models.Manifest{
+		dbtest.Unique("telegram"), "http://module-notify:8093", models.Manifest{
 			Settings: []models.SettingSpec{{Key: "chat_id", Label: "Chat id", Type: "string"}},
 			Target:   &models.TargetSpec{Settings: []string{"chat_id"}, Identify: []string{"chat_id"}},
 		})

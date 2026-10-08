@@ -367,7 +367,23 @@ type ModuleToken struct {
 	Description string     `json:"description"`
 	CreatedAt   time.Time  `json:"created_at"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+
+	// ExpiresAt is when the token stops working, or nil when it does not end.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// IntegrationID is the module this token has authenticated, and nil for a token nothing
+	// has registered with yet — which is the state of every token between the moment an
+	// administrator creates it and the moment a module introduces itself.
+	IntegrationID *uuid.UUID `json:"integration_id,omitempty"`
 }
+
+// Expired says whether this token has run out at the given moment.
+func (t *ModuleToken) Expired(now time.Time) bool {
+	return t.ExpiresAt != nil && t.ExpiresAt.Before(now)
+}
+
+// Bound says whether anything has registered with this token yet.
+func (t *ModuleToken) Bound() bool { return t.IntegrationID != nil }
 
 // IntegrationToken is a short-lived user token scoped to a module.
 type IntegrationToken struct {

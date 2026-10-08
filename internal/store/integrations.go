@@ -129,7 +129,7 @@ func scanIntegration(row interface{ Scan(...any) error }) (*models.Integration, 
 // Modules restart with a new address, and in Kubernetes that address changes
 // every time, so registration is idempotent on (kind, name) rather than
 // appending a new row each time.
-func (r *IntegrationRepo) Register(ctx context.Context, kind, name, endpoint string, tokenHash []byte, manifest models.Manifest) (*models.Integration, error) {
+func (r *IntegrationRepo) Register(ctx context.Context, kind, name, endpoint string, manifest models.Manifest) (*models.Integration, error) {
 	caps := manifest
 	caps.Version = manifest.Version
 
@@ -144,12 +144,11 @@ func (r *IntegrationRepo) Register(ctx context.Context, kind, name, endpoint str
 
 	integration := &models.Integration{}
 	err = r.s.pool.QueryRow(ctx, `
-		INSERT INTO integrations (kind, name, endpoint, token_hash, module_version,
+		INSERT INTO integrations (kind, name, endpoint, module_version,
 			capabilities, settings_schema, status, enabled, last_seen_at, registered_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'online', TRUE, now(), now())
+		VALUES ($1, $2, $3, $4, $5, $6, 'online', TRUE, now(), now())
 		ON CONFLICT (kind, name) DO UPDATE SET
 			endpoint       = EXCLUDED.endpoint,
-			token_hash     = EXCLUDED.token_hash,
 			module_version = EXCLUDED.module_version,
 			capabilities   = EXCLUDED.capabilities,
 			settings_schema = EXCLUDED.settings_schema,
@@ -159,7 +158,7 @@ func (r *IntegrationRepo) Register(ctx context.Context, kind, name, endpoint str
 			registered_at  = now(),
 			updated_at     = now()
 		RETURNING `+integrationColumns,
-		kind, name, endpoint, tokenHash, manifest.Version, capsRaw, settings,
+		kind, name, endpoint, manifest.Version, capsRaw, settings,
 	).Scan(&integration.ID, &integration.Kind, &integration.Name, &integration.Endpoint,
 		&integration.ModuleVersion, &capsRaw, &settings, &integration.Status,
 		&integration.Enabled, &integration.LastSeenAt, &integration.RegisteredAt,
@@ -180,6 +179,17 @@ func (r *IntegrationRepo) Register(ctx context.Context, kind, name, endpoint str
 func (r *IntegrationRepo) ByID(ctx context.Context, id uuid.UUID) (*models.Integration, error) {
 	return scanIntegration(r.s.pool.QueryRow(ctx,
 		`SELECT `+integrationColumns+` FROM integrations WHERE id = $1`, id))
+}
+
+// ByName finds a module by what it calls itself.
+//
+// The pair is the module's identity — registration is idempotent on it, because a module that
+// restarts in Kubernetes comes back with a new address and must not turn into a second module.
+// That makes the pair worth looking up before writing anything, which is what a caller deciding
+// whether a name is being claimed for the first time or taken over needs.
+func (r *IntegrationRepo) ByName(ctx context.Context, kind, name string) (*models.Integration, error) {
+	return scanIntegration(r.s.pool.QueryRow(ctx,
+		`SELECT `+integrationColumns+` FROM integrations WHERE kind = $1 AND name = $2`, kind, name))
 }
 
 // ByKind returns the enabled module of a kind, if there is one.
@@ -294,37 +304,86 @@ type ModuleTokenRepo struct{ s *Store }
 
 func (s *Store) ModuleTokens() *ModuleTokenRepo { return &ModuleTokenRepo{s: s} }
 
-func (r *ModuleTokenRepo) Create(ctx context.Context, name, description string, hash []byte) (*models.ModuleToken, error) {
-	token := &models.ModuleToken{Name: name, Description: description}
+// Create mints a token, optionally with an end.
+//
+// The end is the token's, not the module's: a token with a date on it is one somebody expects
+// to stop working, and a token that outlives its date would be a credential nobody can reason
+// about. Null means it does not end, which is the right answer for a token that has been put
+// somewhere safe and for an instance that has one module and no reason to be careful.
+func (r *ModuleTokenRepo) Create(ctx context.Context, name, description string,
+	hash []byte, expiresAt *time.Time) (*models.ModuleToken, error) {
+	token := &models.ModuleToken{Name: name, Description: description, ExpiresAt: expiresAt}
 	err := r.s.pool.QueryRow(ctx, `
-		INSERT INTO module_tokens (name, description, token_hash)
-		VALUES ($1, $2, $3) RETURNING id, created_at`,
-		name, description, hash).Scan(&token.ID, &token.CreatedAt)
+		INSERT INTO module_tokens (name, description, token_hash, expires_at)
+		VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+		name, description, hash, expiresAt).Scan(&token.ID, &token.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create module token: %w", err)
 	}
 	return token, nil
 }
 
-// ByHash resolves a registration token.
-func (r *ModuleTokenRepo) ByHash(ctx context.Context, hash []byte) (*models.ModuleToken, error) {
-	var token models.ModuleToken
-	err := r.s.pool.QueryRow(ctx, `
-		SELECT id, name, description, created_at, revoked_at
-		FROM module_tokens WHERE token_hash = $1 AND revoked_at IS NULL`, hash,
-	).Scan(&token.ID, &token.Name, &token.Description, &token.CreatedAt, &token.RevokedAt)
+const moduleTokenColumns = `id, name, description, created_at, revoked_at, expires_at, integration_id`
+
+func scanModuleToken(row interface{ Scan(...any) error }) (*models.ModuleToken, error) {
+	var (
+		token       models.ModuleToken
+		integration *uuid.UUID
+	)
+	err := row.Scan(&token.ID, &token.Name, &token.Description, &token.CreatedAt,
+		&token.RevokedAt, &token.ExpiresAt, &integration)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get module token: %w", err)
+		return nil, fmt.Errorf("read module token: %w", err)
 	}
+	token.IntegrationID = integration
 	return &token, nil
 }
 
+// ByHash resolves a token from the secret, whether or not anything has registered with it yet.
+//
+// An unbound token is found rather than refused. It is the normal state of a token an
+// administrator has just created and a module has not met yet, and it is what the first
+// message of a registration is checked against.
+func (r *ModuleTokenRepo) ByHash(ctx context.Context, hash []byte) (*models.ModuleToken, error) {
+	return scanModuleToken(r.s.pool.QueryRow(ctx,
+		`SELECT `+moduleTokenColumns+` FROM module_tokens
+		 WHERE token_hash = $1 AND revoked_at IS NULL`, hash))
+}
+
+// Bind records which module a token belongs to, the first time that module presents it.
+//
+// Idempotent on the same module, because registration is retried: a module whose first answer
+// was lost will present the same token again, and treating that as a different module would
+// leave two modules on one credential.
+//
+// Refused for a token already bound to another module, and the refusal is not a formality. A
+// token that authenticated two modules would be the sharing of one credential that the
+// one-resource-per-module rule exists to prevent, one level up.
+func (r *ModuleTokenRepo) Bind(ctx context.Context, tokenID, integrationID uuid.UUID) error {
+	tag, err := r.s.pool.Exec(ctx, `
+		UPDATE module_tokens SET integration_id = $2
+		WHERE id = $1 AND (integration_id IS NULL OR integration_id = $2)`, tokenID, integrationID)
+	if err != nil {
+		return fmt.Errorf("bind module token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("this token is already in use by another module")
+	}
+	return nil
+}
+
+// List shows every token, including spent ones, because "which tokens exist" is the question an
+// operator asks before minting another and the answer has to include the ones already used up.
+//
+// Expired and revoked are told apart rather than both called inactive: they mean different things
+// to whoever is looking. An expired token ran out on a date somebody chose; a revoked one was
+// cancelled, and if it had a module behind it that module is gone.
 func (r *ModuleTokenRepo) List(ctx context.Context) ([]*models.ModuleToken, error) {
 	rows, err := r.s.pool.Query(ctx, `
-		SELECT id, name, description, created_at, revoked_at FROM module_tokens ORDER BY created_at`)
+		SELECT `+moduleTokenColumns+` FROM module_tokens ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -332,25 +391,87 @@ func (r *ModuleTokenRepo) List(ctx context.Context) ([]*models.ModuleToken, erro
 
 	out := []*models.ModuleToken{}
 	for rows.Next() {
-		var t models.ModuleToken
-		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.CreatedAt, &t.RevokedAt); err != nil {
+		token, err := scanModuleToken(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, &t)
+		out = append(out, token)
 	}
 	return out, rows.Err()
 }
 
-func (r *ModuleTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error {
-	tag, err := r.s.pool.Exec(ctx,
-		`UPDATE module_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, id)
+// Revoke cancels a token, and when the token was a module's own credential it removes that module
+// as well. It returns the module it removed, or nil for a token nothing had registered with.
+//
+// This is the arrangement the plan settled on: cancelling a token and deleting a module are the
+// same act, not two that happen to have an effect on each other. There is one credential per
+// module now, so there is no state in which a module exists and its token does not — the core
+// could not tell such a module from a healthy one, and neither could an operator looking at the
+// list.
+//
+// One transaction, because the two halves are not independent. Marking the token cancelled and
+// then failing to delete the module would leave a module whose credential is dead and whose row
+// says it is fine; the reverse would leave a token that no longer matches anything and does not
+// know it.
+//
+// An unbound token is marked cancelled and kept. It has no module to remove, and the row is left
+// as a record that the token existed and is not to be used — which is also what stops a token
+// from being presented again after somebody has decided it should not be.
+func (r *ModuleTokenRepo) Revoke(ctx context.Context, id uuid.UUID) (*models.Integration, error) {
+	tx, err := r.s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("revoke module token: %w", err)
+		return nil, fmt.Errorf("revoke module token: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var integrationID *uuid.UUID
+	err = tx.QueryRow(ctx,
+		`SELECT integration_id FROM module_tokens WHERE id = $1 AND revoked_at IS NULL`, id,
+	).Scan(&integrationID)
+	if errors.Is(err, pgxNoRows) {
+		return nil, ErrNotFound
 	}
-	return nil
+	if err != nil {
+		return nil, fmt.Errorf("revoke module token: %w", err)
+	}
+
+	if integrationID == nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE module_tokens SET revoked_at = now() WHERE id = $1`, id); err != nil {
+			return nil, fmt.Errorf("revoke module token: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("revoke module token: %w", err)
+		}
+		return nil, nil
+	}
+
+	// The module goes first in the transaction's own order of business: the token row is
+	// removed by the cascade from the module, so there is nothing left afterwards to record that
+	// anything was revoked — and nothing needs to, because no row means no token and the module
+	// that used it is gone.
+	module, err := scanIntegration(tx.QueryRow(ctx,
+		`DELETE FROM integrations WHERE id = $1 RETURNING `+integrationColumns, *integrationID))
+	if errors.Is(err, pgxNoRows) {
+		// The token names a module that is not there, which only an edit outside the core can
+		// arrange. Cancelling the token is still the right answer, so it is done rather than
+		// reported as something the operator has to understand.
+		if _, err := tx.Exec(ctx,
+			`UPDATE module_tokens SET revoked_at = now() WHERE id = $1`, id); err != nil {
+			return nil, fmt.Errorf("revoke module token: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("revoke module token: %w", err)
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("revoke module token: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("revoke module token: %w", err)
+	}
+	return module, nil
 }
 
 // --- per-scope settings -------------------------------------------------
@@ -694,10 +815,4 @@ func (r *IntegrationTokenRepo) DeleteExpired(ctx context.Context) (int64, error)
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
-}
-
-// IntegrationByTokenHash resolves the module a request came from.
-func (r *IntegrationRepo) ByTokenHash(ctx context.Context, hash []byte) (*models.Integration, error) {
-	return scanIntegration(r.s.pool.QueryRow(ctx,
-		`SELECT `+integrationColumns+` FROM integrations WHERE token_hash = $1`, hash))
 }

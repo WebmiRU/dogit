@@ -267,7 +267,7 @@ func newAvailabilityFixture(t *testing.T) *availabilityFixture {
 
 	module := newFakeDeployModule(t)
 	deployer, err := st.Integrations().Register(t.Context(), "deploy:kubernetes",
-		dbtest.Unique("deploy"), module.URL, []byte("hash"),
+		dbtest.Unique("deploy"), module.URL,
 		models.Manifest{Settings: []models.SettingSpec{{
 			Key: "clusters", Type: "list",
 			Items: &models.SettingItems{
@@ -282,7 +282,7 @@ func newAvailabilityFixture(t *testing.T) *availabilityFixture {
 		t.Fatalf("register the deploy module: %v", err)
 	}
 	if _, err := st.Integrations().Register(t.Context(), registryKind,
-		dbtest.Unique("registry"), "http://module-registry:8091", []byte("hash"),
+		dbtest.Unique("registry"), "http://module-registry:8091",
 		models.Manifest{
 			Routing:  models.RoutingSpec{Domains: []string{modulePublishedAddress}},
 			Settings: []models.SettingSpec{{Key: "public_address", Type: "string"}},

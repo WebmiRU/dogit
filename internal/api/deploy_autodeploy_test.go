@@ -121,7 +121,7 @@ func setupAutodeploy(t *testing.T, name, clusters string) (*moduleFixture, *mode
 	}
 
 	module, err := f.store.Integrations().Register(t.Context(), "deploy:kubernetes",
-		dbtest.Unique("kubernetes"), "http://module-deploy:8094", []byte("hash"),
+		dbtest.Unique("kubernetes"), "http://module-deploy:8094",
 		models.Manifest{Settings: []models.SettingSpec{{
 			Key:   "clusters",
 			Type:  "list",

@@ -219,7 +219,7 @@ func installRegistryModule(t *testing.T, env *registryEnv, name string) *models.
 	t.Helper()
 
 	module, err := env.store.Integrations().Register(t.Context(), registryKind,
-		dbtest.Unique("registry"), "http://module-registry:8091", []byte("hash"),
+		dbtest.Unique("registry"), "http://module-registry:8091",
 		models.Manifest{
 			Routing: models.RoutingSpec{Domains: []string{modulePublishedAddress}},
 			Settings: []models.SettingSpec{{

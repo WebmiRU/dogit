@@ -157,7 +157,7 @@ func newInheritedSettingsEnv(t *testing.T) *inheritedSettingsEnv {
 		}},
 	}
 	module, err := st.Integrations().Register(t.Context(), "deploy:kubernetes",
-		dbtest.Unique("deploy"), "http://module-deploy:8094", []byte("hash"), manifest)
+		dbtest.Unique("deploy"), "http://module-deploy:8094", manifest)
 	if err != nil {
 		t.Fatalf("register the deploy module: %v", err)
 	}

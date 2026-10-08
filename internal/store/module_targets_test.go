@@ -44,7 +44,7 @@ func setupTargets(t *testing.T) *targetFixture {
 	// A module of its own per test: registration is idempotent on (kind, name), so
 	// reusing one name would hand every test the recipients the last one left behind.
 	module, err := st.Integrations().Register(t.Context(), "notify:telegram",
-		dbtest.Unique("telegram"), "http://module-notify:8093", []byte("hash"), models.Manifest{})
+		dbtest.Unique("telegram"), "http://module-notify:8093", models.Manifest{})
 	if err != nil {
 		t.Fatalf("register the module: %v", err)
 	}

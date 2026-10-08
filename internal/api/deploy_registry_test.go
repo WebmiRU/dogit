@@ -314,7 +314,7 @@ func newPlaceRegistryFixture(t *testing.T) *placeRegistryFixture {
 	}
 
 	registry, err := st.Integrations().Register(t.Context(), registryKind,
-		dbtest.Unique("registry"), "http://module-registry:8091", []byte("hash"),
+		dbtest.Unique("registry"), "http://module-registry:8091",
 		models.Manifest{
 			Routing: models.RoutingSpec{Domains: []string{"192.168.1.103:8091"}},
 			Settings: []models.SettingSpec{
@@ -326,7 +326,7 @@ func newPlaceRegistryFixture(t *testing.T) *placeRegistryFixture {
 	}
 
 	deployer, err := st.Integrations().Register(t.Context(), "deploy:kubernetes",
-		dbtest.Unique("deploy"), "http://module-deploy:8094", []byte("hash"),
+		dbtest.Unique("deploy"), "http://module-deploy:8094",
 		models.Manifest{
 			Settings: []models.SettingSpec{{
 				Key: "clusters", Label: "Clusters", Type: "list",

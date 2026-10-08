@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,11 +63,27 @@ func createModuleToken(ctx context.Context, args []string) error {
 	fs := newFlagSet("module token create")
 	name := fs.String("name", "", "what the token is for, e.g. registry-docker")
 	description := fs.String("description", "", "free text shown in the list")
+	expires := fs.String("expires", "",
+		"when the token stops working, e.g. 24h or 30d. Empty means it does not end, which "+
+			"is the right answer for a token kept somewhere safe")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	if *name == "" {
 		return fmt.Errorf("--name is required")
+	}
+
+	// A date that cannot be read is refused here rather than stored. A token with a date
+	// nobody could parse would read as perpetual to everyone except the one who meant it to
+	// end, which is the one reading that matters.
+	var expiresAt *time.Time
+	if text := strings.TrimSpace(*expires); text != "" {
+		after, err := parseDuration(text)
+		if err != nil {
+			return fmt.Errorf("--expires: %w", err)
+		}
+		moment := time.Now().Add(after)
+		expiresAt = &moment
 	}
 
 	plaintext, hash, err := auth.GenerateToken()
@@ -80,7 +97,7 @@ func createModuleToken(ctx context.Context, args []string) error {
 	}
 	defer a.Close()
 
-	token, err := a.Store.ModuleTokens().Create(ctx, *name, *description, hash)
+	token, err := a.Store.ModuleTokens().Create(ctx, *name, *description, hash, expiresAt)
 	if err != nil {
 		return err
 	}
@@ -90,6 +107,22 @@ func createModuleToken(ctx context.Context, args []string) error {
 	fmt.Fprintf(os.Stdout, "  token: %s\n", plaintext)
 	fmt.Fprintln(os.Stdout, "\nThis value is shown once. Store it in the module's secret.")
 	return nil
+}
+
+// parseDuration reads what somebody wrote on a command line: 30s, 24h, 7d, or something Go
+// understands on its own.
+//
+// The day suffix is here because a token's life is counted in days by everybody who thinks
+// about tokens, and "604800s" is what you write when you have given up on the interface.
+func parseDuration(text string) (time.Duration, error) {
+	if strings.HasSuffix(text, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(text, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("%q is not a number of days", text)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(text)
 }
 
 func listModuleTokens(ctx context.Context) error {
@@ -108,11 +141,20 @@ func listModuleTokens(ctx context.Context) error {
 		return nil
 	}
 	for _, token := range tokens {
-		state := "active"
-		if token.RevokedAt != nil {
+		// The column an operator actually needs is the one that says what a token is doing: an
+		// unused one is an invitation, a bound one belongs to a module, and an expired one is
+		// neither.
+		state := "unused — this will register a module when presented"
+		switch {
+		case token.RevokedAt != nil:
 			state = "revoked"
+		case token.Bound():
+			state = "in use by a module"
+		case token.Expired(time.Now()):
+			state = "ended " + token.ExpiresAt.Format("2 January 2006")
 		}
-		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", token.ID, state, token.Name, token.CreatedAt.Format(time.RFC3339))
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n",
+			token.ID, state, token.Name, token.CreatedAt.Format(time.RFC3339))
 	}
 	return nil
 }
@@ -132,10 +174,20 @@ func revokeModuleToken(ctx context.Context, args []string) error {
 	}
 	defer a.Close()
 
-	if err := a.Store.ModuleTokens().Revoke(ctx, id); err != nil {
+	// Both outcomes are reported, because they are different acts with different consequences and
+	// an operator who cannot tell which happened has to go and look.
+	removed, err := a.Store.ModuleTokens().Revoke(ctx, id)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "revoked module token %s\n", id)
+	if removed == nil {
+		fmt.Fprintf(os.Stdout, "revoked module token %s — no module was using it\n", id)
+		return nil
+	}
+	fmt.Fprintf(os.Stdout,
+		"revoked module token %s and removed %s/%s: the token was the module's only credential, "+
+			"so the module is gone with it. Registering it again needs a new token.\n",
+		id, removed.Kind, removed.Name)
 	return nil
 }
 

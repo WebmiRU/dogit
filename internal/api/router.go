@@ -384,7 +384,14 @@ func (s *Server) authenticateModule(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		integration, err := s.integrationFromRequest(r)
 		if err != nil {
-			s.writeError(w, r, errUnauthorized("module authentication is required"))
+			// The reason this module was refused, not a flat "authentication is required".
+			// Working out which module is which is where all the interesting failures are — a
+			// token that ended, a token that has not authenticated anything yet, a module that
+			// has been removed — and replacing those with one sentence takes away the only
+			// thing the module could have acted on. A module refused every request with the
+			// same message looks like a broken core, and an operator reading the log has
+			// nothing to work with until somebody reads the code.
+			s.writeError(w, r, err)
 			return
 		}
 		if !integration.Enabled {

@@ -18,7 +18,7 @@ func registerDeployModule(t *testing.T, f *moduleFixture) *models.Integration {
 	t.Helper()
 
 	module, err := f.store.Integrations().Register(t.Context(), "deploy:kubernetes",
-		dbtest.Unique("kubernetes"), "http://module-deploy:8094", []byte("hash"),
+		dbtest.Unique("kubernetes"), "http://module-deploy:8094",
 		models.Manifest{Settings: []models.SettingSpec{{
 			Key:  "clusters",
 			Type: "list",

@@ -27,9 +27,11 @@ func setupRegistry(t *testing.T, level int) *registryFixture {
 	f := newModuleFixture(t)
 
 	// Re-register as a registry, so the manifest matches the kind being tested.
-	hash := sha256.Sum256([]byte(f.module.Kind + "-instance-token"))
+	// The same module, with the manifest the tests below are about. Its token stays bound:
+	// registering again is a module introducing itself once more, not a new module claiming a
+	// name, so the credential it authenticates with is unchanged.
 	if _, err := f.store.Integrations().Register(t.Context(), f.module.Kind, f.module.Name,
-		"http://registry:5000", hash[:], models.Manifest{
+		"http://registry:5000", models.Manifest{
 			Version: "0.1.0",
 			Scopes: []string{
 				models.ScopeRegistryPull, models.ScopeRegistryPush, models.ScopeRegistryDelete,

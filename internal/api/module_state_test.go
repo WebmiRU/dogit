@@ -34,7 +34,12 @@ type moduleFixture struct {
 	moduleToken string
 }
 
-// registerModule records a module the way a real one does.
+// registerModule records a module the way a real one does: an administrator mints a token, the
+// module presents it once, and from then on that same token is what it authenticates with.
+//
+// The token is bound rather than merely present, because that is the whole of the arrangement.
+// A fixture that registered a module and left its credential unrecognised would pass every test
+// that never asks the module to prove who it is, and fail exactly the ones that do.
 func registerModule(t *testing.T, st *store.Store, kind string) (*models.Integration, string, []byte) {
 	t.Helper()
 
@@ -43,7 +48,7 @@ func registerModule(t *testing.T, st *store.Store, kind string) (*models.Integra
 	hash := sha256.Sum256([]byte(raw))
 
 	integration, err := st.Integrations().Register(ctx, kind, kind+" module",
-		"http://"+kind+":9000", hash[:], models.Manifest{
+		"http://"+kind+":9000", models.Manifest{
 			Version: "0.1.0",
 			Scopes: []string{
 				models.ScopeRegistryPull, models.ScopeRegistryPush, models.ScopeRegistryDelete,
@@ -51,6 +56,14 @@ func registerModule(t *testing.T, st *store.Store, kind string) (*models.Integra
 		})
 	if err != nil {
 		t.Fatalf("register the module: %v", err)
+	}
+
+	token, err := st.ModuleTokens().Create(ctx, kind+" module", "", hash[:], nil)
+	if err != nil {
+		t.Fatalf("mint the module's token: %v", err)
+	}
+	if err := st.ModuleTokens().Bind(ctx, token.ID, integration.ID); err != nil {
+		t.Fatalf("bind the module's token: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = st.Pool().Exec(ctx, `DELETE FROM integrations WHERE id = $1`, integration.ID)
