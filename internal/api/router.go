@@ -329,6 +329,11 @@ func (s *Server) projectRoutes() chi.Router {
 	// deploy module, which is where those facts live; the core only decides who may
 	// ask and refuses an undo to anybody but an administrator.
 	projects.Get(base+"/deployments", s.handleProjectDeployments)
+	// What is being deployed and what has just been, as one list, for the page that draws one
+	// card per operation. Read from the core's own record rather than asked of the module: it
+	// is a question about what this core knows it started, and a core that has to ask a module
+	// whether it is mid-deploy is a core that cannot answer while the module is busy deploying.
+	projects.Get(base+"/deploy-operations", s.handleProjectDeployOperations)
 	projects.Post(base+"/deployments/revert", s.handleRevertDeployment)
 	projects.Post(base+"/deploy-clusters/test", s.handleTestDeployCluster)
 	projects.Get(base+"/deploy-images", s.handleProjectDeployImages)
