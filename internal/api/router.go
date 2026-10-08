@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -41,6 +42,12 @@ type Server struct {
 	// instance has no DOGIT_SECRET_KEY, and then a credential is refused rather than
 	// written in the clear.
 	sealer *secrets.Sealer
+
+	// channel is the core's half of the connection modules keep open, and channelOnce makes
+	// it. Built on first use rather than in New so that a server assembled by a test — which
+	// is most of them — does not have to know about a thing it never opens.
+	channel     *ModuleChannel
+	channelOnce sync.Once
 }
 
 // New creates the API server.
@@ -169,6 +176,22 @@ func (s *Server) Register(r chi.Router) {
 		authenticated.Get("/events", s.handleEventStream)
 		authenticated.Get("/events/stream", s.handleEventLive)
 		authenticated.Get("/events/socket", s.handleEventSocket)
+
+		// A module's channel. Outside the module routes on purpose, because those authenticate a
+		// request and this authenticates a connection — and a connection is not a request: the
+		// token is checked on every message, not once for the socket, and there is no user here
+		// to put in a context.
+		//
+		// The bearer header is still honoured at the upgrade, so the handshake is a real
+		// authenticated request rather than an anonymous one that becomes trusted a moment later.
+		// A module that does not send one is refused at the first message instead, with the same
+		// reasons it would have been refused by any other route.
+		//
+		// Deliberately on the root router rather than beside the other module routes: those sit
+		// behind a middleware that answers "which module" once per request and puts the answer in
+		// the request's context, which is the wrong shape for a thing whose whole point is that
+		// the answer is not decided once.
+		r.Get("/module/channel", s.handleModuleChannel)
 
 		// Module administration: an administrator sees and configures modules,
 		// and a user mints the tokens they present to them.

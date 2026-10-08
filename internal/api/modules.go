@@ -15,6 +15,7 @@ import (
 
 	"github.com/ewolf/dogit/internal/auth"
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/modulechan"
 	"github.com/ewolf/dogit/internal/modulehost"
 	"github.com/ewolf/dogit/internal/secrets"
 	"github.com/ewolf/dogit/internal/store"
@@ -2222,12 +2223,28 @@ func hashBearer(header string) ([]byte, error) {
 // required" on every request looks like a broken core, and the one thing an operator needs to know
 // — that the credential ran out on a date somebody chose — is exactly what a bare refusal hides.
 func (s *Server) integrationFromRequest(r *http.Request) (*models.Integration, error) {
-	hash, err := s.tokenFromHeader(r)
+	plaintext, err := bearerPlaintext(r.Header.Get("Authorization"))
 	if err != nil {
 		return nil, errUnauthorized("module authentication is required")
 	}
+	return s.moduleFromToken(r.Context(), plaintext)
+}
 
-	token, err := s.store.ModuleTokens().ByHash(r.Context(), hash)
+// moduleFromToken answers "which module is this" from a token alone.
+//
+// The one place that question is answered. A request arriving over HTTP and a message arriving
+// over a channel both come to here, which is what stops the two from having separate opinions
+// about when a token stops working — and they did have separate opinions once, when only the HTTP
+// path checked the end date and a module with a long-lived connection carried on past it.
+//
+// The date is checked here rather than at registration for the reason given above: a token with
+// an end must actually end, and every caller gets the same refusal, naming the same date.
+func (s *Server) moduleFromToken(ctx context.Context, plaintext string) (*models.Integration, error) {
+	if strings.TrimSpace(plaintext) == "" {
+		return nil, errUnauthorized(modulechan.ReasonBadToken)
+	}
+
+	token, err := s.store.ModuleTokens().ByHash(ctx, auth.HashToken(plaintext))
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			return nil, err
@@ -2235,16 +2252,20 @@ func (s *Server) integrationFromRequest(r *http.Request) (*models.Integration, e
 		return nil, errUnauthorized("module authentication is required")
 	}
 	if token.Expired(time.Now()) {
+		// The date is in the sentence and in the details, and both are wanted by different
+		// readers: the sentence is what an operator reads in a log, and the detail is what a
+		// module can put in its own words — "your token ended on the 12th" is better said by
+		// the module than parsed out of the core's prose.
 		return nil, errUnauthorized(fmt.Sprintf(
 			"this token ended on %s, so the module presenting it is refused",
-			token.ExpiresAt.Format("2 January 2006")))
+			token.ExpiresAt.Format("2 January 2006"))).
+			withDetail(refusalEndedOn, token.ExpiresAt.Format(time.DateOnly))
 	}
 	if !token.Bound() {
-		return nil, errUnauthorized(
-			"this token has not authenticated a module yet, so it cannot authenticate as one")
+		return nil, errUnauthorized(modulechan.ReasonUnboundToken)
 	}
 
-	integration, err := s.store.Integrations().ByID(r.Context(), *token.IntegrationID)
+	integration, err := s.store.Integrations().ByID(ctx, *token.IntegrationID)
 	if err != nil {
 		return nil, errUnauthorized("module authentication is required")
 	}
