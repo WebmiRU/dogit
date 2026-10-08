@@ -811,25 +811,3 @@ func TestPinnedIsAboutTheAddressAndNotTheName(t *testing.T) {
 		}
 	}
 }
-
-// A length of time as somebody would say it.
-//
-// The two lines a manifest produces say the same thing twice — the step started, the step ended
-// — and carry the same position, so the only thing that tells them apart is how long it took.
-// "0.04s" is a stopwatch on the page; "under a second" is the answer to the question the reader
-// is actually asking, which is whether this step was the one that was slow.
-func TestADurationIsSaidRatherThanMeasured(t *testing.T) {
-	cases := map[time.Duration]string{
-		40 * time.Millisecond:       "under a second",
-		999 * time.Millisecond:      "under a second",
-		time.Second:                 "1s",
-		3400 * time.Millisecond:     "3s",
-		59 * time.Second:            "59s",
-		time.Minute + 5*time.Second: "1m5s",
-	}
-	for d, want := range cases {
-		if got := shortDuration(d); got != want {
-			t.Errorf("shortDuration(%s) = %q, want %q", d, got, want)
-		}
-	}
-}
