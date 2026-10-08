@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/ewolf/dogit/internal/logger"
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/objects"
+	"github.com/ewolf/dogit/internal/secrets"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -55,10 +57,20 @@ func NewWithLogLevel(ctx context.Context, level string) (*App, error) {
 		return nil, err
 	}
 
+	// The sealer is made here rather than in the API, because the store needs it to read a
+	// credential back: a sealed value on an instance whose store has no key is an error, and
+	// an error in the middle of reading a page of settings is a page that does not load.
+	sealer, err := secrets.New(cfg.SecretKey)
+	if err != nil && !errors.Is(err, secrets.ErrNoKey) {
+		return nil, fmt.Errorf("the secret key cannot be used, so this instance cannot read "+
+			"what it has already sealed: %w", err)
+	}
+
 	st, err := store.Open(ctx, cfg.DatabaseURL, store.Options{
 		MaxConns:       cfg.DBMaxConns,
 		ConnectRetry:   cfg.DBConnectRetry,
 		ConnectTimeout: cfg.DBConnectMax,
+		Sealer:         sealer,
 	})
 	if err != nil {
 		return nil, err

@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ewolf/dogit/internal/secrets"
 )
 
 // ErrNotFound is returned by repository methods when a row does not exist.
@@ -21,6 +23,9 @@ var ErrConflict = errors.New("conflict")
 // Store is the database handle shared by all repositories.
 type Store struct {
 	pool *pgxpool.Pool
+	// sealer opens what is stored sealed. Nil when this instance has no key, and then a
+	// sealed value is an error rather than a string of punctuation.
+	sealer *secrets.Sealer
 }
 
 // Options tunes how Open establishes the connection pool.
@@ -28,6 +33,13 @@ type Options struct {
 	MaxConns       int32
 	ConnectRetry   time.Duration
 	ConnectTimeout time.Duration
+	// Sealer opens the credentials this store holds sealed.
+	//
+	// Nil means there is no key, and then a sealed value cannot be read: the store says so
+	// rather than handing back a ciphertext as though it were a password. It does not mean
+	// nothing is sealed — a store opened without a key can still read everything that is not
+	// a credential, which is most of it.
+	Sealer *secrets.Sealer
 }
 
 // DefaultOptions returns options suitable for a single application instance.
@@ -72,7 +84,7 @@ func Open(ctx context.Context, url string, opts Options) (*Store, error) {
 		err = pool.Ping(pingCtx)
 		cancel()
 		if err == nil {
-			return &Store{pool: pool}, nil
+			return &Store{pool: pool, sealer: opts.Sealer}, nil
 		}
 		if time.Now().After(deadline) {
 			pool.Close()

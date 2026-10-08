@@ -40,11 +40,15 @@ type Config struct {
 	ObjectsEndpoint  string
 	ObjectsAccessKey string
 	ObjectsSecretKey string
-	ObjectsBucket    string
-	ObjectsRegion    string
-	ObjectsPrefix    string
-	ObjectsLocalDir  string
-	ObjectsUseSSL    bool
+	// SecretKey seals what this instance stores as a credential: a module's registry
+	// password, a database's own credentials. Empty means this instance cannot store one
+	// at all, which is said rather than quietly written in the clear.
+	SecretKey       string
+	ObjectsBucket   string
+	ObjectsRegion   string
+	ObjectsPrefix   string
+	ObjectsLocalDir string
+	ObjectsUseSSL   bool
 
 	// CI
 	PipelineConfigFile string
@@ -110,6 +114,7 @@ func Load() (*Config, error) {
 		ObjectsEndpoint:    env("DOGIT_S3_ENDPOINT", ""),
 		ObjectsAccessKey:   env("DOGIT_S3_ACCESS_KEY", ""),
 		ObjectsSecretKey:   env("DOGIT_S3_SECRET_KEY", ""),
+		SecretKey:          env("DOGIT_SECRET_KEY", ""),
 		ObjectsBucket:      env("DOGIT_S3_BUCKET", ""),
 		ObjectsRegion:      env("DOGIT_S3_REGION", "us-east-1"),
 		ObjectsPrefix:      env("DOGIT_OBJECTS_PREFIX", "dogit"),

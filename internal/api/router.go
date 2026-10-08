@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/objects"
 	"github.com/ewolf/dogit/internal/repos"
+	"github.com/ewolf/dogit/internal/secrets"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -35,17 +37,30 @@ type Server struct {
 	// from the database because a runner on another machine streams its output to
 	// this process, and the bytes belong somewhere a browser can fetch them from.
 	objects objects.Store
+	// sealer encrypts a credential on the way in and opens it on the way out. Nil when this
+	// instance has no DOGIT_SECRET_KEY, and then a credential is refused rather than
+	// written in the clear.
+	sealer *secrets.Sealer
 }
 
 // New creates the API server.
+// New makes the API. It fails rather than starting when the secret key is present and
+// unusable: the credentials already stored would be unreadable, and finding that out by
+// watching a module fail to reach its own database is the worst way to find out.
 func New(
 	cfg *config.Config, log *slog.Logger, st *store.Store,
 	git *gitx.Git, repoSvc *repos.Service, bus *events.Bus, objectStore objects.Store,
-) *Server {
+) (*Server, error) {
+	sealer, err := secrets.New(cfg.SecretKey)
+	if err != nil && !errors.Is(err, secrets.ErrNoKey) {
+		return nil, fmt.Errorf("the secret key cannot be used, so this instance cannot read "+
+			"what it has already sealed: %w", err)
+	}
 	return &Server{
 		cfg: cfg, log: log, store: st, git: git,
 		repos: repoSvc, events: bus, objects: objectStore,
-	}
+		sealer: sealer,
+	}, nil
 }
 
 // contextUserKey and contextIntegrationKey hold the authenticated caller on the

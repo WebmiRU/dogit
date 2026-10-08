@@ -16,6 +16,7 @@ import (
 	"github.com/ewolf/dogit/internal/auth"
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/modulehost"
+	"github.com/ewolf/dogit/internal/secrets"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -678,6 +679,15 @@ func (s *Server) handleSetModuleSettingsBulk(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		value = s.withoutRedundant(r, integration, key, value, scopeType, scopeID)
+
+		if !isEmptyList(value) {
+			sealedValue, err := s.sealSetting(integration, key, value)
+			if err != nil {
+				s.writeError(w, r, errBadRequest(err.Error()))
+				return
+			}
+			value = sealedValue
+		}
 
 		if isEmptyList(value) {
 			// Nothing to delete is nothing decided here, which is what an empty list means.
@@ -1969,6 +1979,51 @@ func settingSpecOf(integration *models.Integration, key string) (models.SettingS
 		}
 	}
 	return models.SettingSpec{}, false
+}
+
+/**
+ * Seals a value when its setting is a credential, and refuses when there is no key.
+ *
+ * Three places write settings and all three come through here, because a value that is
+ * sealed in one of them and written plainly by another is a value that only looks protected.
+ *
+ * The refusal is the point of the whole thing: an instance with no key says so instead of
+ * writing the password in the clear and reading back that it stored it. Somebody who is
+ * offered a field for a credential on such an instance should learn that before they type.
+ */
+func (s *Server) sealSetting(integration *models.Integration, key string,
+	value json.RawMessage) (json.RawMessage, error) {
+	if !settingIsSecret(integration, key) {
+		return value, nil
+	}
+	if !s.sealer.Configured() {
+		return nil, fmt.Errorf("%s; set DOGIT_SECRET_KEY to 32 bytes as base64 or hex "+
+			"before storing a credential — this instance will not write one in the clear",
+			secrets.ErrNoKey)
+	}
+	sealed, err := s.sealer.Seal(value)
+	if err != nil {
+		return nil, err
+	}
+	return sealed, nil
+}
+
+// settingIsSecret says whether a module declared this setting to be a credential.
+func settingIsSecret(integration *models.Integration, key string) bool {
+	for _, spec := range integration.Capabilities.Settings {
+		if spec.Key != key {
+			continue
+		}
+		if spec.Type == "list" {
+			for _, field := range spec.Items.Fields {
+				if field.Key == key && field.Secret {
+					return true
+				}
+			}
+		}
+		return spec.Secret
+	}
+	return false
 }
 
 func moduleDeclaresSetting(integration *models.Integration, key string) bool {

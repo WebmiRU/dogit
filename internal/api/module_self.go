@@ -81,8 +81,16 @@ func (s *Server) handleModuleSelfSettingsWrite(w http.ResponseWriter, r *http.Re
 	}
 
 	for key, value := range req.Values {
+		// A module reporting a credential about itself is the ordinary case, not an odd one:
+		// a registry that discovers its own password and writes it down must not have it
+		// land in the clear because it came from the module rather than from a form.
+		sealedValue, err := s.sealSetting(integration, key, value)
+		if err != nil {
+			s.writeError(w, r, errBadRequest(err.Error()))
+			return
+		}
 		if err := s.store.Integrations().SetSetting(r.Context(), integration.ID,
-			store.ScopeInstance, nil, key, value); err != nil {
+			store.ScopeInstance, nil, key, sealedValue); err != nil {
 			s.writeError(w, r, err)
 			return
 		}

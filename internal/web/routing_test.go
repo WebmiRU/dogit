@@ -72,8 +72,11 @@ func TestGroupedProjectIsRoutableThroughTheServer(t *testing.T) {
 		t.Fatalf("object store: %v", err)
 	}
 
-	apiServer := api.New(&config.Config{AuthTokenTTL: time.Hour}, logger.Discard(), st, git,
+	apiServer, err := api.New(&config.Config{AuthTokenTTL: time.Hour}, logger.Discard(), st, git,
 		repos.New(st, git, repoRoot), nil, objects)
+	if err != nil {
+		t.Fatalf("make the API: %v", err)
+	}
 	server := web.NewServer(&config.Config{}, logger.Discard(), st, apiServer)
 
 	cases := []struct {

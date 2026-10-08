@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/secrets"
 )
 
 // RowIDField is the core's own field in a list whose entries have names: a row's
@@ -358,6 +359,41 @@ func (r *ModuleTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error {
 
 // SetSetting writes one setting at one scope. Re-registering a module never
 // touches settings: they are configuration, not module state.
+// open a stored value that is sealed, and hand back one that is not exactly as it is.
+//
+// Called on every value this store hands out rather than only on the ones somebody
+// remembers to ask about. That is what makes it safe: a reader cannot get it wrong by
+// forgetting which values are credentials, because it does not have to know.
+func (r *IntegrationRepo) open(value json.RawMessage) (json.RawMessage, error) {
+	if r.s.sealer == nil {
+		if !sealedValue(value) {
+			return value, nil
+		}
+		return nil, fmt.Errorf("%s: this value is sealed and this instance has no key to open it with",
+			secrets.ErrNoKey)
+	}
+	plain, err := r.s.sealer.Open(value)
+	if err != nil {
+		return nil, err
+	}
+	return plain, nil
+}
+
+// Whether a stored value is a sealed one, without needing the key.
+//
+// The same test the sealer uses, so that "there is a sealed value here" can be answered on
+// an instance that cannot open it — which is the whole of what that instance can say.
+func sealedValue(value json.RawMessage) bool {
+	var wrapper struct {
+		Sealed string `json:"__sealed"`
+		Box    string `json:"box"`
+	}
+	if err := json.Unmarshal(value, &wrapper); err != nil {
+		return false
+	}
+	return wrapper.Sealed != "" && wrapper.Box != ""
+}
+
 func (r *IntegrationRepo) SetSetting(ctx context.Context, integrationID uuid.UUID, scopeType string, scopeID *uuid.UUID, key string, value json.RawMessage) error {
 	_, err := r.s.pool.Exec(ctx, `
 		INSERT INTO integration_settings (integration_id, scope_type, scope_id, key, value)
@@ -411,7 +447,12 @@ func (r *IntegrationRepo) SettingsFor(ctx context.Context, integrationID uuid.UU
 				rows.Close()
 				return nil, err
 			}
-			value = stampRowIDs(specs, integrationID, key, value)
+			opened, err := r.open(value)
+			if err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("read module setting %s: %w", key, err)
+			}
+			value = stampRowIDs(specs, integrationID, key, opened)
 			if inherited, ok := out[key]; ok {
 				if merged, ok := mergeEntries(specs, key, inherited, value); ok {
 					out[key] = merged
@@ -546,6 +587,11 @@ func (r *IntegrationRepo) SettingsAt(ctx context.Context, integrationID uuid.UUI
 			&s.Key, &s.Value, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
+		opened, err := r.open(s.Value)
+		if err != nil {
+			return nil, fmt.Errorf("read module setting %s: %w", s.Key, err)
+		}
+		s.Value = opened
 		out = append(out, s)
 	}
 	return out, rows.Err()
@@ -572,7 +618,7 @@ func (r *IntegrationRepo) SettingAt(ctx context.Context, integrationID uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("read setting %s: %w", key, err)
 	}
-	return value, nil
+	return r.open(value)
 }
 
 // DeleteSettingAt removes one override, restoring the inherited value.
