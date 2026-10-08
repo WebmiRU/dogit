@@ -441,6 +441,7 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 	for index, object := range request.Manifests {
 		request.report(Progress{Phase: StepApply, Step: index + 1, Of: len(request.Manifests),
 			Message: fmt.Sprintf("applying %s %s", object.Kind, object.Name)})
+		began := time.Now()
 		body := k8s.WithPullSecret(substitution.Apply(object.Body), object.Kind, secretName)
 		written := object
 		written.Body = body
@@ -448,9 +449,15 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		if _, err := d.client.Apply(ctx, written); err != nil {
 			return d.fail(ctx, request, record, PhaseApply, err)
 		}
+		took := shortDuration(time.Since(began))
 		d.logf("applied %s", written.Ref())
+		// How long it took, because the line before it says this step started and this one says
+		// it ended, and the two carry the same position and nearly the same words. Without the
+		// figure the pair reads as the same line twice — which it very nearly is, on a manifest
+		// the API server applies in a millisecond. With it, the pair says what the step did,
+		// and a slow apply is visibly slow instead of merely twice-written.
 		request.report(Progress{Phase: StepApply, Step: index + 1, Of: len(request.Manifests),
-			Message: fmt.Sprintf("applied %s %s", written.Kind, written.Name)})
+			Message: fmt.Sprintf("applied %s %s in %s", written.Kind, written.Name, took)})
 	}
 
 	// The rollout itself, when somebody asked to wait for it.
@@ -577,6 +584,22 @@ func (d *Deployer) runJob(ctx context.Context, substitution k8s.Substitution,
 // answer is yes to both.
 func pinned(image string) bool {
 	return strings.Contains(image, "@sha256:")
+}
+
+// shortDuration is a length of time as somebody would say it.
+//
+// A manifest is applied in milliseconds and a rollout takes minutes, and a reader who cannot
+// tell the two apart from a line is being asked to know which is which. Under a second is said
+// as such rather than in digits, because "applied Deployment versions in 0.04s" is a stopwatch
+// on the page, not information.
+func shortDuration(d time.Duration) string {
+	if d < time.Second {
+		return "under a second"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", d.Seconds())
+	}
+	return d.Truncate(time.Second).String()
 }
 
 // wait waits for the workload's pods to be running the image this deployment put there.
