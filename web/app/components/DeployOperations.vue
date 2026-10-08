@@ -310,6 +310,25 @@ function logLines(jobID: number): { phase: string; message: string; step: number
   }))
 }
 
+/**
+ * The phases of this operation that are still open — and none at all, once it is over.
+ *
+ * The module closes a phase when the next one begins, so the last phase of a deployment is
+ * never closed by a line: there is no next one. That is deliberate, and the contract is that the
+ * page decides the operation is over from the operation itself. Taken straight off the socket
+ * the arrow therefore stayed on "Bring the new pods up" for ever, on a rollout whose own log
+ * said "every pod is running the new image (3 of 3)" and then "finished" — the lines that
+ * should have closed it were on the card, and the step they belonged to stayed open anyway.
+ *
+ * The list is what says an operation is over, so the list is what closes it. A page that had
+ * been open the whole time and a page opened afterwards are then in the same state, which is
+ * the only reason to have a list at all.
+ */
+function openPhases(operation: DeployOperation): string[] {
+  if (!operation.running) return []
+  return watched(operation.job_id)?.phases ?? []
+}
+
 /** When a line was said, to the second — enough to place it, short enough not to shout. */
 function clockOf(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, { hour12: false })
@@ -399,6 +418,15 @@ watchEvents({
   // The core's own line about a deployment, relayed whole. Many a minute while a rollout runs, so
   // this is the only path that has to be cheap.
   onEvent: (event) => {
+    if (event.kind === 'deploy.history') {
+      // A deployment ended, and this is the only line that says so. Without it the list is
+      // read once and never again, so a card stays "Running" with its last phase open for as
+      // long as the page is left open — a rollout that finished in a third of a second went on
+      // saying "Bring the new pods up" for five minutes, with the line that closed it sitting
+      // in the log underneath.
+      void load()
+      return
+    }
     if (event.kind !== 'deploy.operation') return
     const payload = event.payload ?? {}
     if (!isMine(payload)) return
@@ -505,7 +533,7 @@ watchEvents({
           :seen="watched(operation.job_id)?.seen ?? []"
           :live="true"
           :plan="planOf(operation.job_id)"
-          :active-phases="watched(operation.job_id)?.phases ?? []"
+          :active-phases="openPhases(operation)"
         />
 
         <!-- The log of an operation under way, streaming, under its steps. Not asked for: these
