@@ -294,7 +294,49 @@ func (s *Server) handleGetModule(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"module":   s.integrationView(r, integration, nil, nil),
 		"settings": settings,
+		"database": s.databaseView(r.Context(), integration),
 	})
+}
+
+// databaseView says where this module's data lives, in one object.
+//
+// The first thing on the module's settings page, because that is where somebody goes to find
+// out what a module is connected to — and a module on a database whose name is nowhere on that
+// page is a module whose data lives somewhere nobody wrote down. Buildkit is the case that made
+// this asked for: it declares no database, has none, and says nothing about either, which reads
+// from the page exactly like a module that has one and is not telling.
+//
+// Three answers, kept apart rather than merged, because each needs a different person to act:
+//
+//   - a resource being held: what it is, and whether this instance made it or an administrator
+//     described one on a host it does not run;
+//   - a database name with no resource behind it — provisioned before resources existed, or by a
+//     version that did not record one. Left alone rather than tidied: it belongs to the module,
+//     and only the module's own registration decides what it keeps;
+//   - nothing, which for a module that asked for a database is a gap, not an answer.
+//
+// The address is not in here. It is a password, and this is a page that gets screenshotted.
+func (s *Server) databaseView(ctx context.Context, integration *models.Integration) map[string]any {
+	view := map[string]any{
+		"wants_one": integration.Capabilities.Database,
+		"name":      integration.DatabaseName,
+		"role":      integration.DatabaseRole,
+	}
+
+	held, err := s.store.Resources().HeldBy(ctx, integration.ID)
+	if err != nil {
+		// A module that holds nothing is the ordinary case, not a failure to report: most
+		// modules never ask for a database, and a log line per heartbeat saying so would be
+		// a way of training the reader to skip the log.
+		if !errors.Is(err, store.ErrNotFound) {
+			s.log.Warn("the resource this module holds could not be read",
+				"module", integration.Name, "kind", integration.Kind, "error", err)
+		}
+		return view
+	}
+	held.Address = ""
+	view["resource"] = held
+	return view
 }
 
 // handleSetModuleState enables or forbids a module.
