@@ -43,9 +43,14 @@ try {
   });
 
   if (session) {
+    // The domain the site is actually on, taken from where it is being looked at. Hardcoded to
+    // localhost, a check against a deployed stand set a cookie for a host that is not there, and
+    // every page behind the sign-in reported itself as a sign-in form — which reads as the site
+    // being broken rather than as the check having looked in the wrong place.
+    const host = new URL(base).hostname;
     await browser.setCookie({
       name: 'dogit_session', value: session,
-      domain: 'localhost', path: '/',
+      domain: host, path: '/',
     });
   }
 

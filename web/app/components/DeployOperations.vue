@@ -16,6 +16,9 @@
 <script setup lang="ts">
 import type { DeployProgress } from '~/types/pipeline'
 
+import DeployLog from './DeployLog.vue'
+import DeploySteps from './DeploySteps.vue'
+
 /** One operation, as the core described it when it was asked. */
 interface DeployOperation {
   /** The operation's identity. Everything hangs off it, including which card. */
@@ -40,6 +43,8 @@ interface OperationsAnswer {
 
 /** What the page knows about one operation while it watches. */
 interface Watching {
+  /** What the core called this operation: a deployment or a rollback. Its steps differ. */
+  kind?: string
   /** The most recent thing said about it. */
   progress: DeployProgress | null
   /** Everything said so far, so a step that finished earlier keeps its tick. */
@@ -124,7 +129,10 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadPlan()
+})
 watch(() => [props.projectId, query.value], load)
 
 /**
@@ -190,9 +198,18 @@ function note(payload: Record<string, unknown>) {
     else phases.add(said.phase)
   }
 
+  const saidAbout = payload.deployment as { kind?: string } | undefined
   watching.value = {
     ...watching.value,
     [jobID]: {
+      // What this operation is, the first time the core says. Kept because the steps drawn on
+      // this card are the ones for that kind of operation, and a rollback drawn with a
+      // deployment's steps is a card describing work that is not happening.
+      ...(typeof saidAbout?.kind === 'string' && saidAbout.kind
+        ? { kind: saidAbout.kind }
+        : already?.kind
+          ? { kind: already.kind }
+          : {}),
       progress: said,
       seen: [...(already?.seen ?? []), said],
       phases: [...phases],
@@ -275,6 +292,22 @@ function logLabel(jobID: number): string {
   return found.length ? `What it said (${found.length})` : 'Nothing was recorded'
 }
 
+/**
+ * What an operation under way has said, in the shape the log draws.
+ *
+ * Taken from this operation's own lines and no other. A shared list of lines is what made a
+ * rollout and a rollback arriving together draw one log between them, and it is the same mistake
+ * the single card made with its steps.
+ */
+function logLines(jobID: number): { phase: string; message: string; step: number; of: number }[] {
+  return (watching.value[jobID]?.seen ?? []).map((one) => ({
+    phase: one.phase,
+    message: one.message,
+    step: one.step,
+    of: one.of,
+  }))
+}
+
 /** When a line was said, to the second — enough to place it, short enough not to shout. */
 function clockOf(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, { hour12: false })
@@ -320,15 +353,51 @@ watchEvents({
   onReconnect: load,
 })
 
-/** The steps this page draws, when the core has said what they are. */
-const plan = ref<{ key: string; label: string }[] | null>(null)
+/**
+ * The steps a deployment goes through, asked of the core rather than collected from what arrives.
+ *
+ * This is the difference between a card that says what is going to happen and a card that reveals
+ * it a line at a time. The steps are not news: they come out of the deploy step's own
+ * configuration, they are the same for every deployment of this kind, and they are known before
+ * the first pod is touched. Waiting for lines to announce them draws a card that starts empty and
+ * fills in, which reads as work starting late rather than as a page that had not been told — and
+ * a reader watching it cannot see how far along it is, because there is nothing yet to be along of.
+ *
+ * Both kinds, because a rollback has its own steps, and drawing a deployment's under a rollback is
+ * a card describing something that is not happening.
+ */
+const plans = ref<Record<string, { key: string; label: string }[]>>({})
+
+/** The steps for one operation, by what that operation is. A deployment unless it says otherwise. */
+function planOf(jobID: number): { key: string; label: string }[] {
+  const kind = watching.value[jobID]?.kind === 'revert' ? 'revert' : 'deploy'
+  return plans.value[kind] ?? []
+}
+
+async function loadPlan() {
+  for (const kind of ['deploy', 'revert']) {
+    try {
+      const answer = await api.get<{ steps?: { key: string; label: string }[] }>(
+        `/projects/${props.projectId}/deploy-plan${kind === 'revert' ? '?kind=revert' : ''}`)
+      if (Array.isArray(answer.steps) && answer.steps.length) {
+        plans.value = { ...plans.value, [kind]: answer.steps }
+      }
+    } catch {
+      // A plan that cannot be had is a card with no steps on it, which is what this page drew
+      // before it asked. Not an error on the card: the deployment is going ahead either way, and
+      // a red line over somebody's rollout says the rollout broke.
+    }
+  }
+}
+
+/** The core announcing a plan on the socket, which it does as well as over HTTP. */
 watchEvents({
   onEvent: (event) => {
     if (event.kind !== 'deploy.plan') return
     const steps = event.payload?.steps
-    if (Array.isArray(steps) && steps.length) {
-      plan.value = steps as { key: string; label: string }[]
-    }
+    if (!Array.isArray(steps) || !steps.length) return
+    const kind = event.payload?.kind === 'revert' ? 'revert' : 'deploy'
+    plans.value = { ...plans.value, [kind]: steps as { key: string; label: string }[] }
   },
 })
 </script>
@@ -368,15 +437,27 @@ watchEvents({
           <span v-if="took(operation)" class="muted small mono">took {{ took(operation) }}</span>
         </div>
 
-        <!-- The steps come from the module's own lines about *this* operation, which is the only
-             thing on the page that can tell them apart. -->
+        <!-- The steps, from the core's plan rather than from what has arrived, and marked off by
+             the lines about *this* operation — which is the only thing on the page that can tell
+             two of them apart. Drawn for a card that is running even before the first line: an
+             operation that has begun and said nothing yet is still an operation with steps, and a
+             card that shows none of them until the first pod moves is a card that looks idle. -->
         <DeploySteps
-          v-if="watched(operation.job_id)"
-          :progress="watched(operation.job_id)!.progress"
-          :seen="watched(operation.job_id)!.seen"
-          :live="operation.running"
-          :plan="plan ?? undefined"
-          :active-phases="watched(operation.job_id)!.phases"
+          v-if="operation.running"
+          :progress="watched(operation.job_id)?.progress ?? null"
+          :seen="watched(operation.job_id)?.seen ?? []"
+          :live="true"
+          :plan="planOf(operation.job_id)"
+          :active-phases="watched(operation.job_id)?.phases ?? []"
+        />
+
+        <!-- The log of an operation under way, streaming, under its steps. Not asked for: these
+             lines are arriving, and a request for what has already been said would be a request
+             for a slower copy of the same thing. -->
+        <DeployLog
+          v-if="operation.running"
+          :lines="logLines(operation.job_id)"
+          :plan="planOf(operation.job_id)"
         />
 
         <!-- The log of an operation that is over, and only of an operation that is over. -->
