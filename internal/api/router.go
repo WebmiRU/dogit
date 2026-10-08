@@ -233,6 +233,10 @@ func (s *Server) Register(r chi.Router) {
 		// a page that says what exists.
 		authenticated.Route("/resources", func(resources chi.Router) {
 			resources.Get("/", s.handleListResources)
+			// What each kind is made of, for the form that describes one. Asked for rather
+			// than written down there: the fields, the check and the columns are one list, and
+			// a form holding its own copy asks for a field the core then refuses.
+			resources.Get("/kinds", s.handleResourceKinds)
 			resources.Post("/", s.handleCreateResource)
 			resources.Get("/{resourceID}", s.handleGetResource)
 			resources.Delete("/{resourceID}", s.handleForgetResource)

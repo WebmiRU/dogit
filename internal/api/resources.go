@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/resource"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -26,12 +27,9 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Without the addresses. This list is a page of twenty things and their holders; the
-	// address of each is a password, and a page that answers "what do you have" with every
-	// password on the instance thrown in is a page that will be pasted into a ticket.
-	for i := range all {
-		all[i].Address = ""
-	}
+	// The store already left the secrets shut. Said here as well because this is the response
+	// that gets pasted into a ticket: a page that answers "what do you have" with every
+	// password on the instance thrown in is a page that cannot be shared.
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"resources": all})
 }
 
@@ -61,7 +59,18 @@ type createResourceRequest struct {
 	Version  string `json:"version"`
 	Name     string `json:"name"`
 	Origin   string `json:"origin"`
-	Address  string `json:"address"`
+
+	// Parts is the resource as the form asked for it: host, port, database, user, password for
+	// a database; endpoint, region, bucket, keys for an object store. One map rather than a
+	// field per part, because the parts belong to the kind and not to this request — and a
+	// struct here would need editing for every kind added later, along with the form, the
+	// check and the columns, which is four places to forget one.
+	//
+	// Secrets arrive here too and are sealed on the way in. The core never assembles them into
+	// a connection string: what a driver accepts is the driver's business, and a resource of a
+	// kind this instance has no template for can still be written down this way.
+	Parts map[string]string `json:"parts,omitempty"`
+
 	// ForModuleKind names the kind of module this is for, so that the next one of that kind
 	// to register is given this rather than a database created inside this cluster.
 	//
@@ -69,6 +78,53 @@ type createResourceRequest struct {
 	// whatever module arrives next: somebody described it for a module they had in mind, and
 	// guessing which one is how the wrong module ends up on somebody's production database.
 	ForModuleKind string `json:"for_module_kind,omitempty"`
+}
+
+// handleResourceKinds answers what kinds of resource there are and what each is made of.
+//
+// This is the list the form describing a resource is built from, and the reason it exists rather
+// than a list written in the form: a database is host, port, database, user, password, and that
+// list is written down in four places — here, in the check that refuses an incomplete one, in the
+// columns it is stored in, and in what a module is handed. Four copies drift, and the drift is
+// only visible to somebody filling the form in: the core refuses a part the page never showed,
+// or accepts one and stores it nowhere.
+//
+// The `required` and `default` flags are part of the answer rather than the form's own business,
+// because they are what makes the form agree with the check: a part the core will not do without
+// is a part the form must mark, and one it fills in by default must be offered filled in.
+//
+// No secret values, and none asked for: this says which fields hold one, not what any of them is.
+func (s *Server) handleResourceKinds(w http.ResponseWriter, r *http.Request) {
+	descriptors := make([]map[string]any, 0, len(resource.Kinds()))
+	for _, kind := range resource.Kinds() {
+		fields := make([]map[string]any, 0, len(kind.Fields))
+		for _, field := range kind.Fields {
+			fields = append(fields, map[string]any{
+				"key":      field.Key,
+				"label":    field.Label,
+				"hint":     field.Hint,
+				"secret":   field.Secret,
+				"required": field.Required,
+				"port":     field.Port,
+				"default":  field.Default,
+			})
+		}
+		// An empty list rather than a nil one, because an object store has no software to
+		// choose from and JSON says that as `null` — which a form reading `software[0]` takes
+		// as an instruction to read the first letter of nothing.
+		software := kind.Software
+		if software == nil {
+			software = []string{}
+		}
+		descriptors = append(descriptors, map[string]any{
+			"key":      kind.Key,
+			"label":    kind.Label,
+			"note":     kind.Note,
+			"software": software,
+			"fields":   fields,
+		})
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"kinds": descriptors})
 }
 
 // handleCreateResource writes down a resource an administrator has described.
@@ -93,29 +149,39 @@ func (s *Server) handleCreateResource(w http.ResponseWriter, r *http.Request) {
 				"against the kind and a resource without one cannot answer one"))
 		return
 	}
-	switch kind {
-	case ResourceKindDatabase, ResourceKindObjectStore:
-	default:
-		s.writeError(w, r, errBadRequestf("this instance knows about %s and %s resources, not %s",
+
+	descriptor, known := resource.ByKey(kind)
+	if !known {
+		s.writeError(w, r, errBadRequestf(
+			"this instance knows about %s and %s resources, not %s",
 			ResourceKindDatabase, ResourceKindObjectStore, kind))
 		return
 	}
 
-	address := strings.TrimSpace(req.Address)
-	if address == "" {
-		s.writeError(w, r, errBadRequest(
-			"say how this resource is reached; an address with no password in it is still an "+
-				"answer to nothing, and one with a password is the only thing this table is for"))
+	// Trimmed once, here, so that every later step — the check, the duplicate lookup, the
+	// columns — sees the same value. A part that differs from itself by a space is a part
+	// that duplicates do not match and a payload a module reads as set.
+	parts := resource.Parts{}
+	for key, value := range req.Parts {
+		parts[key] = strings.TrimSpace(value)
+	}
+	parts = descriptor.Filled(parts)
+
+	if problems := descriptor.Check(parts); len(problems) > 0 {
+		s.writeError(w, r, errBadRequestf(
+			"this %s is not complete enough to be written down: %s",
+			descriptor.Label, strings.Join(problems, "; ")))
 		return
 	}
 
 	// Said before it is written rather than after: this is the one check that cannot be
-	// undone by deleting the row, because the row holds the only copy of the address and
+	// undone by deleting the row, because the row holds the only copy of the secret and
 	// deleting it deletes that.
-	if !s.sealer.Configured() {
+	_, secret := descriptor.Split(parts)
+	if len(secret) > 0 && !s.sealer.Configured() {
 		s.writeError(w, r, errBadRequestf(
-			"this instance has no DOGIT_SECRET_KEY, so it cannot store an address without "+
-				"writing the password in the clear; set it first"))
+			"this instance has no DOGIT_SECRET_KEY, so it cannot store a password without "+
+				"writing it in the clear; set it first"))
 		return
 	}
 
@@ -132,14 +198,14 @@ func (s *Server) handleCreateResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if taken, err := s.store.Resources().Taken(r.Context(), address); err != nil {
+	if taken, err := s.store.Resources().Taken(r.Context(), descriptor, parts); err != nil {
 		s.writeError(w, r, err)
 		return
 	} else if taken {
 		s.writeError(w, r, errBadRequest(
-			"this instance already has a resource with that address; it may be one you wrote "+
-				"down before under another name, and two records for one resource is how a "+
-				"database ends up listed twice and deleted once"))
+			"this instance already has a resource at that address, for that user and database; "+
+				"it may be one you wrote down before under another name, and two records for one "+
+				"resource is how a database ends up listed twice and deleted once"))
 		return
 	}
 
@@ -168,7 +234,7 @@ func (s *Server) handleCreateResource(w http.ResponseWriter, r *http.Request) {
 		Version:             strings.TrimSpace(req.Version),
 		Name:                strings.TrimSpace(req.Name),
 		Origin:              origin,
-		Address:             address,
+		Parts:               parts,
 		LastIntegrationKind: wanted,
 	})
 	if err != nil {

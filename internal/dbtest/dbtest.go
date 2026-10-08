@@ -16,6 +16,7 @@ import (
 
 	"github.com/ewolf/dogit/internal/auth"
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/secrets"
 	"github.com/ewolf/dogit/internal/store"
 )
 
@@ -35,6 +36,12 @@ func URL(t *testing.T) string {
 
 // Open connects to the test database, migrating it first so a freshly created
 // database is usable.
+//
+// With a sealer, from DOGIT_SECRET_KEY, defaulting to a throwaway key. Without one a test that
+// writes anything sealed is refused — which is the correct behaviour and makes such a test
+// useless: it fails about the missing key rather than about the thing it was written to check.
+// The default is not used when the variable is set, so a test run against a real instance's key
+// seals with the real key and is refused rather than writing something the real key cannot open.
 func Open(t *testing.T) *store.Store {
 	t.Helper()
 
@@ -46,7 +53,21 @@ func Open(t *testing.T) *store.Store {
 		t.Fatalf("migrate the test database: %v", err)
 	}
 
-	st, err := store.Open(ctx, url, store.DefaultOptions())
+	key := os.Getenv("DOGIT_SECRET_KEY")
+	if key == "" {
+		// 32 bytes, base64. Written out rather than generated, so that a test which needs the value
+		// for itself — to check that a sealed column is sealed with it, say — has it to hand.
+		key = "ZG9naXQtdGVzdC1vbmx5LWtleS0zMi1ieXRlcyEhISE="
+	}
+	sealer, err := secrets.New(key)
+	if err != nil {
+		t.Fatalf("a throwaway key was refused: %v", err)
+	}
+
+	options := store.DefaultOptions()
+	options.Sealer = sealer
+
+	st, err := store.Open(ctx, url, options)
 	if err != nil {
 		t.Fatalf("connect to the test database: %v", err)
 	}

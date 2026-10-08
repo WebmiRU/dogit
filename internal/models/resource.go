@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ewolf/dogit/internal/resource"
 )
 
 // ResourceOrigin says how a resource came to be here.
@@ -33,10 +35,18 @@ type Resource struct {
 	Name     string         `json:"name"`
 	Origin   ResourceOrigin `json:"origin"`
 
-	// Address is what a module is handed: a connection string, an endpoint, whatever that
-	// kind of resource is reached by. Never sent to a page that only lists resources — the
-	// listing says what a thing is, not how to connect to it.
-	Address string `json:"address,omitempty"`
+	// Parts is where this resource is: a host, a database, a user, a bucket. Every part this
+	// kind has, filled with whatever storage holds, and never including a secret.
+	//
+	// Readable on purpose. It is what a page shows to somebody deciding what to do next —
+	// which host, which database — and getting it required unsealing a password, because the
+	// password used to live in the same sealed string as the hostname. A page that unseals
+	// anything eventually prints one.
+	Parts resource.Parts `json:"parts,omitempty"`
+
+	// Secret is the sealed half: a database's password, an object store's secret key. Never
+	// rendered into a page, and handed to a module only at the moment it is given one.
+	Secret resource.Parts `json:"-"`
 
 	// IntegrationID is the module holding it, and nil is nobody: given and given up, or
 	// never given.
@@ -84,4 +94,41 @@ func (r Resource) Coordinate() string {
 		out += ":" + r.Version
 	}
 	return out
+}
+
+// Descriptor is what kind of thing this is, or an empty one if this instance has never heard
+// of it. A resource of a kind nothing describes is still a resource, and the page shows it
+// rather than refusing to open.
+func (r Resource) Descriptor() resource.Kind {
+	kind, ok := resource.ByKey(r.Kind)
+	if !ok {
+		return resource.Kind{}
+	}
+	return kind
+}
+
+// Where is a one-line description of where this resource is, for a page that has one line to
+// say it in. Empty when there is nothing to say.
+func (r Resource) Where() string {
+	parts := r.Descriptor()
+	if parts.Key == "" {
+		return ""
+	}
+	plain := parts.Plain(r.Parts)
+	switch r.Kind {
+	case "db":
+		out := plain["host"]
+		if plain["database_name"] != "" {
+			out += "/" + plain["database_name"]
+		}
+		return out
+	case "s3":
+		out := plain["endpoint"]
+		if plain["bucket"] != "" {
+			out += "/" + plain["bucket"]
+		}
+		return out
+	default:
+		return plain["endpoint"]
+	}
 }

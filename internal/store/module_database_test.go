@@ -45,51 +45,63 @@ func TestQuoteIdentifierAndLiteral(t *testing.T) {
 	}
 }
 
-func TestBuildModuleDSNPointsAtTheModuleDatabase(t *testing.T) {
-	dsn := buildModuleDSN(
-		"postgres://dogit:app-password-must-not-leak@postgres:5432/dogit?sslmode=disable",
-		"dogit_registry_docker_abc123",
-		"dogit_registry_docker_abc123",
-		"module-secret",
-	)
-
-	if !strings.Contains(dsn, "dogit_registry_docker_abc123") {
-		t.Errorf("the module database is missing from %q", dsn)
+// A module is told where the cluster is, and it is told it from the configuration rather than
+// from the connection the core happens to have open. The two are usually the same and are not
+// always: a core configured with a unix socket hands out no host at all, and a module reading
+// the core's own socket path would be reading a path inside the core's container.
+func TestDsnEndpointFromURL(t *testing.T) {
+	cases := []struct {
+		dsn  string
+		host string
+		port uint16
+	}{
+		{"postgres://dogit:secret@postgres:5432/dogit?sslmode=disable", "postgres", 5432},
+		{"postgresql://dogit:secret@db.internal/dogit", "db.internal", 5432},
+		{"mysql://u:p@mysql:3306/app", "mysql", 3306},
+		{"postgres://u:p@[::1]:5432/app", "::1", 5432},
 	}
-	// The application database and its credentials must not leak into the string
-	// handed to a module: it would then be able to reach the core's tables.
-	if strings.Contains(dsn, "/dogit?") {
-		t.Errorf("the application database survived in %q", dsn)
-	}
-	if strings.Contains(dsn, "app-password-must-not-leak") {
-		t.Errorf("the application password survived in %q", dsn)
-	}
-	if strings.Contains(dsn, "dogit@") || strings.Contains(dsn, ":dogit:") {
-		t.Errorf("the application user survived in %q", dsn)
-	}
-	if !strings.Contains(dsn, "module-secret") {
-		t.Errorf("the module password is missing from %q", dsn)
+	for _, c := range cases {
+		host, port, err := dsnEndpoint(c.dsn)
+		if err != nil {
+			t.Errorf("dsnEndpoint(%q): %v", c.dsn, err)
+			continue
+		}
+		if host != c.host || port != c.port {
+			t.Errorf("dsnEndpoint(%q) = %s:%d, want %s:%d", c.dsn, host, port, c.host, c.port)
+		}
 	}
 }
 
-// The keyword/value form has to be rewritten too: a deployment configured that way
-// would otherwise hand out the application's connection string unchanged.
-func TestBuildModuleDSNHandlesKeywordForm(t *testing.T) {
-	dsn := buildModuleDSN(
-		"host=postgres port=5432 dbname=dogit user=dogit password=secret sslmode=disable",
-		"dogit_cache_demo_abc123",
-		"dogit_cache_demo_abc123",
-		"module-secret",
-	)
+// The keyword/value form is what a deployment configured without a URL ends up with, and the
+// port is often left out of it entirely.
+func TestDsnEndpointFromKeywords(t *testing.T) {
+	host, port, err := dsnEndpoint(
+		"host=postgres port=5432 dbname=dogit user=dogit password=secret sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "postgres" || port != 5432 {
+		t.Fatalf("dsnEndpoint = %s:%d, want postgres:5432", host, port)
+	}
 
-	if !strings.Contains(dsn, "dbname=dogit_cache_demo_abc123") {
-		t.Errorf("the module database is missing from %q", dsn)
+	host, port, err = dsnEndpoint("host=db.internal user=dogit dbname=dogit")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(dsn, "dbname=dogit ") || strings.Contains(dsn, "user=dogit ") {
-		t.Errorf("the application credentials survived in %q", dsn)
+	if host != "db.internal" || port != 5432 {
+		t.Fatalf("a DSN with no port should fall back to the one the driver assumes, got %s:%d",
+			host, port)
 	}
-	if !strings.Contains(dsn, "password=module-secret") {
-		t.Errorf("the module password is missing from %q", dsn)
+}
+
+// A port that is not a number is refused rather than passed on as zero: a module handed port 0
+// gets a connection refused and blames the cluster, and the cluster is fine.
+func TestDsnEndpointRefusesAPortThatIsNotOne(t *testing.T) {
+	if _, _, err := dsnEndpoint("postgres://u:p@db:not-a-port/app"); err == nil {
+		t.Fatal("a port that is not a number was accepted")
+	}
+	if _, _, err := dsnEndpoint("this is not a DSN at all"); err == nil {
+		t.Fatal("a DSN that names no host was accepted")
 	}
 }
 

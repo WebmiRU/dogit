@@ -5,10 +5,13 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/ewolf/dogit/internal/resource"
 )
 
 // ModuleDatabase is the database provisioned for one module.
@@ -22,9 +25,18 @@ type ModuleDatabase struct {
 	Name string `json:"name"`
 	// Role is the database role that owns it.
 	Role string `json:"role"`
-	// URL is returned exactly once, when the database is provisioned. Only the
-	// plaintext password lives here; the core never stores it.
-	URL string `json:"url,omitempty"`
+
+	// Parts is how the database is reached, as the facts and the secret separately. Returned
+	// exactly once, when the database is provisioned.
+	//
+	// Not a connection string, because what a driver accepts is the driver's business and not
+	// this package's: a module that wants `postgres://…` and one that wants a keyword/value
+	// DSN start from the same six facts and disagree about everything else. So the parts are
+	// handed over and the module assembles them into whatever it opens a connection with.
+	//
+	// The password is in here in the clear and nowhere else — the core never keeps it, and
+	// the record of this database keeps only its host, its name and its user.
+	Parts resource.Parts `json:"parts"`
 }
 
 // ProvisionModuleDatabase creates a database and an owning role for a module.
@@ -73,11 +85,70 @@ func (r *IntegrationRepo) ProvisionModuleDatabase(ctx context.Context, adminDSN 
 		return nil, fmt.Errorf("grant database %s: %w", database, err)
 	}
 
+	// The host and port are worked out from the core's own DSN rather than from the connection
+	// this function has just opened, because that is what the module will see: it does not
+	// share this process's network, and a module handed "localhost" where the cluster is
+	// elsewhere fails at first connect with a message about a refused socket.
+	host, port, err := dsnEndpoint(adminDSN)
+	if err != nil {
+		return nil, fmt.Errorf("where this cluster is reached: %w", err)
+	}
+
 	return &ModuleDatabase{
 		Name: database,
 		Role: role,
-		URL:  buildModuleDSN(adminDSN, database, role, password),
+		Parts: resource.Parts{
+			"host":          host,
+			"port":          strconv.Itoa(int(port)),
+			"database_name": database,
+			"username":      role,
+			"password":      password,
+		},
 	}, nil
+}
+
+// dsnEndpoint is the host and port a DSN points at, in a URL or in keyword/value form.
+//
+// Parsed rather than taken from the live connection, and on purpose: pgx will happily fill in a
+// default for either half, and a filled-in "localhost" is indistinguishable from a written-in
+// one afterwards. What the module is told has to be what was configured.
+func dsnEndpoint(dsn string) (host string, port uint16, err error) {
+	if parsed, perr := url.Parse(dsn); perr == nil && parsed.Scheme != "" && parsed.Host != "" {
+		name := parsed.Hostname()
+		if name == "" {
+			return "", 0, fmt.Errorf("the database URL names no host")
+		}
+		number := parsed.Port()
+		if number == "" {
+			return name, defaultPort(parsed.Scheme), nil
+		}
+		parsedPort, perr := strconv.ParseUint(number, 10, 16)
+		if perr != nil {
+			return "", 0, fmt.Errorf("the database URL has a port that is not a number: %q", number)
+		}
+		return name, uint16(parsedPort), nil
+	}
+
+	config, cerr := pgx.ParseConfig(dsn)
+	if cerr != nil {
+		return "", 0, fmt.Errorf("the database is not reachable and its address cannot be read: %w", cerr)
+	}
+	if config.Host == "" {
+		return "", 0, fmt.Errorf("the database address names no host")
+	}
+	return config.Host, config.Port, nil
+}
+
+// defaultPort is what a scheme implies when the address leaves the port out.
+func defaultPort(scheme string) uint16 {
+	switch strings.ToLower(scheme) {
+	case "postgres", "postgresql":
+		return 5432
+	case "mysql":
+		return 3306
+	default:
+		return 5432
+	}
 }
 
 // DropModuleDatabase removes a module's database and role.
@@ -141,33 +212,6 @@ func (r *IntegrationRepo) ModuleDatabases(ctx context.Context, adminDSN string) 
 		out = append(out, database)
 	}
 	return out, rows.Err()
-}
-
-// buildModuleDSN rewrites a connection string for the module's own database and
-// role.
-//
-// The string is rebuilt rather than patched through pgx.Config: a config parsed
-// from a URL keeps the original text and ConnString returns it unchanged, which
-// would hand the module the application's database and credentials.
-func buildModuleDSN(adminDSN, database, role, password string) string {
-	if parsed, err := url.Parse(adminDSN); err == nil && parsed.Scheme != "" && parsed.Host != "" {
-		parsed.User = url.UserPassword(role, password)
-		parsed.Path = "/" + database
-		return parsed.String()
-	}
-
-	// Keyword/value form: rebuild it from the parsed parts, keeping only the
-	// settings that affect reachability.
-	config, err := pgx.ParseConfig(adminDSN)
-	if err != nil {
-		return ""
-	}
-	sslMode := "disable"
-	if config.TLSConfig != nil {
-		sslMode = "require"
-	}
-	return fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
-		config.Host, config.Port, database, role, password, sslMode)
 }
 
 // sanitiseIdentifier reduces a module kind to characters valid in a SQL

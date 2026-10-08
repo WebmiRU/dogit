@@ -121,6 +121,31 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 		// and keeps what it kept, and a module that has lost its password is a module
 		// whose administrator has to hand it a new one: that is a deliberate act rather
 		// than something a restart does to somebody.
+		// A module that has a name in this column is not necessarily a module that has a
+		// database. The name is left behind when its resource is deleted, and until now
+		// nothing read that back — so a module whose database was taken away went on being
+		// told it had one, and was never given the one somebody had described for it. It
+		// kept trying to reach a database that no longer had its data, which is a failure
+		// that looks like a network problem and is not one.
+		//
+		// The resource is the authority on whether there is a database: if it is gone, the
+		// name is a word with nothing behind it, and it is cleared before the switch so that
+		// the module goes on to be given what there is now. Clearing it inside a case of this
+		// switch and falling through to the next would land in "already has one", which is
+		// exactly where a module with a stale name used to end up: told nothing, and told it
+		// had the database it no longer had.
+		if integration.DatabaseName != "" &&
+			!s.moduleHoldsResource(r.Context(), integration.ID) {
+			s.log.Warn("the module had the name of a database that is no longer recorded; "+
+				"the name is cleared and the module is given whatever there is now",
+				"kind", integration.Kind, "database", integration.DatabaseName)
+			if err := s.store.Integrations().ClearModuleDatabase(r.Context(), integration.ID); err != nil {
+				s.log.Warn("the stale database name could not be cleared",
+					"kind", integration.Kind, "error", err)
+			}
+			integration.DatabaseName = ""
+		}
+
 		switch {
 		case integration.DatabaseName != "":
 			s.log.Info("the module already has a database; keeping it",
@@ -151,11 +176,17 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 				s.log.Warn("the database was given but its name could not be recorded",
 					"kind", integration.Kind, "error", err)
 			}
-			database = map[string]any{
-				"url":  adopted.Address,
-				"name": adopted.Name,
-				"role": "",
+			// Read again rather than reusing what adoptedResource returned: the secret is not
+			// in what that function reads, because the list it reads has every secret shut and
+			// opening it for a lookup that only wants a name would mean every registration
+			// unseals a password on the chance of needing one.
+			granted, err := s.store.Resources().ByID(r.Context(), adopted.ID)
+			if err != nil {
+				s.log.Warn("the database was given but could not be read back",
+					"kind", integration.Kind, "error", err)
+				break
 			}
+			database = databaseHandover(*granted)
 
 		default:
 			provisioned, err := s.store.Integrations().ProvisionModuleDatabase(
@@ -175,7 +206,7 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 
 			// And the same database as a resource, so that the thing this instance gave away
 			// is on a list of things this instance gave away, with its kind and its version on
-			// it. The address is written sealed, from the only copy there will ever be: this
+			// it. The password is written sealed, from the only copy there will ever be: this
 			// is the moment the module is told, and afterwards nobody has it — which is why
 			// adopting a database from before this table existed cannot fill that column in.
 			if _, err := s.store.Resources().Put(r.Context(), models.Resource{
@@ -183,18 +214,25 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 				Software:      DatabaseSoftware,
 				Name:          provisioned.Name,
 				Origin:        models.OriginManaged,
-				Address:       provisioned.URL,
+				Parts:         provisioned.Parts,
 				IntegrationID: &integration.ID,
 			}); err != nil {
 				s.log.Warn("the database was created but not recorded as a resource",
 					"kind", integration.Kind, "error", err)
 			}
 
-			database = map[string]any{
-				"url":  provisioned.URL,
-				"name": provisioned.Name,
-				"role": provisioned.Role,
-			}
+			handover := databaseHandover(models.Resource{
+				Kind:  ResourceKindDatabase,
+				Name:  provisioned.Name,
+				Parts: provisioned.Parts,
+			})
+			// The role is the user a database this instance made has, and it is already in
+			// the payload under its own name. Kept beside it as well because it is the one
+			// part an administrator is asked for by name when the database has to be dropped
+			// by hand, and a handover that only carried it inside a payload would have it
+			// read out of there.
+			handover["role"] = provisioned.Role
+			database = handover
 			s.log.Info("provisioned a database for the module",
 				"kind", integration.Kind, "database", provisioned.Name)
 		}
@@ -315,7 +353,8 @@ func (s *Server) handleGetModule(w http.ResponseWriter, r *http.Request) {
 //     and only the module's own registration decides what it keeps;
 //   - nothing, which for a module that asked for a database is a gap, not an answer.
 //
-// The address is not in here. It is a password, and this is a page that gets screenshotted.
+// Read without the secret. This is a page that gets screenshotted, and a view of a database
+// is worth nothing that a password would add to it.
 func (s *Server) databaseView(ctx context.Context, integration *models.Integration) map[string]any {
 	view := map[string]any{
 		"wants_one": integration.Capabilities.Database,
@@ -323,7 +362,7 @@ func (s *Server) databaseView(ctx context.Context, integration *models.Integrati
 		"role":      integration.DatabaseRole,
 	}
 
-	held, err := s.store.Resources().HeldBy(ctx, integration.ID)
+	held, err := s.store.Resources().ByIDFor(ctx, integration.ID)
 	if err != nil {
 		// A module that holds nothing is the ordinary case, not a failure to report: most
 		// modules never ask for a database, and a log line per heartbeat saying so would be
@@ -334,7 +373,6 @@ func (s *Server) databaseView(ctx context.Context, integration *models.Integrati
 		}
 		return view
 	}
-	held.Address = ""
 	view["resource"] = held
 	return view
 }
@@ -2170,6 +2208,50 @@ const (
 // looked up, so that what a resource says it is does not change under it when the cluster
 // underneath is upgraded.
 const DatabaseSoftware = "postgresql"
+
+// moduleHoldsResource answers "is there a resource behind this module's database name", and
+// says yes when it cannot tell.
+//
+// The bias is on purpose and it is the opposite of the obvious one. A module that already has a
+// database must not be given a second one, and the two are separated only by this answer — so on
+// a database that cannot be reached, "I do not know" has to mean "leave it alone". Answering no
+// would clear a name that is perfectly good and hand out a new database, orphaning the one with
+// the deployment history in it.
+func (s *Server) moduleHoldsResource(ctx context.Context, id uuid.UUID) bool {
+	held, err := s.store.Resources().IsHeldBy(ctx, id)
+	if err != nil {
+		s.log.Warn("it could not be said whether this module holds a resource, so its "+
+			"database is left alone", "module", id.String(), "error", err)
+		return true
+	}
+	return held
+}
+
+// databaseHandover is what a module is told about its database at registration.
+//
+// The parts, and not a connection string assembled here. What a driver accepts is the driver's
+// business: a module that wants `postgres://…` and one that wants a keyword/value DSN both start
+// from these six facts and disagree about everything else, and a core that picked one of them
+// would be picking on the module's behalf. So the core hands over what the database *is* and the
+// module builds what it opens.
+//
+// The class is in the same object rather than beside it, so that a module handed an object store
+// and one handed a database are told apart by reading one field instead of by remembering which
+// key they were looking at.
+func databaseHandover(one models.Resource) map[string]any {
+	descriptor := one.Descriptor()
+	parts := descriptor.Payload(one.Parts)
+	// Secrets are added after, and not by Payload, because Payload works from one map and
+	// the facts and the secret arrive in two — one from the columns, one from the envelope.
+	for key, value := range one.Secret {
+		parts[key] = value
+	}
+	return map[string]any{
+		"kind":    one.Kind,
+		"name":    one.Name,
+		"payload": parts,
+	}
+}
 
 // adoptedResource is a free database that a module of this kind had before.
 //

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -173,8 +174,13 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// The stack goes with it. A recovered panic reported as "invalid memory
+				// address or nil pointer dereference" and a path is a report about where the
+				// server is, not about what is wrong with it, and finding the line again
+				// means reproducing it.
 				s.log.Error("panic serving request",
-					"method", r.Method, "path", r.URL.Path, "panic", rec)
+					"method", r.Method, "path", r.URL.Path, "panic", rec,
+					"stack", string(debug.Stack()))
 				s.writeError(w, r, http.StatusInternalServerError, "internal_error",
 					"an unexpected error occurred")
 			}

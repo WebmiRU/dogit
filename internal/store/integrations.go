@@ -663,6 +663,11 @@ func (r *IntegrationRepo) SetModuleDatabase(ctx context.Context, id uuid.UUID, d
 }
 
 // ClearModuleDatabase forgets the module's database, used after it is dropped.
+//
+// Also used for a name with nothing behind it: the resource was deleted while the module kept
+// its name, and the name is a word with no referent. Not the same as SetModuleDatabase with two
+// empty strings so that the intent reads at the call site — this is "what was recorded there is
+// no longer true", not "the module's database is the empty string".
 func (r *IntegrationRepo) ClearModuleDatabase(ctx context.Context, id uuid.UUID) error {
 	_, err := r.s.pool.Exec(ctx,
 		`UPDATE integrations SET database_name = '', database_role = '', updated_at = now()
