@@ -87,7 +87,7 @@ func TestProxyRefusesWithoutCredentials(t *testing.T) {
 	defer upstream.Close()
 
 	core := &coreClient{baseURL: "http://core.invalid"}
-	handler := newHandler(core, upstream.URL, "http://registry.test")
+	handler := newHandler(newRegistry(core, "http://registry.test"), upstream.URL)
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/grp1/prj1/tags/list", nil)
 	recorder := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestVersionCheckIsAnsweredWithoutCredentials(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler := newHandler(&coreClient{baseURL: "http://core.invalid"}, upstream.URL, "http://registry.test")
+	handler := newHandler(newRegistry(&coreClient{baseURL: "http://core.invalid"}, "http://registry.test"), upstream.URL)
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/", nil)
 	recorder := httptest.NewRecorder()
@@ -180,7 +180,7 @@ func TestUserTokenIsStrippedBeforeTheRegistry(t *testing.T) {
 	})}
 	core.token = "module-token"
 
-	handler := newHandler(core, upstream.URL, "http://registry.test")
+	handler := newHandler(newRegistry(core, "http://registry.test"), upstream.URL)
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/grp1/prj1/tags/list", nil)
 	request.Header.Set("Authorization", "Bearer user's-secret-token")
@@ -209,7 +209,7 @@ func TestAnUnknownImageNameBelongsToNobody(t *testing.T) {
 	})}
 	core.token = "module-token"
 
-	handler := newHandler(core, upstream.URL, "http://registry.test")
+	handler := newHandler(newRegistry(core, "http://registry.test"), upstream.URL)
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/someone/elses-image/tags/list", nil)
 	request.Header.Set("Authorization", "Bearer a-token")
@@ -247,7 +247,7 @@ func TestTheCoreIsAskedWhichProjectAnImageBelongsTo(t *testing.T) {
 	})}
 	core.token = "module-token"
 
-	handler := newHandler(core, upstream.URL, "http://registry.test")
+	handler := newHandler(newRegistry(core, "http://registry.test"), upstream.URL)
 
 	request := httptest.NewRequest(http.MethodGet, "/v2/grp1/prj1/tags/list", nil)
 	request.Header.Set("Authorization", "Bearer a-token")

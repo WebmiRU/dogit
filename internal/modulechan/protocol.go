@@ -69,6 +69,15 @@ const (
 	// the database where it can be.
 	WorkAvailable = "work.available"
 
+	// ResolveImage asks a registry what a tag currently points at. A question and not a
+	// notification: the answer is a digest, and a deployment cannot be pinned without it.
+	//
+	// The kind rather than a URL, because a module can switch on a closed list of kinds and
+	// has to recognise a path by guessing. The HTTP endpoint this replaces is still served —
+	// the registry protocol is answered to docker clients, and those must not have to hold a
+	// channel open.
+	ResolveImage = "registry.resolve"
+
 	// Answer says what came of a message the module was sent. Carries the ID of that
 	// message.
 	Answer = "answer"
@@ -78,6 +87,35 @@ const (
 	// tie it to when the message that carried the bad token was never read.
 	Refused = "refused"
 )
+
+// AnswerRefusal is how a module says "no" in an answer, as opposed to Refused, which ends the
+// connection and is not an answer to anything.
+//
+// The shape a module already puts in the body of an HTTP error, so a caller that knows how to
+// read a refusal from one kind of module does not have to learn a second. Written down here
+// because both ends use it: a module that invents its own shape is a module whose refusals the
+// core reads as an answer that happened to say nothing.
+type AnswerRefusal struct {
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// RefusalIn says whether an answer is a refusal, and why.
+//
+// On the field rather than on the shape of the whole answer, so a module that adds something to
+// an answer — a digest and a reason, say — is still read as a refusal rather than as an answer
+// the caller will fail to understand three lines later.
+func RefusalIn(answer []byte) (string, bool) {
+	var refused AnswerRefusal
+	if len(answer) == 0 || json.Unmarshal(answer, &refused) != nil {
+		return "", false
+	}
+	if refused.Error.Message == "" {
+		return "", false
+	}
+	return refused.Error.Message, true
+}
 
 // Refusal is the payload of a Refused message.
 //

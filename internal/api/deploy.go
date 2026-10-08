@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/modulechan"
 	"github.com/ewolf/dogit/internal/pipeline"
 	"github.com/ewolf/dogit/internal/store"
 )
@@ -1198,36 +1199,29 @@ func (s *Server) resolveImageDigest(ctx context.Context, job *store.Job, image, 
 		return "", err
 	}
 
-	call, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(registry.Endpoint, "/")+"/resolve", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	call.Header.Set("Content-Type", "application/json")
-
-	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(call)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return "", fmt.Errorf("the registry said %s: %s",
-			response.Status, strings.TrimSpace(string(raw)))
+	// Over the channel, not over HTTP: the module opens the connection, so a registry the
+	// core cannot dial — behind NAT, on a host it has no route to — can still be asked. The
+	// question is the same one the HTTP endpoint answers, and both go through the same code
+	// in the module, so the two cannot answer differently.
+	answer, err := s.moduleChannel().Call(ctx, registry, Decision{
+		Kind:    modulechan.ResolveImage,
+		Payload: body,
+	}, 30*time.Second)
+	if refused := moduleRefusalOf(registry, "what that tag points at", answer, err); refused != nil {
+		return "", refused
 	}
 
-	var answer struct {
+	var found struct {
 		Digest string `json:"digest"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&answer); err != nil {
-		return "", err
+	if err := json.Unmarshal(answer, &found); err != nil {
+		return "", fmt.Errorf("could not read what the %s module said: %w", registry.Kind, err)
 	}
-	if !strings.HasPrefix(answer.Digest, "sha256:") {
+	if !strings.HasPrefix(found.Digest, "sha256:") {
 		return "", fmt.Errorf("the registry did not answer with a digest")
 	}
 
-	return repository + "@" + answer.Digest, nil
+	return repository + "@" + found.Digest, nil
 }
 
 // resolveToken is a short-lived pull credential for this project's images.

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ewolf/dogit/internal/coreerr"
+	"github.com/ewolf/dogit/internal/modulechan"
 )
 
 const (
@@ -98,6 +99,22 @@ func main() {
 
 	go heartbeat(ctx, core, cfg.interval, register)
 
+	// One registry for both halves of this module. The proxy and the channel consult the same
+	// policy — a resolve answered over the socket and the same resolve answered over HTTP must
+	// reach the same conclusion about who may pull what — and two objects would be two policies.
+	registry := newRegistry(core, cfg.endpoint)
+
+	// The channel to the core, and what it changes: the core can ask this module a question
+	// without holding a request open against an endpoint it has to be able to reach.
+	//
+	// Started after registration because the channel authenticates with the token registration
+	// hands back.
+	go serve(ctx, &modulechan.Client{
+		URL:   cfg.coreURL,
+		Token: core.token,
+		Log:   channelLog{},
+	}, registry)
+
 	// The address a client is told to fetch tokens from has to be one the client can
 	// resolve. The address the core uses is the internal one, which a docker client
 	// on somebody's laptop cannot reach; an installation that has both sets both.
@@ -108,7 +125,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.listen,
-		Handler:           newHandler(core, cfg.upstream, public),
+		Handler:           newHandler(registry, cfg.upstream),
 		ReadHeaderTimeout: 10 * time.Second,
 		// A layer is uploaded as one long request, and a manifest is read as a
 		// stream. The defaults are tuned for forms and time them both out.

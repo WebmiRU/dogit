@@ -29,16 +29,10 @@ const (
 //
 // One port and one process, so an installation has a module to deploy rather than
 // two, and so the proxy can never be run without the module's own bookkeeping.
-func newHandler(core *coreClient, upstream, endpoint string) http.Handler {
+func newHandler(registry *registry, upstream string) http.Handler {
 	target, err := url.Parse(upstream)
 	if err != nil {
 		log.Fatalf("module-registry: the registry address %q is not a URL: %v", upstream, err)
-	}
-
-	registry := &registry{
-		core:      core,
-		endpoint:  endpoint,
-		imageName: defaultImageName,
 	}
 
 	// The upstream is written as an address and never as an upstream block: an
@@ -55,10 +49,8 @@ func newHandler(core *coreClient, upstream, endpoint string) http.Handler {
 	}
 	proxy.FlushInterval = -1 // stream responses as they arrive
 
-	// The realm is where a client is told to get a token, and it has to be an
-	// address it can fetch: a name that is not a URL makes every docker client
-	// fail with "unsupported protocol scheme".
-	registry.realm = strings.TrimRight(registry.endpoint, "/") + tokenPath
+	// The realm was set when the registry was made, in newRegistry: the channel and the proxy
+	// share one object, and a realm set here would only be set for half of this module.
 
 	// Where the registry itself lives, for the parts of the module that speak to it
 	// directly: listing what it holds, describing a tag, removing one. The reverse
@@ -89,7 +81,7 @@ func newHandler(core *coreClient, upstream, endpoint string) http.Handler {
 
 	// The module's own endpoints are registered first, so a path like /-/health can
 	// never be read as an image name.
-	mux := handler(core, registry)
+	mux := handler(registry.core, registry)
 	// A request for /v2 with no trailing slash is the client checking the API
 	// version, and must reach the same place either way.
 	mux.Handle("/v2", proxied)

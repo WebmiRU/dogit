@@ -98,6 +98,12 @@ type ModuleChannel struct {
 	// a module that reconnects has a new connection and wants what it missed, and a command
 	// addressed to a socket that no longer exists is a command with nowhere to go.
 	pending map[uuid.UUID][]pendingCommand
+
+	// answers holds the callers waiting for an answer, by the id of the command they asked
+	// about. Its own lock rather than the channel's, because the module's read loop answers
+	// through it and that loop must not be held up behind a send walking the connection list.
+	answersMu sync.Mutex
+	answers   map[string]*answerWait
 }
 
 // moduleChannel returns the core's channel.
@@ -304,6 +310,20 @@ func (s *Server) deliverToModule(ctx context.Context, client *channelClient, mes
 	if message.ID == "" {
 		return
 	}
+
+	// An answer to something this core asked, rather than a module asking for one. Handed to
+	// the caller waiting on that id and to nobody else: an answer with no caller is a module
+	// answering a command whose caller gave up, which happens every time a page is closed
+	// mid-deploy, and is not worth a line.
+	if message.Kind == modulechan.Answer {
+		if ch := s.moduleChannel(); ch.answerTo(message.ID, message.Payload) {
+			return
+		}
+		s.log.Debug("an answer arrived for a command nobody was waiting on",
+			"module", client.name, "command", message.ID)
+		return
+	}
+
 	if err := client.send(ctx, modulechan.Message{
 		ID:      message.ID,
 		Kind:    modulechan.Answer,

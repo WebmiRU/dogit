@@ -17,7 +17,12 @@ import (
 
 const digestPrefix = "sha256:"
 
-// resolve is the core asking what a tag currently points at.
+// resolve is the core asking what a tag currently points at, over HTTP.
+//
+// Kept as an endpoint because a core older than this module's channel still asks this way, and
+// because the registry protocol is answered to docker clients and to anything else that speaks
+// it — those must not have to hold a channel open to ask where a tag points. The work itself is
+// in resolveTag, which the channel calls too, so the two ways of asking cannot drift apart.
 func resolve(registry *registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -31,53 +36,75 @@ func resolve(registry *registry) http.HandlerFunc {
 			return
 		}
 
-		name := imageNameOf(req.Image)
-		if name == "" {
-			http.Error(w, "no image was named", http.StatusBadRequest)
+		answer, refusal := registry.resolveTag(r.Context(), req.Project, req.Image, req.Tag, req.Token)
+		if refusal != nil {
+			http.Error(w, refusal.reason, refusal.status)
 			return
 		}
-
-		// The permission is this module's whole policy, asked of the core, and the
-		// same question the proxy asks before it serves a blob. Resolving is a pull:
-		// somebody asking what a tag is has no more right to the answer than to the
-		// image behind it, and a deploy module asking about a project's image is
-		// acting for that project.
-		// The project is what the caller says it is, not what can be guessed from the
-		// image name: a repository called "home-store/www" has a slash in its path, and
-		// everything after the last one of them is "www", which is not a project
-		// anybody has.
-		project := req.Project
-		if project == "" {
-			project = projectOf(name)
-		}
-		access, err := registry.core.ask(r.Context(), req.Token, project, "pull")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return
-		}
-		if !access.Allowed {
-			http.Error(w, "not allowed to pull "+name+": "+access.Reason, http.StatusForbidden)
-			return
-		}
-
-		tag := req.Tag
-		if tag == "" {
-			tag = tagOf(req.Image)
-		}
-
-		reference, err := registry.resolveDigest(r.Context(), name, tag)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-
-		writeJSON(w, map[string]any{
-			"image":  name,
-			"tag":    tag,
-			"digest": reference,
-			"pinned": reference,
-		})
+		writeJSON(w, answer)
 	}
+}
+
+// refusal is a question this module will not answer, and why.
+//
+// A status and a sentence together because the two are read by different things: the status is
+// what the HTTP endpoint answers with, and the sentence is what a person reads. Keeping them
+// together means the channel answers with the sentence and nobody has to rebuild it from a code.
+type refusal struct {
+	status int
+	reason string
+}
+
+// resolved is what "this tag is that digest" looks like on the wire.
+type resolved struct {
+	Image  string `json:"image"`
+	Tag    string `json:"tag"`
+	Digest string `json:"digest"`
+	Pinned string `json:"pinned"`
+}
+
+// resolveTag is the work behind both ways of asking.
+//
+// A plain function rather than a handler, so the channel can reach it without an HTTP request to
+// hand it: the two callers differ only in how they got here, and a question that can be answered
+// two ways is a question that will eventually be answered two different ways.
+func (registry *registry) resolveTag(ctx context.Context, project, image, tag, token string) (resolved, *refusal) {
+
+	name := imageNameOf(image)
+	if name == "" {
+		return resolved{}, &refusal{http.StatusBadRequest, "no image was named"}
+	}
+
+	// The project is what the caller says it is, not what can be guessed from the image
+	// name: a repository called "home-store/www" has a slash in its path, and everything
+	// after the last one of them is "www", which is not a project anybody has.
+	if project == "" {
+		project = projectOf(name)
+	}
+
+	// The permission is this module's whole policy, asked of the core, and the same question
+	// the proxy asks before it serves a blob. Resolving is a pull: somebody asking what a tag
+	// is has no more right to the answer than to the image behind it, and a deploy module
+	// asking about a project's image is acting for that project.
+	access, err := registry.core.ask(ctx, token, project, "pull")
+	if err != nil {
+		return resolved{}, &refusal{http.StatusForbidden, err.Error()}
+	}
+	if !access.Allowed {
+		return resolved{}, &refusal{http.StatusForbidden,
+			"not allowed to pull " + name + ": " + access.Reason}
+	}
+
+	if tag == "" {
+		tag = tagOf(image)
+	}
+
+	digest, err := registry.resolveDigest(ctx, name, tag)
+	if err != nil {
+		return resolved{}, &refusal{http.StatusNotFound, err.Error()}
+	}
+
+	return resolved{Image: name, Tag: tag, Digest: digest, Pinned: digest}, nil
 }
 
 // resolveDigest asks the registry what a reference currently is.
