@@ -26,7 +26,10 @@ func Serve(ctx context.Context, args []string) error {
 	web.SetVersion(Version)
 
 	repoSvc := repos.New(a.Store, a.Git, a.Cfg.RepoDir)
-	apiSrv := api.New(a.Cfg, a.Log, a.Store, a.Git, repoSvc, a.Events, a.Objects)
+	apiSrv, err := api.New(a.Cfg, a.Log, a.Store, a.Git, repoSvc, a.Events, a.Objects)
+	if err != nil {
+		return err
+	}
 
 	srv := web.NewServer(a.Cfg, a.Log, a.Store, apiSrv)
 	if err := srv.Listen(); err != nil {
