@@ -185,7 +185,7 @@ const page = ref(1)
  * the width making both of them narrower. Operations are what somebody opens the page
  * for; images are what they open once something went wrong.
  */
-const tab = ref<'now' | 'operations' | 'images' | 'settings'>('now')
+const tab = ref<'log' | 'operations' | 'images' | 'settings'>('log')
 
 /** The image to be shown, when somebody arrived here by clicking one. */
 const wanted = ref('')
@@ -1401,10 +1401,6 @@ watch(() => props.module.id, load)
          when it is not — which is a spinner that never goes away on a slow load. -->
     <div v-else-if="loading" class="spinner">Loading…</div>
 
-    <!-- What is happening right now.
-         A card and not a row: it is the only thing on this page that is moving, and a
-         row among a table of finished work reads as another entry in the history
-         rather than as the present. Its own background says so before a word does. -->
     <!-- The tabs above the content, not below it: a row of names that sits under what
          it names is a legend for something the reader has already scrolled past. -->
     <template v-if="!reason && !loading">
@@ -1421,13 +1417,18 @@ watch(() => props.module.id, load)
       </details>
 
       <nav class="tabs">
+        <!-- "Log" and not "Now". A tab called Now promises the present, and what is on it is
+             mostly the past: ten finished deployments and whatever is under way. The name it had
+             was also the name of a state the page cannot be in — a page is either open or it is
+             not, and there is no moment at which it is "now" in particular. This one says what
+             the reader is looking at, which is the account of deployments, in order. -->
         <button
           class="tab"
-          :class="{ on: tab === 'now' }"
+          :class="{ on: tab === 'log' }"
           type="button"
-          @click="tab = 'now'"
+          @click="tab = 'log'"
         >
-          Now
+          Log
         </button>
         <button
           class="tab"
@@ -1469,7 +1470,7 @@ watch(() => props.module.id, load)
     <!-- What is happening, or what last happened. Its own tab and the first one: this
          is the thing a page is opened for, and it answers one question, where the two
          lists below answer another. -->
-    <div v-show="tab === 'now'">
+    <div v-show="tab === 'log'">
       <!-- One card per operation, which is what this tab is for. A single card cannot draw two
            rollouts apart: it has one set of steps and whichever operation spoke last owns them. -->
       <DeployOperations :project-id="projectId" :place="scopedCluster" />
