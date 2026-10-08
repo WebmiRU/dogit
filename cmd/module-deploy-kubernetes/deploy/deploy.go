@@ -502,8 +502,20 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 			request.report(Progress{Phase: StepRollout, Message: err.Error(), Failed: true})
 			return d.fail(ctx, request, record, PhaseApply, err)
 		}
-		request.report(Progress{Phase: StepRollout, Ready: ready, Desired: wanted,
-			Message: fmt.Sprintf("every pod is running the new image (%d of %d)", ready, wanted)})
+		// "The new image" only means anything when the image was pinned to a digest. Applied
+		// by a name, the pods being counted are the pods already running under that name —
+		// the ones this deployment was supposed to replace — and the sentence becomes a
+		// claim that the old pods are the new ones. It is not a small wording problem: it is
+		// the whole difference between a rollout that happened and a manifest that was
+		// re-applied, and the reason a deploy can finish in a second having changed nothing.
+		//
+		// So the number is reported and the claim is not made. A reader is told what was
+		// counted and not asked to draw the conclusion from a name that never changed.
+		message := fmt.Sprintf("%d of %d pods are running the image this deployment names", ready, wanted)
+		if pinned(request.Image) {
+			message = fmt.Sprintf("every pod is running the new image (%d of %d)", ready, wanted)
+		}
+		request.report(Progress{Phase: StepRollout, Ready: ready, Desired: wanted, Message: message})
 	}
 
 	// Post: judged separately, and never mistaken for the deployment having worked.
@@ -555,6 +567,16 @@ func (d *Deployer) runJob(ctx context.Context, substitution k8s.Substitution,
 		return fmt.Errorf("%s did not finish", written.Ref())
 	}
 	return nil
+}
+
+// pinned says whether an image reference is a digest rather than a name.
+//
+// A tag is a promise and a digest is an address, and every question this module asks about a
+// rollout — are these pods the new ones, has anything changed, is this the image that was just
+// built — is unanswerable about a promise. Two runs name the same tag, the pods match, and the
+// answer is yes to both.
+func pinned(image string) bool {
+	return strings.Contains(image, "@sha256:")
 }
 
 // wait waits for the workload's pods to be running the image this deployment put there.

@@ -788,3 +788,26 @@ func TestARolloutWithEveryPodOnTheNewImageIsFinished(t *testing.T) {
 		t.Fatalf("a finished rollout was reported as unfinished: %v", err)
 	}
 }
+
+// A digest is an address and a tag is a promise, and only one of them can be compared.
+//
+// Applied by a name, the pods being counted as "on the new image" are the pods already running
+// under that name — the ones the deployment was meant to replace. A deploy then finishes in a
+// second, changes nothing, and says every pod is running the new image. That sentence was on a
+// real card on this stand: the Deployment had not changed between two runs of two different
+// commits, and the rollout reported three of three.
+func TestPinnedIsAboutTheAddressAndNotTheName(t *testing.T) {
+	cases := map[string]bool{
+		"registry.test/versions@sha256:abc":      true,
+		"registry.test:5000/team/app@sha256:def": true,
+		"registry.test/versions:latest":          false,
+		"registry.test/versions":                 false,
+		"registry.test/versions@other:1":         false,
+		"":                                       false,
+	}
+	for image, want := range cases {
+		if got := pinned(image); got != want {
+			t.Errorf("pinned(%q) = %v, want %v", image, got, want)
+		}
+	}
+}

@@ -72,7 +72,7 @@ type DiffStat struct {
 type PipelineSource string
 
 const (
-	PipelineSourcePush         PipelineSource = "push"
+	PipelineSourcePush PipelineSource = "push"
 	// PipelineSourceTag is a run started by a tag being created. Its own source
 	// because a release and a build somebody kicked off by hand are different events:
 	// one was chosen, and the page and the notifications should be able to say which.
@@ -121,7 +121,12 @@ const (
 	JobFailed   JobStatus = "failed"
 	JobCanceled JobStatus = "canceled"
 	JobSkipped  JobStatus = "skipped"
-	JobManual   JobStatus = "manual"
+	// JobRefused is a job that was carried out and declined: the module was asked, said no in
+	// words, and touched nothing. Its own status because everything that reads a job's outcome
+	// means something different for it — a grey card rather than a red one, a run that carries
+	// on rather than one that fails and takes the places after it down with it.
+	JobRefused JobStatus = "refused"
+	JobManual  JobStatus = "manual"
 )
 
 type Job struct {

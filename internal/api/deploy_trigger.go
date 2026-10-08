@@ -142,6 +142,14 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 
 	repoDir := s.repos.PathFor(project)
 	err = s.runDeployJob(ctx, job, run, project, repoDir, config)
+	// The module declined. Recorded as a refusal and not as a failure, for the same reason the
+	// switched-off place above is recorded as skipped: the run goes on to the next place, and
+	// nothing is red in the cluster. A run that failed here would take every place after it
+	// down with it, over a place that was merely busy.
+	if reason, wasRefused := refusedBy(err); wasRefused {
+		finish(store.JobRefused, reason)
+		return
+	}
 	switch {
 	case err == nil:
 		finish(store.JobSuccess, "")
@@ -187,6 +195,11 @@ func (s *Server) pendingDeploy(ctx context.Context, pipelineID int64) (*store.Jo
 		switch job.Status {
 		case store.JobPending, store.JobRunning:
 			unfinished++
+		case store.JobRefused, store.JobSkipped:
+			// Neither blocks anything. A place that was busy, or switched off, is a
+			// deployment that did not happen, and the places after it in the same run are
+			// not waiting on it. Counting it as a blocker would fail the run over a
+			// cluster that is fine.
 		case store.JobFailed:
 			// A failed job that was allowed to fail is a job that went on. Counting
 			// it as a blocker would make allow_failure mean nothing at all, and it

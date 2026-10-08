@@ -56,7 +56,7 @@ func (s *Server) handleProjectDeployOperations(w http.ResponseWriter, r *http.Re
 		// ended, and it belongs on neither list. The core knows it — the row exists — and a
 		// card for it would draw an empty step list and no end time.
 		switch {
-		case one.Running():
+		case one.Running(), one.Queued():
 			active = append(active, deployOperationView(one))
 		case one.Finished():
 			complete = append(complete, deployOperationView(one))
@@ -90,7 +90,8 @@ func deployOperationView(one store.DeployOperation) map[string]any {
 		"error":       one.Error,
 		"started_at":  millisOf(one.StartedAt),
 		"finished_at": millisOf(one.FinishedAt),
-		"running":     one.StartedAt != nil && one.FinishedAt == nil,
+		"running":     one.Running(),
+		"queued":      one.Queued(),
 	}
 }
 

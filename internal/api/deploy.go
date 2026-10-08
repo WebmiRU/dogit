@@ -321,7 +321,11 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		message := refusalOf(raw, response.Status)
 		log("The %s module refused: %s\n", spec.Module, message)
-		return fmt.Errorf("the %s module refused: %s", spec.Module, message)
+		// Typed, because a refusal is not a failure and the code that records the outcome has
+		// to be able to tell them apart. As a plain error the only thing downstream could do
+		// was print it, and printing it as a failure says the module broke something when it
+		// declined to touch anything.
+		return &refused{module: spec.Module, reason: message}
 	}
 
 	// The module narrates as it goes, and everything it says goes into the job's log
@@ -417,6 +421,30 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 }
 
 // shortDigest is an image reference cut down to something a log line can carry.
+// refused is a module declining a deployment, with its reason.
+//
+// A type rather than a sentence, and the reason it has to be one: the message a refusal produces
+// is a perfectly good sentence and a terrible discriminator. A caller that has to recognise it
+// by reading it is reading a string that was written for a person, and the first person to
+// reword it breaks the recognition.
+type refused struct {
+	module string
+	reason string
+}
+
+func (r *refused) Error() string {
+	return fmt.Sprintf("the %s module refused: %s", r.module, r.reason)
+}
+
+// refusedBy reports whether an error is a module's refusal, and why.
+func refusedBy(err error) (string, bool) {
+	var r *refused
+	if errors.As(err, &r) {
+		return r.reason, true
+	}
+	return "", false
+}
+
 func shortDigest(image string) string {
 	at := strings.Index(image, "@")
 	if at < 0 {

@@ -28,10 +28,12 @@ interface DeployOperation {
   /** Which place, by name. Empty only on a page that was not told about a place. */
   place: string
   error: string
-  /** Unix milliseconds. Null when the operation never began, which the core does not list. */
+  /** Unix milliseconds. Null when the operation has not begun yet. */
   started_at: number | null
   finished_at: number | null
   running: boolean
+  /** Waiting its turn: asked for, not started, and not over. */
+  queued: boolean
 }
 
 interface OperationsAnswer {
@@ -313,7 +315,39 @@ function clockOf(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, { hour12: false })
 }
 
-/** When to show, as a sentence a person would say. */
+/**
+ * What the card calls this operation, in a word.
+ *
+ * The job's own status is a word from a database column, and four of them are not words a person
+ * says. "refused" and "skipped" in particular: both mean nothing happened, and a card that says
+ * either of them is quoting the column rather than answering the reader's question.
+ */
+function stateOf(operation: DeployOperation): string {
+  if (operation.queued) return 'Waiting'
+  if (operation.running) return 'Running'
+  if (operation.status === 'refused') return 'Declined'
+  if (operation.status === 'skipped') return 'Skipped'
+  if (operation.status === 'canceled') return 'Cancelled'
+  if (operation.status === 'interrupted') return 'Interrupted'
+  if (operation.status === 'success') return 'Success'
+  return operation.status || 'Failed'
+}
+
+/**
+ * The card's edge, from the same rule as its badge.
+ *
+ * Three, and the same three the steps use: yellow while it happens, blue while it waits, and no
+ * colour of its own when nothing happened. One fact drawn in two colours is a reader being asked
+ * to decide which of them to believe.
+ */
+function edgeOf(operation: DeployOperation): string {
+  if (operation.queued) return 'queued'
+  if (operation.running) return 'live'
+  if (operation.status === 'refused' || operation.status === 'skipped') return 'dismissed'
+  return ''
+}
+
+
 function when(operation: DeployOperation): string {
   if (!operation.started_at) return ''
   return timeAgo(new Date(operation.started_at))
@@ -330,12 +364,35 @@ function took(operation: DeployOperation): string {
   return formatDuration(ms)
 }
 
+/**
+ * One colour per meaning, and the same meaning everywhere on the page.
+ *
+ * Five states, and the colours are the ones the steps already use, because a card and the list
+ * of steps under it are two renderings of one deployment and a reader should not have to learn
+ * the vocabulary twice:
+ *
+ *   green   it ended well
+ *   yellow  it is happening now
+ *   blue    it has not started — waiting its turn, and known to be coming
+ *   grey    it did not happen: refused by the module, or skipped by a rule
+ *   red     it broke
+ *
+ * Red is reserved for the last of those on purpose. A refusal is not a fault: nothing is broken
+ * and nothing is red in the cluster, the place was simply busy, and the next attempt may well
+ * work. Painted red it reads as somebody's afternoon going wrong, over a sentence that says
+ * something was declined and nothing was touched.
+ */
 const tone: Record<string, string> = {
   success: 'badge-green',
+  running: 'badge-warning',
+  pending: 'badge-blue',
+  refused: 'badge-neutral',
+  skipped: 'badge-neutral',
+  interrupted: 'badge-neutral',
   failed: 'badge-danger',
   error: 'badge-danger',
-  cancelled: 'badge-warning',
-  skipped: 'badge-neutral',
+  canceled: 'badge-neutral',
+  abandoned: 'badge-danger',
 }
 
 watchEvents({
@@ -418,12 +475,12 @@ watchEvents({
       v-for="operation in cards"
       :key="operation.job_id"
       class="card operation"
-      :class="{ live: operation.running }"
+      :class="edgeOf(operation)"
     >
       <div class="card-body">
         <div class="block-head">
           <span class="badge" :class="tone[operation.status] ?? 'badge-neutral'">
-            {{ operation.running ? 'Running' : operation.status }}
+            {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
@@ -544,11 +601,33 @@ watchEvents({
   background: var(--bg);
 }
 
-/* A card for something happening now is worth noticing before anything else on the page, so it is
-   marked by a line rather than by a colour: colour is already carrying the outcome, and one thing
-   saying "running" and another saying it again in red is two answers to one question. */
+/* The card of a deployment under way, marked by a line down its edge.
+   Yellow, and one rule for everything that says so — the edge and the badge and the word beside
+   them. They are three renderings of one fact, and a page where the edge is one colour and the
+   badge another gives a reader two answers to "is it going well" and leaves them to pick.
+
+   Yellow rather than green, and this is not a preference. On this page green means a deployment
+   ended well, and a rollout that is still going has not ended at all: an edge wearing success
+   for the two minutes everybody is waiting claims the answer before there is one. Not red
+   either — nothing has failed, and a red edge is a thing to go and look at.
+
+   The accent colour it used to wear said nothing in particular. It read as "this is the selected
+   one" or "this is the current page", neither of which is a thing anybody asked about. */
 .operation.live {
+  border-left: 3px solid var(--yellow);
+}
+
+/* Waiting. The accent blue, which is the colour the steps already use for a step not yet
+   reached, and deliberately not grey: "has not come to it yet" is a known state and not an
+   absence, and grey reads as this page having not been told. */
+.operation.queued {
   border-left: 3px solid var(--accent);
+}
+
+/* Declined or skipped. No edge of its own — nothing happened, and there is nothing here to
+   draw attention to. What is on the card is the sentence the module wrote. */
+.operation.dismissed {
+  border-left: 3px solid var(--border-strong, var(--border));
 }
 
 .operation.live .badge {

@@ -57,6 +57,16 @@ func (o DeployOperation) Running() bool {
 	return o.StartedAt != nil && o.FinishedAt == nil
 }
 
+// Queued reports whether this operation is waiting its turn.
+//
+// Its own question, and not the absence of an answer to Running. A deploy step that has not
+// begun has no start time, so "is it running" says no, and a page that drew that as finished
+// would show a deployment that is going to happen as one that is over — on a run where an
+// earlier place is still rolling out and this one is plainly next.
+func (o DeployOperation) Queued() bool {
+	return o.StartedAt == nil && o.FinishedAt == nil
+}
+
 // Finished reports whether this operation is over.
 //
 // Its own question rather than "not Running()", because a deploy step nobody has claimed has
@@ -96,7 +106,11 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		FROM jobs j
 		JOIN pipelines p ON p.id = j.pipeline_id
 		WHERE p.project_id = $1 AND j.deploy IS NOT NULL
-		  AND j.started_at IS NOT NULL
+		  -- A deploy step nobody has reached yet. It was asked for, it is going to happen,
+		  -- and it is the answer to "why is nothing happening" while an earlier place in the
+		  -- same run is still rolling out. Left out, a page shows one deployment and no sign
+		  -- that a second is waiting behind it, which reads as the run having one job.
+		  AND (j.started_at IS NOT NULL OR j.status = 'pending')
 		  AND ($2 = '' OR COALESCE(NULLIF(j.deploy->>'Cluster', ''), j.deploy->>'Target') = $2)
 		  AND (j.finished_at IS NULL
 		       OR j.id IN (

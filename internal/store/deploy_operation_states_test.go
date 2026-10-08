@@ -14,10 +14,12 @@ import (
 // The same question asked of the whole store rather than of one page's worth: which operations
 // there are, and which of them are still under way.
 //
-// The case this file exists for is the one a page draws a card for: a deploy step nobody has
-// claimed has neither started nor finished, and it must not end up in either list. It is the
-// shape a pipeline's own skipped step takes, so it is not a rare state — it is what the list
-// contains most of the time on a busy project.
+// Three states and each decided on its own: under way, waiting its turn, and over. Waiting was
+// left out of this list at first, on the grounds that a step nobody has claimed has no beginning
+// to sort by — which is true and is not the question. The question is what a reader is looking
+// at, and on a run with two places where the first is still rolling out, a list that shows one
+// deployment and no sign of the one behind it answers "one thing is happening" where the truth is
+// "one thing is happening and another is next".
 
 // anOperationAt is one deploy job in the state given, returning its id.
 func anOperationAt(t *testing.T, st *store.Store, projectID uuid.UUID, name string,
@@ -42,12 +44,15 @@ func anOperationAt(t *testing.T, st *store.Store, projectID uuid.UUID, name stri
 	return id
 }
 
-// A deploy step nobody has claimed is on neither list.
+// All three are on the list, each saying which of the three it is.
 //
-// It has no beginning to sort by and no end to show, so a card drawn for it would be a step list
-// with nothing in it — and calling it finished puts a card on the page for a deployment that the
-// pipeline decided not to do.
-func TestADeployStepNobodyHasClaimedIsOnNeitherList(t *testing.T) {
+// The waiting one is the case this test was written against, in the other direction. A step
+// nobody has claimed has no beginning to sort by, and it used to be left off both lists for
+// exactly that reason — which left a page showing one deployment while a second sat behind it
+// waiting, and no sign of the second anywhere. It is a known state and not an absence, so it is
+// on the list and says so; calling it finished would be worse, because that draws a card for a
+// deployment that is over when it has not begun.
+func TestWaitingRunningAndOverAreEachOnTheList(t *testing.T) {
 	st := dbtest.Open(t)
 	project := dbtest.NewProject(t, st, "ops-neither", nil)
 
@@ -61,23 +66,31 @@ func TestADeployStepNobodyHasClaimedIsOnNeitherList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}
-	if len(found) != 2 {
-		t.Fatalf("read %d operations, want the 2 that began: %+v", len(found), found)
+	if len(found) != 3 {
+		t.Fatalf("read %d operations, want all 3: %+v", len(found), found)
 	}
 
-	var running, finished int
+	var running, finished, queued int
 	for _, one := range found {
 		switch {
 		case one.Running():
 			running++
+		case one.Queued():
+			queued++
 		case one.Finished():
 			finished++
 		default:
-			t.Errorf("operation %d is on the list but is neither running nor finished", one.JobID)
+			t.Errorf("operation %d is on the list but is none of the three states", one.JobID)
 		}
 	}
-	if running != 1 || finished != 1 {
-		t.Errorf("read %d running and %d finished, want 1 and 1", running, finished)
+	if running != 1 || finished != 1 || queued != 1 {
+		t.Errorf("read %d running, %d queued and %d finished, want 1 of each", running, queued, finished)
+	}
+
+	// Two of them at once, which is the whole reason the list exists: a rollout under way and
+	// another waiting behind it, on the same project, at the same moment.
+	if running != 1 || queued != 1 {
+		t.Errorf("a run with one deployment going and one waiting read as %d and %d", running, queued)
 	}
 }
 
@@ -89,18 +102,21 @@ func TestTheThreeStatesAreEachDecidedOnTheirOwn(t *testing.T) {
 	finished := store.DeployOperation{JobID: 3, StartedAt: ptr(time.Now()), FinishedAt: ptr(time.Now())}
 
 	cases := map[string]struct {
-		op                        store.DeployOperation
-		wantRunning, wantFinished bool
+		op                                    store.DeployOperation
+		wantRunning, wantQueued, wantFinished bool
 	}{
-		"never started":    {none, false, false},
-		"under way":        {running, true, false},
-		"over":             {finished, false, true},
-		"started and over": {finished, false, true},
+		"never started":    {none, false, true, false},
+		"under way":        {running, true, false, false},
+		"over":             {finished, false, false, true},
+		"started and over": {finished, false, false, true},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			if got := c.op.Running(); got != c.wantRunning {
 				t.Errorf("Running() = %v, want %v", got, c.wantRunning)
+			}
+			if got := c.op.Queued(); got != c.wantQueued {
+				t.Errorf("Queued() = %v, want %v", got, c.wantQueued)
 			}
 			if got := c.op.Finished(); got != c.wantFinished {
 				t.Errorf("Finished() = %v, want %v", got, c.wantFinished)

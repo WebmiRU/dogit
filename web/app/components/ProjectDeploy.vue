@@ -64,6 +64,34 @@ const headStateText = computed(() => {
   return 'nothing is deploying'
 })
 
+/**
+ * Asked once, so that a page opened during a rollout does not say nothing is deploying.
+ *
+ * This used to be read off the socket alone, which is the same mistake the cards below had: an
+ * event says what happened while somebody was watching, and a page opened halfway through a
+ * deployment has seen none of them. It then printed "nothing is deploying" over a rollout in
+ * progress, one line above the rows that show the rollout — the page contradicting itself about
+ * the same fact, with the truth further down.
+ *
+ * One finished row is enough, and it is the newest, because the question is not "has anything
+ * ever failed" but "how did the last one go".
+ */
+async function loadHead() {
+  try {
+    const answer = await api.get<{
+      active?: unknown[]
+      finished?: { status?: string }[]
+    }>(`/projects/${props.projectId}/deploy-operations?finished=1`)
+    deployBusy.value = (answer.active?.length ?? 0) > 0
+    lastFailed.value = answer.finished?.[0]?.status !== undefined &&
+      answer.finished[0].status !== 'success'
+  } catch {
+    // Left as it is. A header that cannot be fetched says what it last knew, and a header that
+    // says "nothing is deploying" because a request failed is a page making a claim it has no
+    // evidence for — the failure is visible further down, where the rows are empty.
+  }
+}
+
 /** Follows deployments only as far as "is one happening, and did the last one work". */
 const stopState = watchEvents({
   kinds: ['deploy.operation', 'deploy.history'],
@@ -93,6 +121,7 @@ async function load() {
   try {
     const answer = await api.get<{ modules: ModuleRow[] }>('/modules')
     modules.value = answer.modules ?? []
+    void loadHead()
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {

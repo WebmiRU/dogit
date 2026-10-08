@@ -1741,9 +1741,14 @@ watch(() => props.module.id, load)
                          numbers on it, and the figures appeared only once the
                          deployment was written down and the page had read the list
                          again. -->
+                    <!-- Yellow, and the same yellow the step being worked on wears in the
+                         log above. It was green, which on this page means one thing only: a
+                         deployment ended well. A rollout that is still going has not ended,
+                         and a badge wearing success for the two minutes everybody is waiting
+                         claims the answer before there is one. -->
                     <span
                       v-if="isRunningImage(image.name)"
-                      class="badge badge-green"
+                      class="badge badge-warning"
                       :title="`${runningPods().on} of ${runningPods().of} pods are on this image right now`"
                     >
                       <!-- Without the fraction when there is none to give: a line that
@@ -1757,14 +1762,18 @@ watch(() => props.module.id, load)
                     </span>
                     <!-- Still up, and on its way out: neither "running here" nor
                          "gone", which is why it is a colour of its own rather than a
-                         grey version of the first one. -->
+                         grey version of the first one. Blue, the colour a step not yet
+                         reached wears in the log: these pods are waiting to be removed
+                         and nothing is happening to them, which is a known state rather
+                         than an absence. Yellow went to the badge above, which is the
+                         one thing here that is actually under way. -->
                     <!-- The drain, counted forwards like the log counts it: "retire 1 of
                          3" is one old pod gone of three, which is the same figure the
                          step under it is filling towards — and a badge that only says
                          "retiring" cannot be watched, only noticed. -->
                     <span
                       v-else-if="image.live && retiringImage() && image.name === retiringImage()"
-                      class="badge badge-warning"
+                      class="badge badge-blue"
                       :title="`${liveSplit?.retiring ?? props.replacingPods ?? 0} pod(s) are still on this image while the place is moved to another`"
                     >
                       Retire {{ retiredDone }}/{{ retiredTotal }}
