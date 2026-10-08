@@ -83,6 +83,20 @@ interface LogEntry {
 }
 
 const operations = ref<DeployOperation[]>([])
+
+/**
+ * Cards this reader has put away, by job.
+ *
+ * Not persisted, and that is a decision rather than an omission. A card put away comes back on
+ * the next visit to the page, which is the escape hatch: a card that could be hidden with no way
+ * to bring it back is a card somebody stops trusting the page to show them. Persisting it would
+ * need a decision about when it returns — a day? a week? until the deployment is pruned? — and
+ * every one of those is a rule about somebody's memory that the interface has no business making.
+ *
+ * Kept by job id and not by position, so a card put away stays put away when the page reloads
+ * its list underneath it, which is what happens every time a deployment ends.
+ */
+const putAway = ref<Record<number, true>>({})
 const reason = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -106,10 +120,17 @@ const query = computed(() => {
 // Running first, and each half newest-first, which is the order the core sends them in. The join
 // rather than a single sort because "running deployments, oldest last" and "finished deployments,
 // newest last" are two orderings, and one sort over the union of both cannot express either.
+//
+// Running and waiting are not lumped together: a card for something happening now and a card for
+// something that has not started are read in the same glance, and putting the finished ones
+// between them would break the only ordering a reader is actually using.
 const cards = computed(() => [
-  ...operations.value.filter((one) => one.running),
-  ...operations.value.filter((one) => !one.running),
+  ...operations.value.filter((one) => one.running || one.queued),
+  ...operations.value.filter((one) => !one.running && !one.queued),
 ])
+
+/** What is drawn, after the reader has put some of it away. */
+const shown = computed(() => cards.value.filter((one) => !putAway.value[one.job_id]))
 
 /** Everything the core sends in one answer is both halves; the sort is by what was begun. */
 function reorder(answer: OperationsAnswer) {
@@ -493,14 +514,19 @@ watchEvents({
 
     <div v-if="reason" class="empty">{{ reason }}</div>
     <div v-else-if="loading && cards.length === 0" class="empty">Looking…</div>
+    <!-- Every card put away and nothing new to show. Not the same message as an empty page:
+         this one says the reader decided, and the other says there is nothing there. -->
     <div v-else-if="cards.length === 0" class="empty">
       Nothing is being deployed to this place, and nothing has been for a while.
+    </div>
+    <div v-else-if="shown.length === 0" class="empty">
+      All {{ cards.length }} of the deployments here are put away. Open the page again to see them.
     </div>
 
     <!-- One card per operation. The key is the job: two cards for one operation is the bug this
          replaces, and a card that changes identity as it runs is the same bug wearing a hat. -->
     <section
-      v-for="operation in cards"
+      v-for="operation in shown"
       :key="operation.job_id"
       class="card operation"
       :class="edgeOf(operation)"
@@ -512,6 +538,19 @@ watchEvents({
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
+
+          <!-- Put away by the reader, and only by the reader. A deployment does not take its own
+               card off the page when it ends: it goes from yellow to green and stays, because
+               the moment it finished is usually the moment somebody starts reading why. -->
+          <button
+            class="put-away"
+            type="button"
+            title="Put this card away. It comes back when you open the page again."
+            :aria-label="`put away the deployment from ${when(operation) || 'now'}`"
+            @click="hide(operation)"
+          >
+            ×
+          </button>
 
           <span class="spacer" />
 
@@ -546,7 +585,11 @@ watchEvents({
         />
 
         <!-- The log of an operation that is over, and only of an operation that is over. -->
-        <details v-if="!operation.running" class="log" @toggle="askLog(operation.job_id)">
+        <!-- Open, not folded. A deployment that has just finished is being read precisely
+             because it finished, and the account of it is the whole reason the card exists; a
+             reader who has to click each of ten of them to find out what happened has been
+             given a page that hides its own contents behind ten clicks. -->
+        <details v-if="!operation.running" class="log" open @toggle="askLog(operation.job_id)">
           <!-- Says what it knows before it has looked. "Nothing was recorded" on a log that
                has not been asked for yet is a claim made without having checked, and it is
                the wrong claim on the deployments that are the most interesting to look at. -->
@@ -621,6 +664,30 @@ watchEvents({
 /* The place, as a chip rather than as text among text. It repeats on every card of a project with
    one place, so it is not news — but on a page whose cards are the unit, the place is the question
    a reader answers first, and a line that mixes it in with the step name makes it the second. */
+/* The reader's own way out of a card. Small, quiet, and in the corner: it is a control for
+   tidying the page, not a statement about the deployment, so it wears no colour of its own and
+   does not take the eye before the badge has been read. */
+.put-away {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.put-away:hover,
+.put-away:focus-visible {
+  opacity: 1;
+  color: var(--text);
+  background: var(--bg-inset);
+}
+
 .place-chip {
   font-size: 12px;
   padding: 1px 7px;
