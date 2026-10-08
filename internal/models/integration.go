@@ -42,6 +42,22 @@ type Manifest struct {
 	// Settings describes the settings the module accepts, so the admin UI can
 	// render a form without hard-coding knowledge of any particular module.
 	Settings []SettingSpec `json:"settings"`
+	// Database used to ask the core to provision one. It no longer does anything, and it is
+	// kept for a reason that is not nostalgia.
+	//
+	// Manifests are read with unknown fields refused, so removing this would not quietly stop
+	// honouring it — it would refuse the registration of every module built against a core that
+	// had it, with a message about a JSON field rather than about the module. A module nobody
+	// has rebuilt since a version upgrade is exactly the one that cannot fix itself, and it
+	// would be locked out of the instance by a rename.
+	//
+	// Parsed and ignored. Nothing reads it, nothing writes it, and a module that keeps sending
+	// it is no worse off than one that stops.
+	//
+	// The deprecation lives in a field rather than in a warning nobody reads, because the cost
+	// of getting this wrong is a module that will not start.
+	Database bool `json:"database,omitempty"`
+
 	// DependsOn lists module kinds this module needs.
 	DependsOn []string `json:"depends_on,omitempty"`
 	// Description is free text for the module list.
