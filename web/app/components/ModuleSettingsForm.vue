@@ -418,45 +418,106 @@ function fieldValue(field: SettingSpec, value: unknown): unknown {
 }
 
 /**
- * Saves one row, and only that row.
+ * Everything on this form that is different from what is stored.
  *
- * A row is saved by itself because a row is what somebody decided: two clusters in one
- * list are two clusters with two kubeconfigs, and a Save that took both would make
- * changing one's namespace a chance to rewrite the other's credential. It also means an
- * edit nobody finished stays on the screen instead of being either saved or lost with
- * somebody else's change.
- *
- * What is sent is what this scope decides about that row — see listSettable — so
- * saving one row never touches the rows above it or the rows beside it.
+ * One list, because there is one Save. A row counts on its own account and a plain
+ * setting on its own, and nothing else is touched by saving — which is what the row's own
+ * button was there to promise and did not quite keep: it sent the whole list every time,
+ * so an edit half-made in one row was written by another's Save. Here a row that has not
+ * changed is sent as it is stored, and the unfinished edit stays on the screen.
  */
-async function saveRow(spec: SettingSpec, row: SettingEntry) {
-  if (isList(spec)) {
-    // The whole list, every row this scope has an answer about, and not just the row
-    // under the hand.
-    //
-    // One scope stores one list, so saving a list replaces it. Sending only the row that
-    // was edited would drop every other row this scope has decided — which is how "save
-    // one cluster" quietly deleted the cluster beside it. Each row still saves itself:
-    // what is sent for a row is only what this scope decided about that row, and a card
-    // about one place has the rest of the list already loaded to send with it.
-    if (whereIs(spec, row) < 0) return
-
-    const value = listSettable(spec, values.value[spec.key])
-    await saveOne(spec.key, value === undefined ? [] : value)
-    await settleRow(spec, row)
-    emit('saved')
-    return
-  }
-  const value = settingValue(spec, values.value[spec.key])
-  if (value === undefined) return
-  await saveOne(spec.key, value)
-  settleSetting(spec)
+function changedKeys(): string[] {
+  return props.module.manifest.settings
+    .filter((spec) => {
+      if (!mayEdit.value) return false
+      if (!isList(spec)) return settingChanged(spec)
+      const before = entriesOf(saved.value[spec.key])
+      const now = entriesOf(values.value[spec.key])
+      if (before.length !== now.length) return true
+      return now.some((row, at) => JSON.stringify(row) !== JSON.stringify(before[at]))
+    })
+    .map((spec) => spec.key)
 }
 
-/** The same for a setting that is one value rather than a list of rows. */
-async function saveSetting(spec: SettingSpec) {
-  if (isList(spec)) return
-  await saveRow(spec, values.value[spec.key] as SettingEntry)
+const nothingChanged = computed(() => changedKeys().length === 0)
+
+/**
+ * What to send for one setting: what is stored, with only the changed rows laid over it.
+ *
+ * Built from the stored value rather than from the screen, so a row somebody is still
+ * typing into is not written by a Save meant for a different row. A new row, having no
+ * stored counterpart, is taken from the screen — there is nothing stored to take.
+ */
+function payloadFor(spec: SettingSpec): unknown {
+  if (!isList(spec)) return settingValue(spec, values.value[spec.key])
+
+  const was = entriesOf(saved.value[spec.key])
+  const now = entriesOf(values.value[spec.key])
+  const rows: SettingEntry[] = []
+  for (const [at, row] of now.entries()) {
+    const before = was[at]
+    rows.push(!before || JSON.stringify(before) !== JSON.stringify(row) ? row : clone(before))
+  }
+  const value = listSettable(spec, rows)
+  return value === undefined ? [] : value
+}
+
+/** Saves everything changed on this form, in one request. */
+async function saveAll() {
+  const keys = changedKeys()
+  if (keys.length === 0) return
+
+  busy.value = true
+  error.value = ''
+  try {
+    const payload: Record<string, unknown> = {}
+    for (const key of keys) {
+      const spec = props.module.manifest.settings.find((one) => one.key === key)
+      if (spec) payload[key] = payloadFor(spec)
+    }
+    await api.put(`/modules/${props.module.id}/settings/bulk?${scopeQuery.value}`, { values: payload })
+
+    // What came back rather than what was typed: the core decides what this scope holds,
+    // merged with everything above it, and a Save that left the screen showing the typed
+    // value would be claiming something the store does not agree with. A row that could
+    // not be read back is left dirty rather than marked saved — better to offer a save
+    // twice than to say it landed when nobody has said so.
+    try {
+      const answer = await api.get<{ own?: Record<string, unknown> }>(
+        `/modules/${props.module.id}/settings?${scopeQuery.value}`,
+      )
+      if (answer?.own) {
+        const settled: Record<string, unknown> = { ...values.value }
+        for (const key of keys) settled[key] = clone(answer.own[key])
+        values.value = settled
+        saved.value = { ...saved.value, ...answer.own }
+      }
+    } catch {
+      // Left dirty on purpose; see above.
+    }
+    notify(
+      keys.length === 1
+        ? `Saved ${keys[0]} for ${props.module.name}`
+        : `Saved ${keys.length} settings for ${props.module.name}`,
+      { type: 'success' },
+    )
+    emit('saved')
+  } catch (caught) {
+    const message = caught instanceof ApiError ? caught.message : 'the request failed'
+    error.value = message
+    notify(message, { type: 'error', timer: 0 })
+  } finally {
+    busy.value = false
+  }
+}
+
+/** Puts every changed thing back to what is stored. */
+function discardAll() {
+  const keys = changedKeys()
+  if (keys.length === 0) return
+  const put: Record<string, unknown> = { ...values.value }
+  for (const key of keys) put[key] = clone(saved.value[key])
+  values.value = put
 }
 
 /** One setting at one scope. */
@@ -477,41 +538,6 @@ async function saveOne(key: string, value: unknown) {
   }
 }
 
-/**
- * What a row looks like now that it has been saved.
- *
- * Read back rather than assumed: what is stored here is only what this scope decided,
- * and the row on screen is that merged with everything above it. The merge is done by
- * the core, so the row that comes back is the one to believe.
- *
- * Only this row is settled. Reloading the whole form would throw away the edits
- * somebody has half-made in the rows beside it.
- */
-async function settleRow(spec: SettingSpec, row: SettingEntry) {
-  const index = whereIs(spec, row)
-  if (index < 0) return
-  try {
-    const answer = await api.get<{ own?: Record<string, unknown> }>(
-      `/modules/${props.module.id}/settings?${scopeQuery.value}`,
-    )
-    const arrived = entriesOf(answer.own?.[spec.key])[index]
-    const current = entriesOf(values.value[spec.key])
-    if (!arrived || !current[index]) return
-    current[index] = { ...arrived }
-    values.value = { ...values.value, [spec.key]: current }
-    const baseline = entriesOf(saved.value[spec.key])
-    if (baseline[index]) baseline[index] = clone(arrived)
-    saved.value = { ...saved.value, [spec.key]: baseline }
-  } catch {
-    // A row that could not be read back is left dirty rather than marked saved: it is
-    // better to offer a save twice than to say it landed when nobody has said so.
-  }
-}
-
-/** The same for a setting that is not a list. */
-function settleSetting(spec: SettingSpec) {
-  saved.value = { ...saved.value, [spec.key]: clone(values.value[spec.key]) }
-}
 
 /** Whether one row of a list is different from what is stored. */
 /**
@@ -535,16 +561,6 @@ function settingChanged(spec: SettingSpec): boolean {
   return JSON.stringify(values.value[spec.key]) !== JSON.stringify(saved.value[spec.key])
 }
 
-/** Puts one row back to what is stored, leaving the others as they are. */
-function revertRow(spec: SettingSpec, row: SettingEntry) {
-  const index = whereIs(spec, row)
-  if (index < 0) return
-  const current = entriesOf(values.value[spec.key])
-  const was = entriesOf(saved.value[spec.key])[index]
-  if (!was) return
-  current[index] = clone(was)
-  values.value = { ...values.value, [spec.key]: current }
-}
 
 /**
  * Where a row is in the whole list, asked of the row itself.
@@ -558,10 +574,6 @@ function whereIs(spec: SettingSpec, row: SettingEntry): number {
   return entriesOf(values.value[spec.key]).indexOf(row)
 }
 
-/** Puts one setting back to what is stored. */
-function revertSetting(spec: SettingSpec) {
-  values.value = { ...values.value, [spec.key]: clone(saved.value[spec.key]) }
-}
 
 /** Puts this scope back to inheriting, which is not the same as a default. */
 async function reset(spec: SettingSpec) {
@@ -1273,22 +1285,6 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
               >
                 Remove this place
               </button>
-              <button
-                class="btn btn-small"
-                type="button"
-                :disabled="busy || !mayEdit || !rowChanged(spec, row)"
-                @click="revertRow(spec, row)"
-              >
-                Discard
-              </button>
-              <button
-                class="btn btn-small btn-primary"
-                type="button"
-                :disabled="busy || !mayEdit || !rowChanged(spec, row)"
-                @click="saveRow(spec, row)"
-              >
-                {{ busy ? 'Saving…' : 'Save' }}
-              </button>
             </div>
           </div>
 
@@ -1380,28 +1376,40 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
           </button>
         </p>
 
-        <!-- The same bargain as a row of a list: this setting saves itself. -->
-        <div v-if="spec.type !== 'list'" class="setting-entry-actions">
-          <span v-if="settingChanged(spec)" class="muted small">not saved yet</span>
-          <button
-            class="btn btn-small"
-            type="button"
-            :disabled="busy || !settingChanged(spec)"
-            @click="revertSetting(spec)"
-          >
-            Discard
-          </button>
-          <button
-            class="btn btn-small btn-primary"
-            type="button"
-            :disabled="busy || !settingChanged(spec)"
-            @click="saveSetting(spec)"
-          >
-            {{ busy ? 'Saving…' : 'Save' }}
-          </button>
+        <div v-if="spec.type !== 'list' && settingChanged(spec)" class="setting-entry-actions">
+          <span class="muted small">not saved yet</span>
         </div>
       </div>
 
+      <!-- One pair for the whole form, and only while there is something to do.
+           Three settings and three buttons is three chances to save one of them and
+           believe you saved all three, and a form whose buttons come and go as you type
+           is a form whose buttons are never where you left them. What Save sends is only
+           what changed, so saving one field cannot write another you were still typing
+           into — which is what a single button over a list of clusters has to be careful
+           about, and what a Save on each row never actually achieved either: it sent the
+           whole list every time, and only looked as though it had not. -->
+      <div v-if="mayEdit" class="settings-actions">
+        <span class="muted small">
+          {{ nothingChanged ? 'nothing to save' : `${changedKeys().length} not saved yet` }}
+        </span>
+        <button
+          class="btn btn-small"
+          type="button"
+          :disabled="busy || nothingChanged"
+          @click="discardAll"
+        >
+          Discard
+        </button>
+        <button
+          class="btn btn-small btn-primary"
+          type="button"
+          :disabled="busy || nothingChanged"
+          @click="saveAll"
+        >
+          {{ busy ? 'Saving…' : 'Save' }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -1562,6 +1570,16 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
   font-size: 11px;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+/* One pair of buttons for the whole form, at its foot. */
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
 }
 
 /* A row's own Save, under its own fields. */
