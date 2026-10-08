@@ -142,7 +142,6 @@ func (s *Server) Register(r chi.Router) {
 	moduleRoutes.Post("/registry/access", s.handleRegistryAccess)
 	moduleRoutes.Post("/registry/resolve", s.handleRegistryResolve)
 	moduleRoutes.Post("/registry/authenticate", s.handleRegistryAuthenticate)
-	moduleRoutes.Post("/database/drop", s.handleModuleDropDatabase)
 	r.Route("/module", func(m chi.Router) {
 		m.Mount("/", moduleRoutes)
 	})
@@ -229,6 +228,18 @@ func (s *Server) Register(r chi.Router) {
 		// Under /registry rather than /admin: an address is not a thing only the
 		// administration looks after, and this path sits beside the module's own
 		// /registry/access, which asks about the same word from the other direction.
+		// The resources this instance has given to modules, and the ones it is holding for
+		// nobody. Administrators only: a resource is a thing with a password, and the list is
+		// a page that says what exists.
+		authenticated.Route("/resources", func(resources chi.Router) {
+			resources.Get("/", s.handleListResources)
+			resources.Post("/", s.handleCreateResource)
+			resources.Get("/{resourceID}", s.handleGetResource)
+			resources.Delete("/{resourceID}", s.handleForgetResource)
+			resources.Post("/{resourceID}/release", s.handleReleaseResource)
+			resources.Post("/{resourceID}/destroy", s.handleDestroyResource)
+		})
+
 		authenticated.Route("/registry", func(registries chi.Router) {
 			registries.Get("/docker", s.handleListDockerRegistries)
 			registries.Get("/docker/{registryID}", s.handleGetDockerRegistry)

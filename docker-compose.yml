@@ -73,6 +73,13 @@ services:
       # Artifacts and build caches live in S3-compatible object storage, so a
       # runner on another machine sees the same files and nothing is lost when a
       # container is replaced.
+      # Seals what this instance stores as a credential: a module's registry password, a
+      # database's own address. Generate with: openssl rand -base64 32
+      #
+      # A default, so a development instance can store a credential without anyone having
+      # to think of it — and the worst possible value, because it is published here and
+      # anybody may use it. A real instance sets its own.
+      DOGIT_SECRET_KEY: ${DOGIT_SECRET_KEY:-1Itab+NNjo9WDzf/z18MX7JfNMbaMRvmOGslKzGS3CU=}
       DOGIT_S3_ENDPOINT: ${DOGIT_S3_ENDPOINT:-}
       DOGIT_S3_ACCESS_KEY: ${DOGIT_S3_ACCESS_KEY:-}
       DOGIT_S3_SECRET_KEY: ${DOGIT_S3_SECRET_KEY:-}

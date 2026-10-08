@@ -195,21 +195,43 @@ func (r *ResourceRepo) Free(ctx context.Context) ([]models.Resource, error) {
 
 // Taken tells whether an address is already ours.
 //
-// For a manual resource: an administrator who describes a database we already hold has either
-// forgotten that they wrote it down, or is describing the same one twice, and both are worth
-// saying rather than quietly adding a second copy that nobody knows is the twin of the first.
+// Read and opened, every one, and compared in the clear — and it has to be done that way.
+// Each address is sealed under a nonce of its own, so the same address sealed twice is two
+// different byte strings and no amount of SQL will find them equal. That is the property that
+// stops a reader of the table from telling that two modules were given the same password, and
+// it is paid for here: the table cannot be searched by address, so an administrator adding one
+// reads them all. The list is small and this happens once per resource.
+//
+// Said before the write rather than after: an address with a password in it is the only copy
+// there will be, and a row deleted over a duplicate has taken it with it.
 func (r *ResourceRepo) Taken(ctx context.Context, address string) (bool, error) {
-	sealed, err := r.s.sealAddress([]byte(address))
-	if err != nil {
-		return false, err
-	}
-	var count int
-	err = r.s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM resources WHERE address = $1`, sealed).Scan(&count)
+	rows, err := r.s.pool.Query(ctx, `SELECT address FROM resources`)
 	if err != nil {
 		return false, fmt.Errorf("look for a resource by its address: %w", err)
 	}
-	return count > 0, nil
+	defer rows.Close()
+
+	for rows.Next() {
+		var stored []byte
+		if err := rows.Scan(&stored); err != nil {
+			return false, fmt.Errorf("read a resource address: %w", err)
+		}
+		if len(stored) == 0 {
+			continue
+		}
+		opened, err := r.openAddress(stored)
+		if err != nil {
+			// An address this instance cannot open is one it cannot claim to be free, and
+			// saying "yes, free" about a resource whose contents are unknown is exactly the
+			// answer that leads to two records for one thing.
+			return false, fmt.Errorf("one of this instance's resources cannot be opened, so "+
+				"it cannot be said whether this address is already here: %w", err)
+		}
+		if opened == address {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Put writes a new resource, sealed, and free for somebody to be given.
@@ -228,12 +250,15 @@ func (r *ResourceRepo) Put(ctx context.Context, one models.Resource) (*models.Re
 	if err != nil {
 		return nil, err
 	}
-	_, err = r.s.pool.Exec(ctx, `
+	// Returned rather than echoed, so that the row the caller gets is the row that is there:
+	// the timestamps are the database's, and a caller that made them up would be told a
+	// resource was written before it was.
+	err = r.s.pool.QueryRow(ctx, `
 		INSERT INTO resources (id, kind, software, version, name, origin, address,
 			integration_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		one.ID, one.Kind, one.Software, one.Version, one.Name, one.Origin, sealed,
-		one.IntegrationID)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING created_at, updated_at`, one.ID, one.Kind, one.Software, one.Version,
+		one.Name, one.Origin, sealed, one.IntegrationID).Scan(&one.CreatedAt, &one.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("record the resource: %w", err)
 	}

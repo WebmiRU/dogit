@@ -141,6 +141,23 @@ func (s *Server) handleModuleRegister(w http.ResponseWriter, r *http.Request) {
 					"kind", integration.Kind, "error", err)
 			}
 
+			// And the same database as a resource, so that the thing this instance gave away
+			// is on a list of things this instance gave away, with its kind and its version on
+			// it. The address is written sealed, from the only copy there will ever be: this
+			// is the moment the module is told, and afterwards nobody has it — which is why
+			// adopting a database from before this table existed cannot fill that column in.
+			if _, err := s.store.Resources().Put(r.Context(), models.Resource{
+				Kind:          ResourceKindDatabase,
+				Software:      DatabaseSoftware,
+				Name:          provisioned.Name,
+				Origin:        models.OriginManaged,
+				Address:       provisioned.URL,
+				IntegrationID: &integration.ID,
+			}); err != nil {
+				s.log.Warn("the database was created but not recorded as a resource",
+					"kind", integration.Kind, "error", err)
+			}
+
 			database = map[string]any{
 				"url":  provisioned.URL,
 				"name": provisioned.Name,
@@ -468,11 +485,38 @@ func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	// The resource is given up before the module goes, and not by the cascade.
+	//
+	// The foreign key would null the link anyway, and that is exactly the wrong result: a
+	// resource with no holder and no history reads as one nobody ever asked for, while the
+	// truth is that a module was using it until this moment. Released on purpose it carries
+	// the date and the module it belonged to, and an administrator looking at it months later
+	// can answer whose it was — which is the question an orphan exists to answer.
+	//
+	// Nothing is destroyed. That is the rule the whole resources table is built on, and this
+	// is where it is kept: a module can be reinstalled and given the same database back, with
+	// its data in it.
+	orphaned := ""
+	if released, relErr := s.store.Resources().Release(r.Context(), integration.ID); relErr == nil {
+		orphaned = released.Coordinate()
+		if released.Name != "" {
+			orphaned += ` ("` + released.Name + `")`
+		}
+	} else if !errors.Is(relErr, store.ErrNotFound) {
+		s.log.Warn("the module's resource could not be given up and may still name it",
+			"kind", integration.Kind, "error", relErr)
+	}
+
 	if err := s.store.Integrations().Delete(r.Context(), integration.ID); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	s.log.Info("module removed", "kind", integration.Kind, "name", integration.Name)
+	s.log.Info("module removed", "kind", integration.Kind, "name", integration.Name,
+		"resource_left", orphaned)
+	if orphaned != "" {
+		s.log.Info("a resource was left behind and was not destroyed",
+			"kind", integration.Kind, "resource", orphaned)
+	}
 	s.publishInstanceEvent(r, models.EventModuleRemoved, integration, nil)
 	s.writeJSON(w, r, http.StatusNoContent, nil)
 }
@@ -2025,6 +2069,32 @@ func settingIsSecret(integration *models.Integration, key string) bool {
 	}
 	return false
 }
+
+// The kinds of resource this instance knows about.
+//
+// Named here rather than left to the rows: a kind is what a requirement is written against
+// and what a page groups by, and a kind that exists only because somebody typed it into a
+// column cannot be listed, checked, or offered in a form.
+const (
+	// ResourceKindDatabase is a SQL database. The only kind that is issued automatically,
+	// because it is the only one this instance knows how to create.
+	ResourceKindDatabase = "db"
+
+	// ResourceKindObjectStore is an S3-compatible object store.
+	//
+	// Declared and nothing else. It exists so that the kind is a thing the instance can
+	// name — a requirement of `s3:*` is answered, a page groups by it, and a manual resource
+	// of that kind can be written down. No S3 bucket is created, nothing negotiates with one,
+	// and no module is given one by this code: an object store is described by an
+	// administrator who already has it, and pretending otherwise would be a promise.
+	ResourceKindObjectStore = "s3"
+)
+
+// DatabaseSoftware is what the database this instance creates is: PostgreSQL, out of the one
+// cluster the core itself keeps its own tables in. Recorded on the resource rather than
+// looked up, so that what a resource says it is does not change under it when the cluster
+// underneath is upgraded.
+const DatabaseSoftware = "postgresql"
 
 func moduleDeclaresSetting(integration *models.Integration, key string) bool {
 	for _, spec := range integration.Capabilities.Settings {
