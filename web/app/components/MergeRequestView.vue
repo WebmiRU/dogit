@@ -110,6 +110,9 @@ const mergeState = computed(() => {
   if (request.state === 'closed') {
     return { label: 'Reopen', enabled: true, reason: '' }
   }
+  if (request.is_draft) {
+    return { label: 'Draft', enabled: false, reason: 'Mark this merge request ready before merging.' }
+  }
   if (request.has_conflicts) {
     // The button stays disabled because the conflict has to be answered first;
     // the resolver below is what makes it answerable without a local clone.
@@ -142,6 +145,19 @@ async function merge() {
     await load()
   } catch (caught) {
     actionError.value = caught instanceof ApiError ? caught.message : 'the request failed'
+  } finally {
+    working.value = ''
+  }
+}
+
+async function markReady() {
+  actionError.value = ''
+  working.value = 'ready'
+  try {
+    await api.put(`/projects/${project.value?.id}/merge_requests/${iid.value}`, { is_draft: false })
+    await load()
+  } catch (caught) {
+    actionError.value = caught instanceof ApiError ? caught.message : 'the request could not be marked ready'
   } finally {
     working.value = ''
   }
@@ -219,6 +235,7 @@ const patch = computed(() => {
         <div class="title">
           <h1 class="page-title">
             <span class="mono">!{{ mr.iid }}</span> {{ mr.title }}
+            <span v-if="mr.is_draft" class="badge state-draft">Draft</span>
             <span class="badge" :class="`state-${mr.state}`">{{ mr.state }}</span>
           </h1>
           <p class="page-subtitle">
@@ -231,13 +248,22 @@ const patch = computed(() => {
 
         <div class="repo-clone">
           <button
+            v-if="mr.is_draft && mr.state === 'opened'"
+            class="btn btn-primary"
+            type="button"
+            :disabled="!!working"
+            @click="markReady"
+          >
+            {{ working === 'ready' ? 'Updating…' : 'Mark ready' }}
+          </button>
+          <button
             class="btn btn-primary"
             type="button"
             :disabled="!!working || !mergeState.enabled"
             :title="mergeState.reason"
             @click="mr?.state === 'closed' ? changeState('opened') : merge()"
           >
-            {{ working ? 'Working…' : mergeState.label }}
+            {{ working && working !== 'ready' ? 'Working…' : mergeState.label }}
           </button>
           <button
             v-if="mr.state === 'opened'"

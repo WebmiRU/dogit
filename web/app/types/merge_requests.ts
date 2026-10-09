@@ -40,6 +40,13 @@ export interface MergeRequest {
   merge_commit_sha?: string
   sha: string
   squash: boolean
+  is_draft: boolean
+  assignee_id?: string | null
+  reviewer_id?: string | null
+  milestone?: string
+  labels?: string[]
+  remove_source_branch?: boolean
+  pipeline_required?: boolean
 
   created_at: string
   updated_at: string

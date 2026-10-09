@@ -351,7 +351,12 @@ func (s *Server) handleUpdateMergeRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var req mergeRequestRequest
+	var req struct {
+		Title       string `json:"title"`
+		Description *string `json:"description"`
+		Squash      *bool `json:"squash"`
+		IsDraft     *bool `json:"is_draft"`
+	}
 	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, r, err)
 		return
@@ -362,12 +367,12 @@ func (s *Server) handleUpdateMergeRequest(w http.ResponseWriter, r *http.Request
 		title := strings.TrimSpace(req.Title)
 		fields.Title = &title
 	}
-	if strings.TrimSpace(req.Description) != mr.Description {
-		description := req.Description
+	if req.Description != nil && *req.Description != mr.Description {
+		description := *req.Description
 		fields.Description = &description
 	}
-	squash := req.Squash
-	fields.Squash = &squash
+	fields.Squash = req.Squash
+	fields.IsDraft = req.IsDraft
 
 	updated, err := s.store.MergeRequests().Update(r.Context(), mr.ID, fields)
 	if err != nil {

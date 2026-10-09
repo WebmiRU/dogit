@@ -222,6 +222,7 @@ type UpdateFields struct {
 	Title       *string
 	Description *string
 	Squash      *bool
+	IsDraft     *bool
 }
 
 // Update edits an open merge request.
@@ -231,9 +232,10 @@ func (r *MergeRequestRepo) Update(ctx context.Context, id int64, f UpdateFields)
 			title = COALESCE($2, title),
 			description = COALESCE($3, description),
 			squash = COALESCE($4, squash),
+			is_draft = COALESCE($5, is_draft),
 			updated_at = now()
-		WHERE id = $1 AND state = $5`,
-		id, f.Title, f.Description, f.Squash, models.MRStateOpened)
+		WHERE id = $1 AND state = $6`,
+		id, f.Title, f.Description, f.Squash, f.IsDraft, models.MRStateOpened)
 	if err != nil {
 		return nil, fmt.Errorf("update the merge request: %w", err)
 	}
