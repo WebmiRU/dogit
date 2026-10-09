@@ -119,6 +119,12 @@ async function createProject() {
       </div>
     </div>
 
+    <nav class="project-index-tabs" aria-label="Project views">
+      <NuxtLink to="/projects" :class="{ active: !$route.query.type }">All</NuxtLink>
+      <NuxtLink to="/projects?type=project" :class="{ active: $route.query.type === 'project' }">Projects</NuxtLink>
+      <NuxtLink to="/projects?type=group" :class="{ active: $route.query.type === 'group' }">Groups</NuxtLink>
+    </nav>
+
     <PlacesTable />
 
   </div>

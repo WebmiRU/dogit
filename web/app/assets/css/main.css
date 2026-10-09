@@ -1832,3 +1832,14 @@ select:focus-visible {
     white-space: nowrap;
   }
 }
+
+
+/* Workspace-style project index and inset repository header. */
+.project-index-head { padding:22px 24px 20px; margin:0; border:1px solid var(--border); border-radius:10px 10px 0 0; background:linear-gradient(180deg,#1b1c20,#17181b); }
+.project-index-tabs { display:flex; align-items:center; gap:6px; padding:0 18px; margin-bottom:16px; border:1px solid var(--border); border-top:0; border-radius:0 0 9px 9px; background:#17181b; }
+.project-index-tabs a { display:inline-flex; padding:12px 10px 10px; border-bottom:2px solid transparent; color:var(--text-muted); font-size:13px; font-weight:550; }
+.project-index-tabs a:hover,.project-index-tabs a.active { color:var(--text); border-bottom-color:#9298a6; text-decoration:none; }
+.page-wide { padding-left:28px; padding-right:28px; }
+.project-page-head { margin:10px 8px 0; padding:22px 20px 24px; border:1px solid var(--border); border-radius:10px 10px 0 0; background:linear-gradient(180deg,#1b1c20,#151619); }
+.project-page-head + .repo-tabs { margin:0 8px 18px; padding:0 8px; border:1px solid var(--border); border-top:0; border-radius:0 0 9px 9px; background:#17181b; }
+@media(max-width:700px){.project-index-head{padding:18px 16px}.project-index-tabs{padding:0 10px}.page-wide{padding-left:12px;padding-right:12px}.project-page-head{margin-left:0;margin-right:0;padding:16px}.project-page-head + .repo-tabs{margin-left:0;margin-right:0}}
