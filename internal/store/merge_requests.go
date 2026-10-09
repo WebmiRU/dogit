@@ -27,6 +27,8 @@ func (r *Store) MergeRequests() *MergeRequestRepo { return &MergeRequestRepo{r: 
 const mergeRequestColumns = `
 	mr.id, mr.iid, mr.project_id, mr.author_id, mr.source_branch, mr.target_branch,
 	mr.title, mr.description, mr.state, mr.merge_commit_sha, mr.sha, mr.squash,
+	mr.is_draft, mr.assignee_id, mr.reviewer_id, mr.milestone, mr.labels,
+	mr.remove_source_branch, mr.pipeline_required,
 	mr.created_at, mr.updated_at, mr.merged_at, mr.closed_at, mr.merged_by_id`
 
 func (r *MergeRequestRepo) scan(row pgx.Row) (*models.MergeRequest, error) {
@@ -34,6 +36,8 @@ func (r *MergeRequestRepo) scan(row pgx.Row) (*models.MergeRequest, error) {
 	err := row.Scan(
 		&mr.ID, &mr.IID, &mr.ProjectID, &mr.AuthorID, &mr.SourceBranch, &mr.TargetBranch,
 		&mr.Title, &mr.Description, &mr.State, &mr.MergeCommitSHA, &mr.SHA, &mr.Squash,
+		&mr.IsDraft, &mr.AssigneeID, &mr.ReviewerID, &mr.Milestone, &mr.Labels,
+		&mr.RemoveSourceBranch, &mr.PipelineRequired,
 		&mr.CreatedAt, &mr.UpdatedAt, &mr.MergedAt, &mr.ClosedAt, &mr.MergedByID,
 	)
 	if err != nil {
@@ -51,6 +55,13 @@ type CreateParams struct {
 	Title        string
 	Description  string
 	Squash       bool
+	IsDraft      bool
+	AssigneeID   *uuid.UUID
+	ReviewerID   *uuid.UUID
+	Milestone    string
+	Labels       []string
+	RemoveSourceBranch bool
+	PipelineRequired bool
 	// SHA is the tip of the source branch at creation time. It is recorded so the
 	// request can show what it was opened against even after the branch moves.
 	SHA string
@@ -79,14 +90,20 @@ func (r *MergeRequestRepo) Create(ctx context.Context, p CreateParams) (*models.
 		return nil, fmt.Errorf("allocate the merge request number: %w", err)
 	}
 
+	if p.Labels == nil {
+		p.Labels = []string{}
+	}
+
 	var id int64
 	err = tx.QueryRow(ctx, `
 		INSERT INTO merge_requests
-			(project_id, iid, author_id, source_branch, target_branch, title, description, sha, squash)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			(project_id, iid, author_id, source_branch, target_branch, title, description, sha, squash,
+			 is_draft, assignee_id, reviewer_id, milestone, labels, remove_source_branch, pipeline_required)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING id`,
 		p.ProjectID, iid, p.AuthorID, p.SourceBranch, p.TargetBranch,
-		p.Title, p.Description, p.SHA, p.Squash,
+		p.Title, p.Description, p.SHA, p.Squash, p.IsDraft, p.AssigneeID, p.ReviewerID,
+		p.Milestone, p.Labels, p.RemoveSourceBranch, p.PipelineRequired,
 	).Scan(&id)
 	if err != nil {
 		if IsUniqueViolation(err) {

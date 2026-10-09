@@ -30,6 +30,13 @@ type MergeRequest struct {
 	MergedByID     *uuid.UUID        `json:"merged_by_id,omitempty"`
 	ClosedAt       *time.Time        `json:"closed_at,omitempty"`
 	Squash         bool              `json:"squash"`
+	IsDraft        bool              `json:"is_draft"`
+	AssigneeID     *uuid.UUID        `json:"assignee_id,omitempty"`
+	ReviewerID     *uuid.UUID        `json:"reviewer_id,omitempty"`
+	Milestone      string            `json:"milestone,omitempty"`
+	Labels         []string          `json:"labels"`
+	RemoveSourceBranch bool          `json:"remove_source_branch"`
+	PipelineRequired bool            `json:"pipeline_required"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
 
