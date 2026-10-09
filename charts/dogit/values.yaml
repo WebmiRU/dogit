@@ -1,0 +1,124 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  app:
+    repository: yudole/dogit
+    tag: dev-app
+    pullPolicy: Always
+  web:
+    repository: yudole/dogit
+    tag: dev-web
+    pullPolicy: Always
+
+app:
+  environment: production
+  logLevel: info
+  hookLogLevel: warn
+  # If empty, the Ingress host is used. Set this when exposing Dogit under another name.
+  publicHost: ""
+  sshHost: ""
+  allowedOrigins: []
+  existingSecret: ""
+  secretKeyKey: secret-key
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+database:
+  # For an external PostgreSQL server: disable postgresql and point this at an existing
+  # Secret containing the complete DSN under existingSecretKey. Keep credentials out of values.
+  existingSecret: ""
+  existingSecretKey: url
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 17-alpine
+    pullPolicy: IfNotPresent
+  auth:
+    username: dogit
+    database: dogit
+    # Optional existing Secret holding the password under passwordKey.
+    existingSecret: ""
+    passwordKey: password
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+web:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      memory: 256Mi
+
+ssh:
+  service:
+    # 2222 avoids clashing with a node's own sshd, common on k3s single-node installs.
+    # Set to 22 on clusters where the standard SSH port can be published.
+    type: LoadBalancer
+    port: 2222
+    nodePort: null
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    externalTrafficPolicy: Cluster
+    annotations: {}
+
+ingress:
+  enabled: false
+  # Works for both ingress-nginx and Traefik. Override for other controllers.
+  className: nginx
+  host: ""
+  additionalHosts: []
+  annotations: {}
+  tls:
+    enabled: false
+
+certManager:
+  # The chart creates an Issuer and Certificate. The install script installs cert-manager
+  # in its own release/namespace if the CRDs are not already present.
+  enabled: false
+  email: ""
+  server: https://acme-v02.api.letsencrypt.org/directory
+  issuerKind: Issuer
+  issuerName: ""
+  createIssuer: true
+  http01:
+    # Empty means use ingress.className. "class" is the legacy alternative for controllers
+    # that do not support spec.ingressClassName on solver Ingress resources.
+    ingressClassName: ""
+    class: ""
+
+objectStorage:
+  # Optional S3-compatible storage for shared artifacts/caches. If disabled, data lives on
+  # the application's persistent volume, which is suitable for a small/single-node install.
+  enabled: false
+  endpoint: ""
+  bucket: ""
+  region: us-east-1
+  prefix: dogit
+  existingSecret: ""
+  accessKeyKey: access-key
+  secretKeyKey: secret-key
