@@ -206,6 +206,101 @@ async function start() {
  */
 const openStage = ref<string | null>(null)
 
+// The row menu is teleported so the table's horizontal scroll container cannot clip it.
+const openActions = ref<number | null>(null)
+const downloadingLogs = ref<number | null>(null)
+const actionPanel = ref({ top: 0, left: 0, up: false })
+
+function jobsOf(run: ModulePipeline): PipelineStageJob[] {
+  return (run.stages ?? []).flatMap((stage) => stage.jobs ?? [])
+}
+
+function failedJobs(run: ModulePipeline): PipelineStageJob[] {
+  return jobsOf(run).filter((job) => job.status === 'failed')
+}
+
+function toggleActions(run: ModulePipeline, event: MouseEvent) {
+  if (openActions.value === run.iid) {
+    openActions.value = null
+    return
+  }
+
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const up = window.innerHeight - box.bottom < 190
+  actionPanel.value = {
+    top: up ? box.top - 6 : box.bottom + 6,
+    left: Math.max(8, Math.min(box.right - 210, window.innerWidth - 218)),
+    up,
+  }
+  openActions.value = run.iid
+}
+
+function closeActions() {
+  openActions.value = null
+}
+
+function onActionsPointerAway(event: PointerEvent) {
+  if (openActions.value === null) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.pipeline-actions-menu') || target?.closest('.pipeline-actions-trigger')) return
+  closeActions()
+}
+
+function onActionsKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeActions()
+}
+
+async function downloadLogs(run: ModulePipeline) {
+  closeActions()
+  const jobs = jobsOf(run)
+  if (!jobs.length) return
+
+  downloadingLogs.value = run.iid
+  try {
+    const sections = await Promise.all(jobs.map(async (job) => {
+      const response = await fetch(
+        rawApiUrl(`/projects/${apiRef.value}/pipelines/${run.iid}/jobs/${job.iid}/log`),
+        { credentials: 'include' },
+      )
+      const output = response.ok ? await response.text() : '(Log is not available yet.)'
+      return `===== ${job.name} · ${job.status} =====\n\n${output.trimEnd()}\n`
+    }))
+    const blob = new Blob([sections.join('\n')], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `pipeline-${run.iid}-logs.txt`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    notify(`Logs for pipeline #${run.iid} downloaded`, { type: 'success' })
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : 'could not download pipeline logs'
+    error.value = message
+    notify(message, { type: 'error', timer: 0 })
+  } finally {
+    downloadingLogs.value = null
+  }
+}
+
+async function retryFailed(run: ModulePipeline) {
+  closeActions()
+  const jobs = failedJobs(run)
+  if (!jobs.length) return
+
+  error.value = ''
+  try {
+    for (const job of jobs) {
+      await api.post(`/projects/${apiRef.value}/pipelines/${run.iid}/jobs/${job.iid}/retry`, {})
+    }
+    notify(`Retrying ${jobs.length} failed job${jobs.length === 1 ? '' : 's'} in pipeline #${run.iid}`, { type: 'success' })
+    await load(true)
+  } catch (caught) {
+    const message = caught instanceof ApiError ? caught.message : 'the jobs could not be retried'
+    error.value = message
+    notify(message, { type: 'error', timer: 0 })
+  }
+}
+
 function stageKey(run: ModulePipeline, name: string) {
   return `${run.iid}:${name}`
 }
@@ -310,6 +405,8 @@ onMounted(() => {
   // — or a different tab opened — does not silently show a different list.
   typing.value = view.value.search
   void load()
+  window.addEventListener('pointerdown', onActionsPointerAway, true)
+  window.addEventListener('keydown', onActionsKeydown)
   stopWatching = watchEvents({
     kinds: ['pipeline.created', 'pipeline.updated'],
     project: () => props.projectPath,
@@ -317,7 +414,11 @@ onMounted(() => {
   })
 })
 
-onBeforeUnmount(() => stopWatching?.())
+onBeforeUnmount(() => {
+  stopWatching?.()
+  window.removeEventListener('pointerdown', onActionsPointerAway, true)
+  window.removeEventListener('keydown', onActionsKeydown)
+})
 
 watch(() => props.projectPath, () => load())
 </script>
@@ -371,7 +472,9 @@ watch(() => props.projectPath, () => load())
       </div>
       <div class="toolbar">
       <label class="search-wrap">
-        <span class="search-icon" aria-hidden="true">⌕</span>
+        <span class="search-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
+        </span>
         <input
         v-model="typing"
         class="pipelines-filter"
@@ -448,18 +551,21 @@ watch(() => props.projectPath, () => load())
           <th class="col-status">Status</th>
           <th class="col-pipeline">Run details</th>
           <th class="col-by">Triggered by</th>
-          <th class="col-stages">Stages <span class="th-hint">· select a stage for jobs</span></th>
+          <th class="col-stages">Stages</th>
+          <th class="col-actions">Actions</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="run in pipelines" :key="run.iid">
           <td class="col-status">
             <NuxtLink :to="`/p/${projectPath}/-/pipelines/${run.iid}`" class="result-link">
-              <span class="badge badge-label" :class="statusClass[run.status] ?? 'badge-neutral'">
-                {{ statusText[run.status] }}
-              </span>
-              <span class="cell-line mono duration">
-                {{ isLive(run) ? 'Running now' : formatDuration(run.duration_ms) }}
+              <span class="result-primary">
+                <span class="badge badge-label" :class="statusClass[run.status] ?? 'badge-neutral'">
+                  {{ statusText[run.status] }}
+                </span>
+                <span class="mono duration">
+                  {{ isLive(run) ? 'Running now' : formatDuration(run.duration_ms) }}
+                </span>
               </span>
               <span class="cell-line muted small">{{ timeAgo(run.created_at) }}</span>
             </NuxtLink>
@@ -526,7 +632,28 @@ watch(() => props.projectPath, () => load())
                 :aria-label="stage.title"
                 :aria-expanded="openStage === stageKey(run, stage.name)"
                 @click="toggleStage(run, stage.name)"
-              />
+              >
+                <svg v-if="stage.status === 'success'" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="10" cy="10" r="8.25" />
+                  <path d="m6.2 10.1 2.5 2.5 5.1-5.2" />
+                </svg>
+                <svg v-else-if="stage.status === 'failed' || stage.status === 'canceled'" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="10" cy="10" r="8.25" />
+                  <path d="m7 7 6 6m0-6-6 6" />
+                </svg>
+                <svg v-else-if="stage.status === 'running'" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="10" cy="10" r="8.25" />
+                  <path d="M10 5.5v4.7l3.1 1.8" />
+                </svg>
+                <svg v-else-if="stage.status === 'pending'" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="10" cy="10" r="8.25" stroke-dasharray="2.2 2.2" />
+                  <path d="M10 6.2v4.1h3" />
+                </svg>
+                <svg v-else viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="10" cy="10" r="8.25" />
+                  <path d="M6.5 10h7" />
+                </svg>
+              </button>
 
               <!-- The stage's jobs. Kept out of the row because a pipeline of thirty
                    jobs would make the table unreadable; what a mark opens is the
@@ -553,6 +680,27 @@ watch(() => props.projectPath, () => load())
               </div>
             </div>
             <span v-else class="no-stages">No stage details</span>
+          </td>
+
+          <td class="col-actions">
+            <button
+              type="button"
+              class="pipeline-actions-trigger"
+              :aria-label="`Actions for pipeline #${run.iid}`"
+              :aria-expanded="openActions === run.iid"
+              aria-haspopup="menu"
+              :disabled="!jobsOf(run).length"
+              @click.stop="toggleActions(run, $event)"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M10 2.5v9" />
+                <path d="m6.5 8.5 3.5 3.5 3.5-3.5" />
+                <path d="M3.5 13.5v3h13v-3" />
+              </svg>
+              <svg class="action-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4 6 4 4 4-4" />
+              </svg>
+            </button>
           </td>
         </tr>
       </tbody>
@@ -587,7 +735,45 @@ watch(() => props.projectPath, () => load())
         Older
       </button>
     </div>
-  </section>
+  
+    <Teleport to="#teleports">
+      <div
+        v-if="openActions !== null"
+        class="pipeline-actions-menu"
+        :class="{ up: actionPanel.up }"
+        :style="{ top: `${actionPanel.top}px`, left: `${actionPanel.left}px` }"
+        role="menu"
+      >
+        <button
+          type="button"
+          role="menuitem"
+          :disabled="downloadingLogs === openActions"
+          @click="downloadLogs(pipelines.find(run => run.iid === openActions)!)"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5v9"/><path d="m6.5 8.5 3.5 3.5 3.5-3.5"/><path d="M3.5 13.5v3h13v-3"/></svg>
+          {{ downloadingLogs === openActions ? 'Preparing logs…' : 'Download logs' }}
+        </button>
+        <button
+          v-if="pipelines.some(run => run.iid === openActions && failedJobs(run).length > 0)"
+          type="button"
+          role="menuitem"
+          @click="retryFailed(pipelines.find(run => run.iid === openActions)!)"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6.5V3m0 3.5H7"/><path d="M4 6a7 7 0 1 1-1 6"/></svg>
+          Retry failed jobs
+        </button>
+        <NuxtLink
+          v-if="pipelines.some(run => run.iid === openActions)"
+          role="menuitem"
+          :to="`/p/${projectPath}/-/pipelines/${openActions}`"
+          @click="closeActions"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3.5h5.5V9"/><path d="m16 4-7 7"/><path d="M14 11v4.5H4.5V6H9"/></svg>
+          Open pipeline
+        </NuxtLink>
+      </div>
+    </Teleport>
+</section>
 </template>
 
 <style scoped>
@@ -1210,4 +1396,110 @@ td a:hover {
   .stage-mark, .pipeline-table tbody tr { transition: none; }
   .refreshing-dot { animation: none; }
 }
+
+/* Keep the component-scoped copy aligned with the shared Sass table. */
+.pipelines-page { width: 100%; max-width: none; margin: 0; min-width: 0; }
+.pipelines-page .pipeline-toolbar,
+.pipelines-page .pipeline-toolbar > .toolbar { width: 100%; max-width: none; box-sizing: border-box; }
+.pipeline-toolbar .search-wrap {
+  flex: 1 1 420px; min-width: 220px; max-width: none; height: 38px;
+  margin: 0; padding: 0; align-self: center; display: flex; align-items: center;
+}
+.pipeline-toolbar .search-wrap .pipelines-filter {
+  width: 100%; height: 38px; min-height: 38px; box-sizing: border-box;
+  margin: 0; padding: 8px 12px 8px 36px; line-height: 20px;
+}
+.pipeline-toolbar .search-wrap .search-icon {
+  left: 12px; top: 50%; width: 16px; height: 16px; display: grid;
+  place-items: center; transform: translateY(-50%); line-height: 1;
+}
+.pipeline-toolbar .search-wrap .search-icon svg {
+  display: block; width: 16px; height: 16px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.pipelines-page .pipeline-table td { vertical-align: middle; }
+.pipeline-table th.col-actions,
+.pipeline-table td.col-actions { width: 92px; min-width: 92px; text-align: right; white-space: nowrap; }
+.pipeline-table td.col-stages { width: 190px; min-width: 190px; vertical-align: middle; }
+.pipeline-table .result-primary { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-height: 24px; }
+.pipeline-table .result-link {
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
+  gap: 5px; min-height: 58px;
+}
+.pipeline-table .duration { margin: 0; color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pipeline-table .commit-title { max-width: min(46vw, 620px); }
+.pipeline-table .cell-link { min-height: 56px; align-items: center; }
+.pipeline-table .stages { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.pipeline-table .stage-mark {
+  display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 28px;
+  padding: 0; border: 0; border-radius: 5px; background: transparent;
+  color: var(--text-muted); cursor: pointer; transition: background .15s ease, transform .15s ease;
+}
+.pipeline-table .stage-mark::after { content: none; }
+.pipeline-table .stage-mark svg {
+  display: block; width: 20px; height: 20px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.pipeline-table .stage-mark.badge-green { color: #57c58a; }
+.pipeline-table .stage-mark.badge-danger { color: #ff6b70; }
+.pipeline-table .stage-mark.badge-warning { color: #e3b341; }
+.pipeline-table .stage-mark.badge-blue { color: #79b8ff; }
+.pipeline-table .stage-mark.badge-neutral { color: #8b949e; }
+.pipeline-table .stage-mark:hover { background: var(--accent-soft); transform: translateY(-1px); }
+.pipeline-table .stage-mark.open,
+.pipeline-table .stage-mark:focus-visible { background: var(--accent-soft); outline: 1px solid currentColor; outline-offset: -1px; }
+.pipeline-actions-trigger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  width: 66px; height: 34px; padding: 0 9px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg-inset); color: var(--text-muted); cursor: pointer;
+}
+.pipeline-actions-trigger svg {
+  display: block; width: 18px; height: 18px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.pipeline-actions-trigger .action-chevron { width: 13px; height: 13px; }
+.pipeline-actions-trigger:hover:not(:disabled),
+.pipeline-actions-trigger[aria-expanded="true"] {
+  border-color: var(--border-strong); background: var(--bg-subtle, rgba(255,255,255,.06)); color: var(--text);
+}
+.pipeline-actions-trigger:disabled { opacity: .4; cursor: not-allowed; }
+@media (max-width: 760px) {
+  .pipeline-toolbar .search-wrap { flex-basis: 100%; min-width: 0; }
+  .pipeline-table { min-width: 900px; }
+  .pipeline-table td.col-stages { min-width: 140px; width: 140px; }
+}
+@media (prefers-reduced-motion: reduce) { .pipeline-table .stage-mark { transition: none; } }
+
+
+/* Match the shared admin table exactly; only pipeline content remains local. */
+.pipelines-page .pipeline-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+  font-size: 13px;
+}
+.pipelines-page .pipeline-table thead { background: transparent; }
+.pipelines-page .pipeline-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  white-space: nowrap;
+}
+.pipelines-page .pipeline-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.pipelines-page .pipeline-table tbody tr:hover td {
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.03));
+}
+.pipelines-page .pipeline-table tbody tr:hover .commit-title { color: inherit; }
+
 </style>
