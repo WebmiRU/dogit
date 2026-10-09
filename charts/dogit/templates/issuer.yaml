@@ -1,0 +1,28 @@
+{{- if and .Values.ingress.enabled .Values.ingress.tls.enabled .Values.certManager.enabled .Values.certManager.createIssuer }}
+{{- if ne .Values.certManager.issuerKind "Issuer" }}
+{{- fail "certManager.createIssuer=true currently creates a namespaced Issuer; set certManager.issuerKind=Issuer or disable createIssuer to reference an existing ClusterIssuer" }}
+{{- end }}
+{{- $issuerName := default (printf "%s-letsencrypt" (include "dogit.fullname" .)) .Values.certManager.issuerName }}
+{{- $http01Class := default .Values.ingress.className .Values.certManager.http01.ingressClassName }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $issuerName | quote }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+spec:
+  acme:
+    email: {{ required "certManager.email is required for ACME certificate issuance" .Values.certManager.email | quote }}
+    server: {{ .Values.certManager.server | quote }}
+    privateKeySecretRef:
+      name: {{ printf "%s-acme-account" (include "dogit.fullname" .) | trunc 63 | trimSuffix "-" }}
+    solvers:
+      - http01:
+          ingress:
+            {{- if .Values.certManager.http01.class }}
+            class: {{ .Values.certManager.http01.class | quote }}
+            {{- else if $http01Class }}
+            ingressClassName: {{ $http01Class | quote }}
+            {{- end }}
+{{- end }}
