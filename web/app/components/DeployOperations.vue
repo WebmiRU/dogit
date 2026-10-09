@@ -565,7 +565,11 @@ async function loadPlan() {
  * one thing a reader opening the page is asking.
  */
 function lateProgress(operation: DeployOperation): Watching | null {
-  if (isCaught(operation) || operation.queued) return null
+  // Only for a card this page did not watch. Asking "is it caught" here would be asking
+  // "is it running", and that is true of every card under way — so the note the core kept
+  // would be thrown away on exactly the cards it was kept for, and a page opened during a
+  // rollout would be back to seven steps with nothing marked.
+  if (caught.value[operation.job_id] || operation.queued) return null
   const said = operation.progress
   if (!said || typeof said !== 'object') return null
 
