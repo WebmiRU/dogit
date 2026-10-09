@@ -1085,9 +1085,15 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 	// Once for the project when the run names no place at all: a build that is not on its
 	// way anywhere is still worth a line, and a page that cannot see it says so by saying
 	// nothing, which is not the same as having nothing to say.
-	publish := func(record map[string]any) {
+	//
+	// Which operation this is about, and which is not always the job that is speaking: the image
+	// is built by a job of its own, and its progress is part of the deployment it was built for.
+	// Published under the reporting job's own id it is a second operation as far as a page is
+	// concerned — a card of its own, beside the deployment's, for one push — and the page's rule
+	// is one card per operation.
+	publish := func(record map[string]any, operation int64) {
 		payload := map[string]any{
-			"job_id":  job.ID,
+			"job_id":  operation,
 			"phase":   phase,
 			"message": message,
 			"ready":   req.Ready,
@@ -1099,24 +1105,43 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 
 		// Written down as well as published, and for a different reader: the event reaches
 		// pages that are open, and the note reaches the ones that arrive later.
-		s.rememberDeployProgress(r.Context(), job.ID, payload)
+		s.rememberDeployProgress(r.Context(), operation, payload)
 
 		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, payload)
 	}
 
 	places := s.placesOfRun(r.Context(), project, job.PipelineID)
 	if len(places) == 0 {
-		publish(nil)
+		// A run that is not on its way anywhere has no operation to file this under, and the
+		// job that is doing the work is the operation: a build nobody asked to deploy is a thing
+		// of its own, and there is nothing else it could be filed under.
+		publish(nil, job.ID)
 	}
 	for _, place := range places {
 		record := map[string]any{"cluster": place.place}
 		if place.namespace != "" {
 			record["namespace"] = place.namespace
 		}
-		publish(record)
+		publish(record, whichOperation(job.ID, job.Deploy != nil, place))
 	}
 
 	s.writeJSON(w, r, http.StatusNoContent, nil)
+}
+
+// whichOperation says which deployment a line from this job belongs to.
+//
+// A run has more jobs than it has operations: the image is built by a job of its own and put
+// somewhere by another, and a page watching a place is watching deployments. Filed under the
+// reporting job's own id, a build is a second operation as far as that page is concerned — a
+// card of its own beside the deployment's, for one push.
+//
+// The job that is the deployment is always its own operation, whatever else the run holds: the
+// module speaks for it and nobody else can.
+func whichOperation(reporting int64, isDeployment bool, place aPlaceNamed) int64 {
+	if isDeployment || place.job == 0 {
+		return reporting
+	}
+	return place.job
 }
 
 // runStillHasWork is whether a run has a job left to do, in the sense that decides whether

@@ -141,6 +141,13 @@ func placeSwitchedOn(rows []map[string]json.RawMessage, place string) bool {
 type aPlaceNamed struct {
 	place     string
 	namespace string
+	// job is the run's deploy step for this place, which is the operation the work belongs to.
+	//
+	// Kept because a run has more jobs than it has operations: the image is built by one job and
+	// put somewhere by another, and both are about one deployment. A page that is watching a
+	// place asks about deployments, so a line about the build has to arrive as a line about the
+	// deployment the build was for — under the job that is one.
+	job int64
 }
 
 // placesOfRun is every place this run names a deployment for, ready to be named in an
@@ -197,6 +204,7 @@ func (s *Server) placesOfRun(ctx context.Context, project *models.Project,
 		named = append(named, aPlaceNamed{
 			place:     place,
 			namespace: placeNamespaceIn(rows, place),
+			job:       job.ID,
 		})
 	}
 	return named
