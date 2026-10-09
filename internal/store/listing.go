@@ -46,6 +46,7 @@ type Listing struct {
 	LatestPipelineAt *time.Time
 	OpenMergeRequests int
 	OpenIssues int
+	Forks int
 	// AccessLevel is what the reader may do here, in the words the rest of the
 	// instance uses for it.
 	AccessLevel int
