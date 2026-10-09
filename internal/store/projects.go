@@ -437,6 +437,33 @@ func (r *EventRepo) VisibleSince(ctx context.Context, userID uuid.UUID, projectI
 	return entries, rows.Err()
 }
 
+// LatestVisibleID is the newest event this user is allowed to see, or zero when there
+// is nothing visible to them.
+//
+// The visibility rule is repeated from VisibleSince rather than shared with it on purpose:
+// it is a predicate written twice in two files now, and the failure it would cause is a
+// connection told where the recent past begins. That answer has to be about what this
+// user may see, not what exists.
+func (r *EventRepo) LatestVisibleID(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID) (int64, error) {
+	var id int64
+	err := r.s.pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(e.id), 0)
+		FROM events e
+		LEFT JOIN projects p ON p.id = e.project_id
+		WHERE ($2::uuid IS NULL OR e.project_id = $2)
+		  AND (
+		      e.project_id IS NULL
+		      OR p.visibility <> 'private'
+		      OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = $1)
+		      OR EXISTS (SELECT 1 FROM project_roles pr WHERE pr.project_id = p.id AND pr.source_user_id = $1)
+		      OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = p.group_id AND gm.user_id = $1)
+		  )`, userID, projectID).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("latest visible event: %w", err)
+	}
+	return id, nil
+}
+
 // Since returns events with an ID greater than afterID, for internal consumers.
 func (r *EventRepo) Since(ctx context.Context, afterID int64, limit int) ([]models.Event, error) {
 	if limit <= 0 || limit > 500 {

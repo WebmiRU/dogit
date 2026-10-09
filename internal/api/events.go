@@ -41,6 +41,17 @@ const eventStreamPing = 15 * time.Second
 // is catching up to the present.
 const eventStreamCatchUpLimit = 200
 
+// eventStreamFreshJoinEvents is how much history a client joining with no cursor is given
+// before the live stream takes over.
+//
+// Zero is not "everything since the beginning" in any useful sense. A page reads the state
+// it is about to show over ordinary HTTP, and the browser keeps a half-minute of events in
+// memory to hand to components that subscribe late — so history older than that is
+// downloaded, parsed, and dropped. On this instance a fresh page load was pulling 8996
+// events and 3.9 MiB to keep none of them, which is the most expensive thing a reader of
+// the page could ask the server for and the least useful.
+const eventStreamFreshJoinEvents = 200
+
 // handleEventLive is the feed as a stream rather than a poll.
 //
 // The same events, the same cursor and the same visibility rules as the cursor
@@ -131,6 +142,27 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 	// both routes — published live, then read again as the tail catches up — is
 	// only sent once.
 	lastSent := after
+
+	// A cursor of zero says "I am joining", not "send me all of it".
+	//
+	// A client that reconnects with a real cursor is catching up on what it missed, and it
+	// must be given every one of those — that is what the cursor is for. A client that has
+	// no cursor has missed nothing; it simply has not been here before. Handing it the
+	// whole table means the first page anyone opens pays for all the deploys that ever ran,
+	// and then throws the lot away thirty seconds later. So it is given the tail, and from
+	// that point on the two cases are the same stream.
+	if after == 0 {
+		latest, err := s.store.Events().LatestVisibleID(r.Context(), user.ID, projectID)
+		if err != nil {
+			// Falling back to the old behaviour is the safe answer — a reader who gets too much
+			// has a slow page, a reader who gets too little has a page that lies — but it
+			// must not be quiet about it, because quiet is how 3.9 MiB looks like a fix.
+			s.log.Warn("event stream could not find the newest visible event, and is answering a joining client with all of it",
+				"error", err)
+		} else if skip := latest - eventStreamFreshJoinEvents; skip > 0 {
+			lastSent = skip
+		}
+	}
 
 	// What this connection did and when it ended, said once, on the way out.
 	//
@@ -311,6 +343,27 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 	}()
 
 	lastSent := after
+
+	// A cursor of zero says "I am joining", not "send me all of it".
+	//
+	// A client that reconnects with a real cursor is catching up on what it missed, and it
+	// must be given every one of those — that is what the cursor is for. A client that has
+	// no cursor has missed nothing; it simply has not been here before. Handing it the
+	// whole table means the first page anyone opens pays for all the deploys that ever ran,
+	// and then throws the lot away thirty seconds later. So it is given the tail, and from
+	// that point on the two cases are the same stream.
+	if after == 0 {
+		latest, err := s.store.Events().LatestVisibleID(r.Context(), user.ID, projectID)
+		if err != nil {
+			// Falling back to the old behaviour is the safe answer — a reader who gets too much
+			// has a slow page, a reader who gets too little has a page that lies — but it
+			// must not be quiet about it, because quiet is how 3.9 MiB looks like a fix.
+			s.log.Warn("event stream could not find the newest visible event, and is answering a joining client with all of it",
+				"error", err)
+		} else if skip := latest - eventStreamFreshJoinEvents; skip > 0 {
+			lastSent = skip
+		}
+	}
 
 	// Subscribed before the catch-up read and never after: an event published between
 	// the two would be in neither, and the cursor would move past it silently.
