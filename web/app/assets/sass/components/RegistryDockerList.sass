@@ -3,6 +3,19 @@
 // The element attribute that made this scoped is gone with it: global styles are
 // selected by name, so a name used here has to mean one thing across the site.
 
+.registry-new
+  display: inline-flex
+  align-items: center
+  gap: 7px
+  min-height: 38px
+  padding: 9px 14px
+  border-radius: 8px
+  white-space: nowrap
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .12)
+.registry-new-plus
+  font-size: 17px
+  line-height: 12px
+
 .images-table .name
   font-weight: 600
   color: var(--text)
@@ -18,12 +31,14 @@
   white-space: nowrap
   font-size: 11px
   color: var(--text-muted)
+.chip,
+.source
+  border-radius: 3px
 .chip
   display: inline-block
   margin-right: 4px
   padding: 1px 6px
   border: 1px solid var(--border)
-  border-radius: 3px
   background: var(--bg)
   font-size: 11px
   color: var(--text-muted)
@@ -32,7 +47,6 @@
   display: inline-block
   padding: 1px 7px
   border: 1px solid var(--border)
-  border-radius: 10px
   font-size: 11px
   white-space: nowrap
 .source-module
@@ -41,9 +55,6 @@
   color: var(--text)
 .source-written
   color: var(--text-muted)
-.row-actions
-  text-align: right
-  white-space: nowrap
 .muted
   color: var(--text-muted)
 .small

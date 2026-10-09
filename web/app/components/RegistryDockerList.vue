@@ -163,7 +163,8 @@ function labelOf(reg: DockerRegistry): string {
           down here.
         </p>
       </div>
-      <button class="btn btn-primary" type="button" @click="navigateTo('/registry/docker/new')">
+      <button class="btn btn-primary registry-new" type="button" @click="navigateTo('/registry/docker/new')">
+        <span class="registry-new-plus" aria-hidden="true">＋</span>
         New registry
       </button>
     </div>
@@ -191,7 +192,6 @@ function labelOf(reg: DockerRegistry): string {
             <th>Address</th>
             <th>Login</th>
             <th>How it is reached</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -232,14 +232,6 @@ function labelOf(reg: DockerRegistry): string {
             <td>
               <span v-if="switches(reg).length === 0" class="muted">—</span>
               <span v-for="said in switches(reg)" :key="said" class="chip">{{ said }}</span>
-            </td>
-            <td class="row-actions">
-              <!-- Nothing to edit on a module's registry: an Edit button here would lead to
-                   a form that cannot change anything, which is worse than no button. The
-                   name above leads where it is changed. -->
-              <NuxtLink v-if="!isModule(reg)" class="btn btn-small" :to="`/registry/docker/${reg.id}`">
-                Edit
-              </NuxtLink>
             </td>
           </tr>
         </tbody>
