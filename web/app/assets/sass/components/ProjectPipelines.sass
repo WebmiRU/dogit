@@ -608,3 +608,28 @@
   border: 0
   border-radius: 3px
   background: var(--bg-inset)
+
+
+/* Pipeline history follows the same flat toolbar/table boundary as other lists. */
+.pipelines-page .pipeline-toolbar
+  margin-bottom: 0
+  border: 0
+  border-bottom: 1px solid var(--border)
+  border-radius: 0
+  background: transparent
+
+.pipelines-page .pipeline-table-wrap
+  border: 0
+  border-bottom: 1px solid var(--border)
+  border-radius: 0
+  background: transparent
+
+.pipelines-page .pipelines-loading,
+.pipelines-page .pipelines-empty
+  border: 0
+  border-radius: 0
+  background: transparent
+  box-shadow: none
+
+.pipelines-page .pipelines-empty
+  border-bottom: 1px solid var(--border)
