@@ -1,0 +1,20 @@
+# Example configuration for manual Helm use after cert-manager has been installed.
+# Prefer bash scripts/helm-install.sh for an automatic first install.
+ingress:
+  enabled: true
+  className: nginx # or traefik
+  host: git.example.org
+  additionalHosts: []
+  tls:
+    enabled: true
+
+certManager:
+  enabled: true
+  email: admin@example.org
+  server: https://acme-v02.api.letsencrypt.org/directory
+  issuerKind: Issuer
+  issuerName: ""
+  createIssuer: true
+  http01:
+    ingressClassName: "" # defaults to ingress.className
+    class: ""
