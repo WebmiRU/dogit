@@ -49,6 +49,17 @@ func (m *phaseMemory) note(payload map[string]any, phase string, finished bool) 
 		m.lines[phase] = kept
 	}
 
+	m.stamp(payload)
+}
+
+// stamp writes what this memory currently knows onto a line.
+//
+// Not only from note, because two lines about one moment have to describe that moment the same
+// way. The closing of a phase and the phase that follows it are published back to back, and a
+// page that receives the first between them should not be told that nothing is under way —
+// which is what the closing would say if it were stamped before the next phase was added. The
+// state that is real is the state after both, and it goes on both.
+func (m *phaseMemory) stamp(payload map[string]any) {
 	payload["active_phases"] = append([]string(nil), m.open...)
 	payload["phase_history"] = phaseHistoryInOrder(m.lines, m.said, phaseOrder)
 }
