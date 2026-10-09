@@ -149,6 +149,10 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 			  AND ($4 = '' OR p.path ILIKE $4 ESCAPE '\'
 			                  OR p.name ILIKE $4 ESCAPE '\'
 			                  OR COALESCE(p.description, '') ILIKE $4 ESCAPE '\')
+			  AND ($5 NOT IN ('contributed', 'personal', 'member') OR
+			       ($5 = 'contributed' AND EXISTS (SELECT 1 FROM commits c JOIN users u ON lower(u.email) = lower(c.author_email) WHERE c.project_id = p.id AND u.id = $1)) OR
+			       ($5 = 'personal' AND p.group_id IS NULL AND EXISTS (SELECT 1 FROM project_roles pr WHERE pr.project_id = p.id AND pr.source_user_id = $1 AND pr.max_access_level >= 50)) OR
+			       ($5 = 'member' AND (EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $1) OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = p.group_id AND gm.user_id = $1) OR EXISTS (SELECT 1 FROM project_roles pr WHERE pr.project_id = p.id AND pr.source_user_id = $1))))
 
 			UNION ALL
 
@@ -260,6 +264,10 @@ func (s *Store) countVisible(ctx context.Context, userID uuid.UUID, q ListingQue
 			  AND ($3 = '' OR $3 = 'project')
 			  AND ($4 = '' OR p.path ILIKE $4 ESCAPE '\' OR p.name ILIKE $4 ESCAPE '\'
 			                  OR COALESCE(p.description, '') ILIKE $4 ESCAPE '\')
+			  AND ($5 NOT IN ('contributed', 'personal', 'member') OR
+			       ($5 = 'contributed' AND EXISTS (SELECT 1 FROM commits c JOIN users u ON lower(u.email) = lower(c.author_email) WHERE c.project_id = p.id AND u.id = $1)) OR
+			       ($5 = 'personal' AND p.group_id IS NULL AND EXISTS (SELECT 1 FROM project_roles pr WHERE pr.project_id = p.id AND pr.source_user_id = $1 AND pr.max_access_level >= 50)) OR
+			       ($5 = 'member' AND (EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $1) OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = p.group_id AND gm.user_id = $1) OR EXISTS (SELECT 1 FROM project_roles pr WHERE pr.project_id = p.id AND pr.source_user_id = $1))))
 
 			UNION ALL
 
