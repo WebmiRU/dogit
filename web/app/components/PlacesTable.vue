@@ -159,17 +159,21 @@ const visibilities = [
         <input v-model="typing" class="search" type="search" :placeholder="props.kind === 'group' ? 'Search groups' : 'Filter or search projects'" :aria-label="props.kind === 'group' ? 'Search groups' : 'Search projects'">
       </div>
 
-      <label class="places-sort">
-        <span class="sr-only">Sort projects</span>
-        <select :value="filters.sort" aria-label="Sort projects" @change="go({ sort: ($event.target as HTMLSelectElement).value as PlaceFilters['sort'] })">
-          <option value="name">Name</option>
-          <option value="created">Created date</option>
-          <option value="last_activity">Last activity</option>
-        </select>
-      </label>
-      <button class="places-sort-direction" type="button" :title="filters.direction === 'asc' ? 'Sort descending' : 'Sort ascending'" :aria-label="filters.direction === 'asc' ? 'Sort descending' : 'Sort ascending'" @click="go({ direction: filters.direction === 'asc' ? 'desc' : 'asc' })">
-        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" :class="{ descending: filters.direction === 'desc' }"><path d="M8 2v11M3.5 8.5 8 13l4.5-4.5" /></svg>
-      </button>
+      <div class="places-sort-control" role="group" aria-label="Sort projects">
+        <label class="places-sort">
+          <span class="sr-only">Sort by</span>
+          <select :value="filters.sort" aria-label="Sort projects" @change="go({ sort: ($event.target as HTMLSelectElement).value as PlaceFilters['sort'] })">
+            <option value="name">Name</option>
+            <option value="created">Created date</option>
+            <option value="last_activity">Last activity</option>
+          </select>
+        </label>
+        <button class="places-sort-direction" type="button" :title="filters.direction === 'asc' ? 'Currently ascending; switch to descending' : 'Currently descending; switch to ascending'" :aria-label="filters.direction === 'asc' ? 'Currently ascending; switch to descending' : 'Currently descending; switch to ascending'" @click="go({ direction: filters.direction === 'asc' ? 'desc' : 'asc' })">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" :class="{ descending: filters.direction === 'desc' }">
+            <path d="M5 2v12M2.5 4.5 5 2l2.5 2.5M11 14V2M8.5 11.5 11 14l2.5-2.5" />
+          </svg>
+        </button>
+      </div>
 
       <select
         v-if="filterVisibility"
@@ -245,8 +249,11 @@ const visibilities = [
                   <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M4 4h5a3 3 0 0 1 3 3v2M9 12l3 3 3-3" /></svg>{{ place.open_merge_requests }}
                 </NuxtLink>
                 <span v-else class="places-count muted" title="Open merge requests: 0"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M4 4h5a3 3 0 0 1 3 3v2M9 12l3 3 3-3" /></svg>0</span>
-                <span class="places-count" :class="{ muted: !place.open_issues }" :title="place.open_issues + ' open issues'">
-                  <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.4M8 11h.01" /></svg>{{ place.open_issues }}
+                <span class="places-count muted" title="Issues">
+                  <svg class="places-issue-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <rect x="2.25" y="2.25" width="11.5" height="11.5" rx="1.5" />
+                    <path d="M5 5.25h6M5 8h6M5 10.75h3.5" />
+                  </svg>0
                 </span>
               </div>
               <div class="places-last-commit" v-if="place.last_commit_at">

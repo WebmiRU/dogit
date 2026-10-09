@@ -1923,3 +1923,23 @@ select:focus-visible {
 
 .places-row-menu[open] { position:relative; z-index:80; }
 .places-row-menu-popover { position:absolute; top:calc(100% + 4px); right:0; z-index:90; }
+
+/* The direction toggle is physically attached to the sort field so it reads as one control. */
+.places-sort-control { display:inline-flex; flex:0 0 auto; align-items:stretch; }
+.places-sort-control .places-sort select { border-top-right-radius:0; border-bottom-right-radius:0; }
+.places-sort-control .places-sort { display:flex; }
+.places-sort-direction {
+  display:inline-flex; flex:0 0 36px; align-items:center; justify-content:center;
+  width:36px; height:38px; margin:0; padding:0;
+  border:1px solid var(--border-strong); border-left:0;
+  border-radius:0 6px 6px 0; background:#101113; color:var(--text-muted);
+  cursor:pointer; transition:background 120ms ease,color 120ms ease;
+}
+.places-sort-direction:hover { color:var(--text); background:#222328; }
+.places-sort-direction svg { display:block; width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.25; stroke-linecap:round; stroke-linejoin:round; transition:transform 120ms ease; }
+.places-sort-direction svg.descending { transform:rotate(180deg); }
+.places-sort-direction:focus-visible { position:relative; z-index:1; outline:2px solid #747986; outline-offset:1px; }
+.places-issue-icon { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.25; stroke-linecap:round; stroke-linejoin:round; }
+@media(max-width:700px) {
+  .places-sort-control { flex:0 0 auto; }
+}
