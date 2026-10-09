@@ -1,3 +1,9 @@
+<script setup lang="ts">
+import { ref } from 'vue'
+
+const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
+</script>
+
 <template>
   <div class="p2-preview" aria-label="Pipeline2 visual mockup">
     <header class="p2-topbar">
@@ -85,12 +91,12 @@
         </section>
 
         <nav class="p2-content-tabs" aria-label="Pipeline tabs">
-          <span class="active">Pipeline</span>
-          <span>Jobs <b>3</b></span>
-          <span>Tests <b>0</b></span>
+          <button type="button" :class="{ active: activeTab === 'pipeline' }" :aria-selected="activeTab === 'pipeline'" @click="activeTab = 'pipeline'">Pipeline</button>
+          <button type="button" :class="{ active: activeTab === 'jobs' }" :aria-selected="activeTab === 'jobs'" @click="activeTab = 'jobs'">Jobs <b>3</b></button>
+          <button type="button" :class="{ active: activeTab === 'tests' }" :aria-selected="activeTab === 'tests'" @click="activeTab = 'tests'">Tests <b>0</b></button>
         </nav>
 
-        <section class="p2-pipeline-canvas" aria-label="Pipeline jobs graph">
+        <section v-if="activeTab === 'pipeline'" class="p2-pipeline-canvas" aria-label="Pipeline jobs graph">
           <div class="p2-flow-line" aria-hidden="true"></div>
           <div class="p2-stage p2-build-stage">
             <div class="p2-stage-title">build</div>
@@ -119,6 +125,57 @@
             </div>
           </div>
         </section>
+
+        <section v-else-if="activeTab === 'jobs'" class="p2-jobs-table-wrap" aria-label="Pipeline jobs">
+          <div class="p2-jobs-table">
+            <div class="p2-jobs-table-head">
+              <span>Status</span><span>Job</span><span>Stage</span><span>Coverage</span><span aria-hidden="true"></span>
+            </div>
+            <div class="p2-job-row">
+              <div class="p2-job-status">
+                <span class="p2-passed"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8"/><path d="m5 9 2.5 2.5L13 6"/></svg>Passed</span>
+                <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 5v5l3 2"/></svg>00:01:01</span>
+                <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="12" rx="1"/><path d="M6 2v5M14 2v5M3 9h14"/></svg>1 week ago</span>
+              </div>
+              <div class="p2-job-name">
+                <a>#3044: deploy</a>
+                <div class="p2-job-tags"><span><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="m6.5 5.5 2 6m3-6-2 6M7 4h4"/></svg>dev</span><span><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="5" cy="9" r="2.5"/><path d="M7.5 9H16M10 6.5v5"/></svg>43716dfd</span></div>
+              </div>
+              <div class="p2-job-stage">deploy</div>
+              <div class="p2-job-coverage"></div>
+              <button class="p2-retry" type="button" aria-label="Retry deploy job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 17.5 6L20 9M4 15l2.5 3A7 7 0 0 0 18.4 15"/></svg></button>
+            </div>
+            <div class="p2-job-row">
+              <div class="p2-job-status">
+                <span class="p2-passed"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8"/><path d="m5 9 2.5 2.5L13 6"/></svg>Passed</span>
+                <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 5v5l3 2"/></svg>00:00:15</span>
+                <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="12" rx="1"/><path d="M6 2v5M14 2v5M3 9h14"/></svg>1 week ago</span>
+              </div>
+              <div class="p2-job-name">
+                <a>#3043: build-web</a>
+                <div class="p2-job-tags"><span><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="m6.5 5.5 2 6m3-6-2 6M7 4h4"/></svg>dev</span><span><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="5" cy="9" r="2.5"/><path d="M7.5 9H16M10 6.5v5"/></svg>43716dfd</span></div>
+              </div>
+              <div class="p2-job-stage">build</div>
+              <div class="p2-job-coverage"></div>
+              <button class="p2-retry" type="button" aria-label="Retry build-web job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 17.5 6L20 9M4 15l2.5 3A7 7 0 0 0 18.4 15"/></svg></button>
+            </div>
+            <div class="p2-job-row">
+              <div class="p2-job-status">
+                <span class="p2-passed"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8"/><path d="m5 9 2.5 2.5L13 6"/></svg>Passed</span>
+                <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 5v5l3 2"/></svg>00:01:39</span>
+                <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="12" rx="1"/><path d="M6 2v5M14 2v5M3 9h14"/></svg>1 week ago</span>
+              </div>
+              <div class="p2-job-name">
+                <a>#3042: build-php</a>
+                <div class="p2-job-tags"><span><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="m6.5 5.5 2 6m3-6-2 6M7 4h4"/></svg>dev</span><span><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="5" cy="9" r="2.5"/><path d="M7.5 9H16M10 6.5v5"/></svg>43716dfd</span></div>
+              </div>
+              <div class="p2-job-stage">build</div>
+              <div class="p2-job-coverage"></div>
+              <button class="p2-retry" type="button" aria-label="Retry build-php job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 17.5 6L20 9M4 15l2.5 3A7 7 0 0 0 18.4 15"/></svg></button>
+            </div>
+          </div>
+        </section>
+        <section v-else class="p2-tests-empty" aria-label="Pipeline tests"></section>
       </main>
     </div>
 
@@ -235,9 +292,10 @@
 .p2-meta-item { display: inline-flex; align-items: center; gap: 4px; margin-left: 1px; white-space: nowrap; }
 .p2-meta-item svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; }
 .p2-content-tabs { display: flex; flex: 0 0 43px; align-items: stretch; gap: 0; margin: 0 14px; border-bottom: 1px solid #303037; }
-.p2-content-tabs > span { display: inline-flex; align-items: center; gap: 5px; padding: 0 11px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: #ddddE3; font-size: 12px; font-weight: 600; white-space: nowrap; }
-.p2-content-tabs > span.active { border-bottom-color: #8c9fb7; color: #f4f4f6; }
-.p2-content-tabs b { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border-radius: 50%; background: #777780; color: #1b1b20; font-size: 10px; font-weight: 700; }
+.p2-content-tabs > button { display: inline-flex; align-items: center; gap: 5px; padding: 0 18px; margin: 0 0 -1px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #ddddE3; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.p2-content-tabs > button.active { border-bottom-color: #4f9de8; color: #f4f4f6; }
+.p2-content-tabs > button:focus-visible { outline: 2px solid #4f9de8; outline-offset: -3px; }
+.p2-content-tabs b { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #777780; color: #1b1b20; font: inherit; font-weight: 600; }
 .p2-pipeline-canvas { position: relative; flex: 1 1 auto; min-height: 300px; margin: 14px 14px 0; border-radius: 8px; background: #28282e; overflow: hidden; }
 .p2-stage { position: absolute; top: 20px; width: 222px; border-radius: 10px; padding: 5px 5px 6px; background: #39393f; }
 .p2-build-stage { left: 20px; }
@@ -246,8 +304,8 @@
 .p2-jobs { padding: 4px 5px; border-radius: 7px; background: #17171d; }
 .p2-job { display: flex; align-items: center; gap: 7px; min-width: 0; height: 38px; padding: 0 5px; color: #e2e2e7; font-size: 12px; }
 .p2-job-check { width: 22px; height: 22px; flex: 0 0 22px; fill: none; stroke: #42c77a; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.p2-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: #414148; color: #d0d0d6; }
-.p2-retry svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.p2-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 48px; height: 48px; flex: 0 0 48px; border: 0; border-radius: 12px; padding: 0; background: #414148; color: #f0f0f4; cursor: default; }
+.p2-retry svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .p2-flow-line { position: absolute; z-index: 0; top: 35px; left: 242px; width: 27px; height: 2px; background: #a5a5ad; }
 .p2-feedback-tab { position: fixed; top: 151px; right: 0; display: flex; align-items: center; justify-content: center; width: 25px; height: 22px; border: 1px solid #494950; border-right: 0; border-radius: 5px 0 0 5px; color: #dedee3; background: #34343a; }
 .p2-feedback-tab svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
@@ -283,4 +341,44 @@
   .p2-deploy-stage { left: 197px; }
   .p2-flow-line { left: 181px; width: 16px; }
 }
+
+/* Typography follows the supplied reference: 14px across the page with the explicit badge/title exceptions. */
+.p2-preview { font-size: 14px; }
+.p2-preview * { font-size: 14px; }
+.p2-run-summary h1 { font-size: 30px; }
+.p2-passed { font-size: 12px; }
+.p2-tag { font-size: 12px; }
+.p2-jobs-table-wrap { flex: 1 1 auto; min-height: 0; margin: 12px 24px 0; overflow: auto; }
+.p2-jobs-table { width: 100%; min-width: 820px; color: #e4e4e8; }
+.p2-jobs-table-head, .p2-job-row { display: grid; grid-template-columns: 220px minmax(350px, 2.5fr) minmax(170px, 1fr) minmax(120px, 1.4fr) 70px; align-items: center; }
+.p2-jobs-table-head { min-height: 72px; border-top: 1px solid #37373e; border-bottom: 1px solid #45454d; font-weight: 650; }
+.p2-jobs-table-head > span { padding: 0 22px; }
+.p2-jobs-table-head > span:last-child { padding: 0; }
+.p2-job-row { min-height: 136px; border-bottom: 1px solid #45454d; }
+.p2-job-status { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; padding: 12px 22px; }
+.p2-job-status .p2-passed { height: 36px; padding: 0 10px 0 5px; gap: 5px; font-size: 12px; }
+.p2-job-status .p2-passed svg { width: 26px; height: 26px; }
+.p2-job-detail { display: inline-flex; align-items: center; gap: 5px; color: #b5b5bf; line-height: 1.3; white-space: nowrap; }
+.p2-job-detail svg { width: 18px; height: 18px; flex: 0 0 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.p2-job-name { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 7px; padding: 12px 22px; }
+.p2-job-name a { color: #8fbee9; text-decoration: none; white-space: nowrap; }
+.p2-job-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.p2-job-tags > span { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 5px; background: #37373e; color: #bdbdc6; line-height: 1.3; white-space: nowrap; }
+.p2-job-tags svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.p2-job-stage { align-self: stretch; display: flex; align-items: flex-start; padding: 20px 22px; color: #bcbcc5; }
+.p2-job-coverage { align-self: stretch; }
+.p2-job-row .p2-retry { margin: 0 0 0 auto; align-self: center; }
+.p2-tests-empty { flex: 1 1 auto; min-height: 300px; margin: 12px 24px 0; border-top: 1px solid #37373e; }
+@media (max-width: 900px) {
+  .p2-jobs-table-wrap { margin-right: 14px; margin-left: 14px; }
+  .p2-jobs-table-head, .p2-job-row { grid-template-columns: 170px minmax(300px, 2.5fr) minmax(120px, 1fr) minmax(70px, 1fr) 60px; }
+  .p2-job-status, .p2-job-name, .p2-job-stage { padding-right: 12px; padding-left: 12px; }
+}
+@media (max-width: 620px) {
+  .p2-jobs-table-wrap { margin-right: 8px; margin-left: 8px; }
+  .p2-jobs-table-head, .p2-job-row { grid-template-columns: 150px minmax(260px, 2.5fr) minmax(100px, 1fr) minmax(50px, 1fr) 58px; }
+  .p2-job-status, .p2-job-name, .p2-job-stage { padding-right: 8px; padding-left: 8px; }
+  .p2-job-row .p2-retry { width: 44px; height: 44px; flex-basis: 44px; }
+}
+
 </style>
