@@ -349,6 +349,10 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		// another is about the same record, so the core says which.
 		lastRecord map[string]any
 	)
+	// Persist the set of phases still in progress alongside the last line. The latest
+	// line alone cannot tell a page opened mid-rollout that both rollout and retire
+	// may be active, or that a phase was explicitly closed.
+	activePhases := []string{}
 	reader := bufio.NewReader(response.Body)
 	// Пауза между строками от модуля, для разработки и демонстраций.
 	//
@@ -394,6 +398,29 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// field every time a module learns to say something. What belongs here
 				// is routing, not editing: who is allowed to hear it, and where it goes.
 				relayed := relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy")
+				if progress.Phase != "" {
+					if progress.Finished {
+						kept := activePhases[:0]
+						for _, phase := range activePhases {
+							if phase != progress.Phase {
+								kept = append(kept, phase)
+							}
+						}
+						activePhases = kept
+					} else {
+						found := false
+						for _, phase := range activePhases {
+							if phase == progress.Phase {
+								found = true
+								break
+							}
+						}
+						if !found {
+							activePhases = append(activePhases, progress.Phase)
+						}
+					}
+				}
+				relayed["active_phases"] = append([]string(nil), activePhases...)
 				s.rememberDeployProgress(ctx, job.ID, relayed)
 				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, relayed)
 
