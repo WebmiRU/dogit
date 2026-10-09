@@ -21,7 +21,7 @@ data:
   client.key: {{ required (printf "Secret %s is missing key client.key" $secretName) (index $existing.data "client.key") | quote }}
 {{- else }}
 {{- $ca := genCA (printf "%s-ca" $name) 3650 }}
-{{- $server := genSignedCert "dogit-buildkit" (list "localhost") (list "127.0.0.1") 3650 $ca }}
+{{- $server := genSignedCert "dogit-buildkit" (list "127.0.0.1") (list "localhost") 3650 $ca }}
 {{- $client := genSignedCert "dogit-runner" (list) (list) 3650 $ca }}
 apiVersion: v1
 kind: Secret
