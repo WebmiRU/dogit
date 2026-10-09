@@ -213,7 +213,13 @@ spec:
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
+            # RootlessKit needs mount operations while creating its user/mount namespaces.
+            # seccomp alone is not enough: the default AppArmor profile rejects the
+            # mount used to make / recursively shared ("failed to share mount point: /").
+            # Keep this unconfined only for buildkitd; the runner stays confined.
             seccompProfile:
+              type: Unconfined
+            appArmorProfile:
               type: Unconfined
           ports:
             - name: grpc
