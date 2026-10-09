@@ -1489,3 +1489,193 @@ label {
   padding: 3px 9px;
   font-size: 12px;
 }
+
+
+/* --- projects index --------------------------------------------------- */
+.project-index {
+  --project-line: color-mix(in srgb, var(--border) 82%, transparent);
+}
+
+.project-index-head {
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 22px;
+  padding: 4px 0 18px;
+  border-bottom: 1px solid var(--project-line);
+}
+
+.project-index-head .title {
+  min-width: 0;
+}
+
+.project-index-head .page-title {
+  margin: 0 0 7px;
+  font-size: clamp(24px, 2.2vw, 30px);
+  font-weight: 650;
+  letter-spacing: -0.7px;
+  line-height: 1.2;
+}
+
+.project-index-head .page-subtitle {
+  max-width: 680px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.project-create-button {
+  flex: 0 0 auto;
+  gap: 9px;
+  min-height: 38px;
+  padding: 7px 13px;
+  border-color: var(--border-strong);
+  border-radius: 7px;
+  background: #202125;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.project-create-button:hover:not(:disabled) {
+  background: #292a2f;
+  border-color: #62636c;
+  color: #fff;
+}
+
+.project-create-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.project-create-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border: 1px solid #55565f;
+  border-radius: 4px;
+  color: #d7d7dc;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.project-index .toolbar {
+  margin: 0 0 14px;
+  padding: 9px;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #17181b;
+}
+
+.project-index .toolbar .search {
+  min-height: 37px;
+  padding-left: 12px;
+  background: #101113;
+}
+
+.project-index .toolbar select {
+  min-height: 37px;
+  background: #101113;
+}
+
+.project-index .table {
+  border: 1px solid var(--project-line);
+  border-radius: 9px;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: #17181b;
+}
+
+.project-index .table th {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  background: #1d1e22;
+  color: #a7a8b0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+
+.project-index .table td {
+  padding-top: 15px;
+  padding-bottom: 15px;
+}
+
+.project-index .table tbody tr {
+  transition: background 120ms ease;
+}
+
+.project-index .table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.project-index .place-avatar {
+  flex-basis: 36px;
+  width: 36px;
+  height: 36px;
+  border-radius: 7px;
+  background: #24262b;
+  border-color: #383a42;
+}
+
+.project-index .place-avatar.is-group {
+  background: #20252c;
+  color: #c2ccd9;
+}
+
+.project-index .table .name {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.project-index .place-description {
+  line-height: 1.5;
+}
+
+.project-index .pager {
+  padding: 5px 2px;
+}
+
+.project-index .empty {
+  padding: 54px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 9px;
+  background: transparent;
+}
+
+.project-index .card[style] {
+  border-radius: 9px;
+}
+
+.project-index .card-header {
+  padding: 15px 18px;
+}
+
+.project-index .card-body {
+  padding: 20px;
+}
+
+@media (max-width: 700px) {
+  .project-index-head {
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .project-index-head .page-title {
+    font-size: 24px;
+  }
+
+  .project-create-button {
+    min-height: 35px;
+    padding: 6px 9px;
+  }
+
+  .project-index .table td {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+}

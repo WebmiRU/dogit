@@ -51,8 +51,8 @@ async function createProject() {
 </script>
 
 <template>
-  <div>
-    <div class="repo-head">
+  <div class="project-index">
+    <div class="repo-head project-index-head">
       <div class="title">
         <h1 class="page-title">Projects and groups</h1>
         <p class="page-subtitle">
@@ -60,7 +60,8 @@ async function createProject() {
           and its members can reach them.
         </p>
       </div>
-      <button class="btn btn-primary" type="button" @click="showForm = !showForm">
+      <button class="btn project-create-button" type="button" @click="showForm = !showForm">
+        <span class="project-create-icon" aria-hidden="true">{{ showForm ? '−' : '+' }}</span>
         {{ showForm ? 'Cancel' : 'New project' }}
       </button>
     </div>
