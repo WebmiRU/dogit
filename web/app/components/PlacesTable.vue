@@ -119,16 +119,15 @@ onMounted(() => {
 })
 
 watch(query, () => void load())
-onMounted(() => {
-  const closeMenus = (event: MouseEvent) => {
-    const target = event.target as HTMLElement | null
-    const clickedMenu = target?.closest<HTMLDetailsElement>('.places-row-menu')
-    document.querySelectorAll<HTMLDetailsElement>('.places-row-menu[open]').forEach((menu) => {
-      if (menu !== clickedMenu) menu.open = false
-    })
-  }
-  document.addEventListener('click', closeMenus)
-})
+const closeMenus = (event: MouseEvent) => {
+  const target = event.target as HTMLElement | null
+  const clickedMenu = target?.closest<HTMLDetailsElement>('.places-row-menu')
+  document.querySelectorAll<HTMLDetailsElement>('.places-row-menu[open]').forEach((menu) => {
+    if (menu !== clickedMenu) menu.open = false
+  })
+}
+
+onMounted(() => document.addEventListener('click', closeMenus))
 onBeforeUnmount(() => {
   clearTimeout(wait)
   document.removeEventListener('click', closeMenus)

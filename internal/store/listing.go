@@ -168,7 +168,8 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 			    OR EXISTS (SELECT 1 FROM group_roles r WHERE r.group_id = g.id AND r.source_user_id = $1)
 			    OR EXISTS (SELECT 1 FROM group_roles r WHERE r.group_id = g.id
 			               AND r.source_group_id IN (SELECT group_id FROM group_members WHERE user_id = $1)))
-			  AND ($2 = '' OR $2 = 'group')
+			  AND ($3 = '' OR $3 = 'group')
+			  AND ($2 = '' OR $2 = 'private')
 			  AND ($4 = '' OR g.full_path ILIKE $4 ESCAPE '\'
 			                  OR g.name ILIKE $4 ESCAPE '\'
 			                  OR COALESCE(g.description, '') ILIKE $4 ESCAPE '\')
@@ -283,7 +284,8 @@ func (s *Store) countVisible(ctx context.Context, userID uuid.UUID, q ListingQue
 			    OR EXISTS (SELECT 1 FROM group_roles r WHERE r.group_id = g.id AND r.source_user_id = $1)
 			    OR EXISTS (SELECT 1 FROM group_roles r WHERE r.group_id = g.id
 			               AND r.source_group_id IN (SELECT group_id FROM group_members WHERE user_id = $1)))
-			  AND ($2 = '' OR $2 = 'group')
+			  AND ($3 = '' OR $3 = 'group')
+			  AND ($2 = '' OR $2 = 'private')
 			  AND ($4 = '' OR g.full_path ILIKE $4 ESCAPE '\' OR g.name ILIKE $4 ESCAPE '\'
 			                  OR COALESCE(g.description, '') ILIKE $4 ESCAPE '\')
 		) visible`
