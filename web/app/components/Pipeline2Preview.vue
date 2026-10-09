@@ -296,7 +296,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 .p2-content-tabs > button { display: inline-flex; align-items: center; gap: 5px; padding: 0 18px; margin: 0 0 -1px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #ddddE3; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .p2-content-tabs > button.active { border-bottom-color: #4f9de8; color: #f4f4f6; }
 .p2-content-tabs > button:focus-visible { outline: 2px solid #4f9de8; outline-offset: -3px; }
-.p2-content-tabs b { display: inline-flex; flex: 0 0 18px; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: #85858d; color: #1b1b20; font: inherit; font-size: 12px; font-weight: 650; line-height: 18px; }
+.p2-content-tabs b { display: inline-flex; flex: 0 0 16px; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: #85858d; color: #1b1b20; font: inherit; font-size: 12px; font-weight: 650; line-height: 16px; }
 .p2-pipeline-canvas { position: relative; flex: 1 1 auto; min-height: 300px; margin: 14px 14px 0; border-radius: 8px; background: #28282e; overflow: hidden; }
 .p2-stage { position: absolute; top: 20px; width: 222px; border-radius: 10px; padding: 5px 5px 6px; background: #39393f; }
 .p2-build-stage { left: 20px; }
@@ -363,8 +363,8 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 .p2-jobs-table-head > span:last-child { padding: 0; }
 .p2-job-row { min-height: 68px; border-bottom: 1px solid #45454d; }
 .p2-job-status { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; padding: 5px 22px; }
-.p2-job-status .p2-passed { height: 20px; padding: 0 7px 0 3px; gap: 3px; font-size: 12px; line-height: 20px; }
-.p2-job-status .p2-passed svg { width: 15px; height: 15px; }
+.p2-job-status .p2-passed { height: 18px; padding: 0 5px 0 2px; gap: 3px; font-size: 12px; line-height: 18px; }
+.p2-job-status .p2-passed svg { width: 12px; height: 12px; }
 .p2-job-detail { display: inline-flex; align-items: center; gap: 5px; color: #b5b5bf; line-height: 1.3; white-space: nowrap; }
 .p2-job-detail svg { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .p2-job-name { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; padding: 5px 22px; }
