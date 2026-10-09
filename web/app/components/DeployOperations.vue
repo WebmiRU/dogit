@@ -177,7 +177,19 @@ const history = computed(() => cards.value)
 
 /** Everything the core sends in one answer is both halves; the sort is by what was begun. */
 function reorder(answer: OperationsAnswer) {
-  operations.value = [...(answer.active ?? []), ...(answer.finished ?? [])]
+  const next = [...(answer.active ?? []), ...(answer.finished ?? [])]
+  operations.value = next
+
+  // A reconnect is a fresh snapshot, not merely a request to redraw the list. Replace
+  // local progress for active operations with the core's durable snapshot; otherwise
+  // the card remains "caught" and keeps stale phases from before the socket dropped.
+  const restored = { ...watching.value }
+  for (const operation of next) {
+    if (!operation.running || !operation.progress) continue
+    const snapshot = lateProgress(operation)
+    if (snapshot) restored[operation.job_id] = snapshot
+  }
+  watching.value = restored
 }
 
 async function load() {
@@ -591,7 +603,7 @@ function lateProgress(operation: DeployOperation): Watching | null {
   // "is it running", and that is true of every card under way — so the note the core kept
   // would be thrown away on exactly the cards it was kept for, and a page opened during a
   // rollout would be back to seven steps with nothing marked.
-  if (caught.value[operation.job_id] || operation.queued) return null
+  if (operation.queued) return null
   const said = operation.progress
   if (!said || typeof said !== 'object') return null
 
