@@ -811,3 +811,32 @@
 @media (prefers-reduced-motion: reduce)
   .pipeline-table .stage-mark
     transition: none
+
+/* Match the shared admin table exactly; only pipeline content remains local. */
+.pipelines-page .pipeline-table
+  width: 100%
+  border-collapse: collapse
+  background: transparent
+  border: 0
+  border-radius: 0
+  overflow: visible
+  font-size: 13px
+.pipelines-page .pipeline-table thead
+  background: transparent
+.pipelines-page .pipeline-table th
+  text-align: left
+  font-weight: 600
+  font-size: 12px
+  color: var(--text-muted)
+  padding: 8px 12px
+  border-bottom: 1px solid var(--border)
+  background: transparent
+  white-space: nowrap
+.pipelines-page .pipeline-table td
+  padding: 9px 12px
+  border-bottom: 1px solid var(--border)
+  vertical-align: middle
+.pipelines-page .pipeline-table tbody tr:hover td
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.03))
+.pipelines-page .pipeline-table tbody tr:hover .commit-title
+  color: inherit
