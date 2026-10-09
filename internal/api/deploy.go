@@ -445,9 +445,14 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				for phase, line := range phaseHistory {
 					known := false
 					for _, key := range []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"} {
-						if phase == key { known = true; break }
+						if phase == key {
+							known = true
+							break
+						}
 					}
-					if !known { history = append(history, line) }
+					if !known {
+						history = append(history, line)
+					}
 				}
 				relayed["phase_history"] = history
 				s.rememberDeployProgress(ctx, job.ID, relayed)
