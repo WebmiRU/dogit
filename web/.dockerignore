@@ -1,0 +1,13 @@
+# What must not reach the image: the developer's own node_modules is a different set of
+# packages from the one npm ci installs, and copying it in is how a build picks up
+# something the lock file does not name.
+node_modules
+.nuxt
+.output
+dist
+
+# Not needed to build a static site, and either of them is a few megabytes of noise.
+.git
+*.log
+.env
+.env.*
