@@ -171,7 +171,7 @@
 }
 .p2-global-search svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; }
 .p2-global-search span { flex: 1; }
-.p2-global-search kbd { min-width: 17px; text-align: center; border-radius: 3px; background: #222228; color: #c5c5cc; font: 11px/17px inherit; }
+.p2-global-search kbd { min-width: 17px; text-align: center; border-radius: 3px; background: #222228; color: #c5c5cc; font: inherit; font-size: 11px; line-height: 17px; }
 .p2-top-actions { display: flex; align-items: center; gap: 14px; margin-left: auto; height: 100%; }
 .p2-top-icon { display: inline-flex; align-items: center; justify-content: center; width: 23px; height: 23px; border-radius: 7px; background: #424249; color: #eeeef2; font-size: 18px; line-height: 1; }
 .p2-top-counter { display: inline-flex; align-items: center; gap: 4px; color: #dbdbe1; font-size: 11px; }
@@ -213,7 +213,7 @@
 .p2-breadcrumbs { display: flex; align-items: center; flex: 0 0 42px; gap: 9px; padding: 0 14px; border-bottom: 1px solid #303037; color: #c1c1ca; font-size: 11px; white-space: nowrap; }
 .p2-breadcrumbs b { color: #8d8d98; font-weight: 400; }
 .p2-breadcrumbs strong { color: #efeff2; font-weight: 650; }
-.p2-run-summary { position: relative; flex: 0 0 auto; padding: 10px 14px 8px; }
+.p2-run-summary { position: relative; flex: 0 0 auto; padding: 14px 14px 8px; }
 .p2-run-summary h1 { margin: 0 0 4px; color: #f5f5f7; font-size: 27px; line-height: 1.3; font-weight: 650; letter-spacing: -0.5px; }
 .p2-delete { position: absolute; top: 17px; right: 14px; height: 28px; padding: 0 13px; border: 0; border-radius: 7px; color: #f3f3f5; background: #414148; font: inherit; font-size: 12px; }
 .p2-summary-status { display: flex; align-items: center; gap: 5px; color: #c7c7ce; font-size: 12px; line-height: 21px; }
