@@ -177,7 +177,22 @@ const history = computed(() => cards.value)
 
 /** Everything the core sends in one answer is both halves; the sort is by what was begun. */
 function reorder(answer: OperationsAnswer) {
-  const next = [...(answer.active ?? []), ...(answer.finished ?? [])]
+  // The operations endpoint can classify an operation as queued while its durable progress
+  // snapshot already contains phase updates. Progress is stronger evidence: a queued operation
+  // has not emitted deployment phases yet. Without reconciling these fields, a page refresh paints
+  // an in-flight deployment blue ("Waiting") and lateProgress() discards its active arrows.
+  const normalize = (operation: DeployOperation): DeployOperation => {
+    if (!operation.queued || !operation.progress || typeof operation.progress !== 'object') {
+      return operation
+    }
+    const progress = operation.progress
+    const active = Array.isArray(progress.active_phases)
+      ? progress.active_phases.some((phase) => typeof phase === 'string')
+      : typeof progress.phase === 'string' && progress.phase !== '' && progress.finished !== true
+    if (!active) return operation
+    return { ...operation, status: 'running', running: true, queued: false }
+  }
+  const next = [...(answer.active ?? []), ...(answer.finished ?? [])].map(normalize)
   operations.value = next
 
   // A reconnect is a fresh snapshot, not merely a request to redraw the list. Replace
