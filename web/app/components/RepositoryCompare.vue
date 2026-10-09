@@ -99,24 +99,26 @@ async function compare() {
       <div class="card-header"><strong>Compare</strong></div>
       <div class="card-body">
         <form class="compare-form" @submit.prevent="compare">
-          <div class="field">
-            <label for="compare-from">Compare</label>
-            <select id="compare-from" v-model="from">
-              <option v-for="ref in allRefs" :key="`from-${ref.name}`" :value="ref.name">
-                {{ ref.name }}
-              </option>
-            </select>
-          </div>
+          <div class="compare-ref-pair">
+            <div class="field">
+              <label for="compare-from">Compare</label>
+              <select id="compare-from" v-model="from">
+                <option v-for="ref in allRefs" :key="`from-${ref.name}`" :value="ref.name">
+                  {{ ref.name }}
+                </option>
+              </select>
+            </div>
 
-          <div class="arrow" aria-hidden="true">→</div>
+            <div class="arrow" aria-hidden="true">→</div>
 
-          <div class="field">
-            <label for="compare-to">with</label>
-            <select id="compare-to" v-model="to">
-              <option v-for="ref in allRefs" :key="`to-${ref.name}`" :value="ref.name">
-                {{ ref.name }}
-              </option>
-            </select>
+            <div class="field">
+              <label for="compare-to">with</label>
+              <select id="compare-to" v-model="to">
+                <option v-for="ref in allRefs" :key="`to-${ref.name}`" :value="ref.name">
+                  {{ ref.name }}
+                </option>
+              </select>
+            </div>
           </div>
 
           <button class="btn btn-primary" type="submit" :disabled="loading">
