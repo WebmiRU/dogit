@@ -126,6 +126,8 @@ watch(state, load)
 .mr-list-results { width:100%; box-sizing:border-box; }
 .mr-list-results .mr-body { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .mr-list-results .meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.mr-open { display:inline-flex; align-items:center; gap:8px; min-height:36px; margin:0 0 2px; padding:7px 12px; border-radius:5px; font-size:13px; font-weight:600; text-decoration:none; }
+.mr-open-icon { display:inline-grid; place-items:center; width:17px; height:17px; border:1px solid rgba(255,255,255,.25); border-radius:4px; font-size:15px; line-height:1; }
 .add { color:#3fb950; }
 .del { color:#f85149; }
 </style>

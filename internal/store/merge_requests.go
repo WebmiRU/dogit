@@ -184,6 +184,8 @@ func (r *MergeRequestRepo) List(ctx context.Context, f ListFilter) ([]*models.Me
 		if err := rows.Scan(
 			&mr.ID, &mr.IID, &mr.ProjectID, &mr.AuthorID, &mr.SourceBranch, &mr.TargetBranch,
 			&mr.Title, &mr.Description, &mr.State, &mr.MergeCommitSHA, &mr.SHA, &mr.Squash,
+			&mr.IsDraft, &mr.AssigneeID, &mr.ReviewerID, &mr.Milestone, &mr.Labels,
+			&mr.RemoveSourceBranch, &mr.PipelineRequired,
 			&mr.CreatedAt, &mr.UpdatedAt, &mr.MergedAt, &mr.ClosedAt, &mr.MergedByID,
 			&mr.AuthorName, &mr.AuthorUsername,
 			&project.ID, &project.Path, &project.Name, &project.Description,
