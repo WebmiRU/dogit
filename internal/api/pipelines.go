@@ -1103,16 +1103,10 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 			payload["deployment"] = record
 		}
 
-		// Written down as well as published, and for a different reader: the event reaches
-		// pages that are open, and the note reaches the ones that arrive later.
-		s.rememberDeployProgress(r.Context(), operation, payload)
-
-		// The phase this one ends, said before the one that ends it.
-		//
-		// Published and not written down: it is a fact about the moment the phase changed, and
-		// a note read an hour later must say what the job was doing at the end rather than
-		// which stage it was leaving behind. Kept before the new line so a page cannot have
-		// heard of the new phase and not the closing of the one it replaced.
+		// The phase this one ends, said and remembered before the one that ends it.
+		// The live event and the durable note must agree: otherwise a page already open
+		// sees the closing line, but a page opened after a refresh restores the previous
+		// phase as active forever.
 		if closed := s.phaseBefore(job.ID, phase); closed != "" && record != nil {
 			closing := map[string]any{
 				"job_id":     operation,
@@ -1121,9 +1115,13 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 				"finished":   true,
 				"deployment": record,
 			}
+			s.rememberDeployProgress(r.Context(), operation, closing)
 			s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, closing)
 		}
 
+		// Record the new phase only after its predecessor has been closed, then publish
+		// it. This ordering is shared by the live stream and the snapshot a refresh reads.
+		s.rememberDeployProgress(r.Context(), operation, payload)
 		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, payload)
 	}
 
