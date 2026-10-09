@@ -34,6 +34,7 @@ import type {
   TreeResponse,
 } from '~/types/repository'
 import type { MergeRequest } from '~/types/merge_requests'
+import Pipeline2Preview from '~/components/Pipeline2Preview.vue'
 
 interface ProjectResponse {
   project: ProjectSummary
