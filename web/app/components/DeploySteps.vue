@@ -266,7 +266,13 @@ const steps = computed<Step[]>(() => {
     // that says it succeeded. A blue dot and the word "Success" are two answers to one
     // question, and it is the blue one that is being read.
     else if (reachedAt > -1 && (position < reachedAt || (over && position === reachedAt))) state = 'done'
-    else if (over && position > reachedAt) state = anythingFailed ? 'skipped' : 'done'
+    // And what an operation never reached is drawn as not reached, not as done.
+    //
+    // `reachedAt` is -1 when nothing about this operation was ever heard, and every position is
+    // greater than -1, so an operation that reached nothing came out with every step ticked off —
+    // a refused deployment showing eight finished steps and nothing else wrong with it. A step
+    // that has not been reached has not been reached, whether or not the operation is over.
+    else if (over && reachedAt > -1 && position > reachedAt) state = anythingFailed ? 'skipped' : 'done'
 
     return {
       key: step.key,
