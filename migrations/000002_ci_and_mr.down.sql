@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS issue_notes;
+DROP TABLE IF EXISTS issues;
+DROP TABLE IF EXISTS deployments;
+DROP TABLE IF EXISTS environments;
+DROP TABLE IF EXISTS runners;
+DROP TABLE IF EXISTS artifacts;
+DROP TABLE IF EXISTS job_logs;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS pipelines;
+DROP TABLE IF EXISTS merge_request_notes;
+DROP TABLE IF EXISTS merge_requests;

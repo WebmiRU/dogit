@@ -1,0 +1,400 @@
+# Development stack: PostgreSQL, the dogit application (sshd + web), the CI
+# runner and a reverse proxy in front of both the web tier and the SSH port.
+#
+# Usage from the repository root:
+#
+#   docker compose up -d --build       start the stack
+#   docker compose exec app dogit user create --username alice --password secret123
+#   docker compose exec app dogit project create --path hello --owner alice
+#
+# Git over SSH is published on host port 2222 because the host already runs its own
+# sshd on 22 while developing. Clone URLs therefore carry a port; the
+# ~/.ssh/config snippet below removes the need to type it. In production, publish
+# 22 instead ("22:22") and the canonical URL is git@host:group/project.git.
+
+name: dogit
+
+services:
+  postgres:
+    image: postgres:19beta4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dogit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dogit}
+      POSTGRES_DB: ${POSTGRES_DB:-dogit}
+      # Deterministic collation keeps index ordering identical everywhere.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      # PostgreSQL 18+ images keep version-specific subdirectories under
+      # /var/lib/postgresql, so the mount must be at that level, not at "data".
+      - postgres-data:/var/lib/postgresql
+    ports:
+      # Exposed so psql can be run from the host during development.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dogit} -d ${POSTGRES_DB:-dogit}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DOGIT_ENV: ${DOGIT_ENV:-development}
+      DOGIT_LOG_LEVEL: ${DOGIT_LOG_LEVEL:-debug}
+      # Git hooks log to the pusher's terminal as "remote:" lines, so they stay
+      # quiet even when the server logs verbosely.
+      DOGIT_HOOK_LOG_LEVEL: ${DOGIT_HOOK_LOG_LEVEL:-warn}
+      DOGIT_DATABASE_URL: postgres://${POSTGRES_USER:-dogit}:${POSTGRES_PASSWORD:-dogit}@postgres:5432/${POSTGRES_DB:-dogit}?sslmode=disable
+      DOGIT_DATA_DIR: /data
+      DOGIT_REPO_DIR: /data/repos
+      DOGIT_ARTIFACT_DIR: /data/artifacts
+      DOGIT_HTTP_ADDR: ":8080"
+      DOGIT_DEPLOY_STEP_DELAY_MS: ${DOGIT_DEPLOY_STEP_DELAY_MS:-}
+      DOGIT_HOOK_BINARY: /usr/local/bin/dogit-hook
+      DOGIT_SSH_HOST: ${DOGIT_SSH_HOST:-localhost}
+      # Client-facing SSH port. It shows up in clone URLs because it is not 22
+      # during development; production publishes 22 and omits it.
+      DOGIT_SSH_PORT: ${DOGIT_SSH_PORT:-2222}
+      DOGIT_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      # The name this instance is reached by. Modules that need an address of
+      # their own build it from this, so the rule for what the registry is called
+      # lives in one place instead of in every deployment file.
+      DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
+      DOGIT_TLS_SERVER_NAME: ${DOGIT_TLS_SERVER_NAME:-}
+      DOGIT_GIT_BINARY: /usr/bin/git
+      # Artifacts and build caches live in S3-compatible object storage, so a
+      # runner on another machine sees the same files and nothing is lost when a
+      # container is replaced.
+      # Seals what this instance stores as a credential: a module's registry password, a
+      # database's own address. Generate with: openssl rand -base64 32
+      #
+      # A default, so a development instance can store a credential without anyone having
+      # to think of it — and the worst possible value, because it is published here and
+      # anybody may use it. A real instance sets its own.
+      DOGIT_SECRET_KEY: ${DOGIT_SECRET_KEY:-1Itab+NNjo9WDzf/z18MX7JfNMbaMRvmOGslKzGS3CU=}
+      DOGIT_S3_ENDPOINT: ${DOGIT_S3_ENDPOINT:-}
+      DOGIT_S3_ACCESS_KEY: ${DOGIT_S3_ACCESS_KEY:-}
+      DOGIT_S3_SECRET_KEY: ${DOGIT_S3_SECRET_KEY:-}
+      DOGIT_S3_BUCKET: ${DOGIT_S3_BUCKET:-}
+      DOGIT_S3_REGION: ${DOGIT_S3_REGION:-us-east-1}
+      DOGIT_OBJECTS_PREFIX: ${DOGIT_OBJECTS_PREFIX:-dogit}
+    volumes:
+      - dogit-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+      # Git over SSH. Host port 2222 during development, 22 in production.
+      - "2222:22"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+      routes:
+        condition: service_started
+    ports:
+      - "127.0.0.1:3000:80"
+    volumes:
+      - dogit-routes:/etc/nginx/dogit-modules:ro
+    environment:
+      # The SPA calls the API through the same origin, so no CORS is involved.
+      NUXT_PUBLIC_API_BASE: /api/v1
+
+  # Keeps the proxy's module configuration in step with what is installed.
+  #
+  # This is the same command Kubernetes would run to fill a ConfigMap, and neither
+  # knows which it is in: installing a module never means editing the web image or
+  # hand-writing nginx configuration.
+  routes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["dogit", "module", "routes", "--nginx", "--watch", "--output", "/etc/nginx/dogit-modules/modules.conf"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_DATABASE_URL: postgres://${POSTGRES_USER:-dogit}:${POSTGRES_PASSWORD:-dogit}@postgres:5432/${POSTGRES_DB:-dogit}?sslmode=disable
+      DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
+      DOGIT_TLS_SERVER_NAME: ${DOGIT_TLS_SERVER_NAME:-}
+      DOGIT_LOG_LEVEL: ${DOGIT_LOG_LEVEL:-info}
+    volumes:
+      - dogit-routes:/etc/nginx/dogit-modules
+
+  # The registry: an authorisation proxy in front of registry:2.
+  #
+  # Two services because they are two things. The proxy decides who may push what,
+  # and needs nothing but the core; the registry stores bytes and knows nothing
+  # about anybody. Splitting them is what lets the proxy be restarted or replaced
+  # without touching the images, and the images survive the proxy being down.
+  registry:
+    image: registry:2
+    restart: unless-stopped
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - dogit-registry:/var/lib/registry
+
+  module-registry:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-registry"]
+    depends_on:
+      app:
+        condition: service_healthy
+      registry:
+        condition: service_started
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-registry:8091
+      # The address a docker client uses. During development it is the published
+      # host port; in production it is the module's own name on 443, which is what
+      # the shared web server routes here.
+      DOGIT_MODULE_PUBLIC_URL: ${DOGIT_REGISTRY_PUBLIC_URL:-http://127.0.0.1:8091}
+      # The project's own page reads images from this module, so the module has to
+      # answer a browser on the instance's address. Named explicitly rather than
+      # left open: the answer is per project, and the credential is short.
+      DOGIT_MODULE_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      # The address image names are built with, written once at registration. It has
+      # to be an address a cluster can pull from and not only one a browser on this
+      # machine can reach: during development that is the machine's own address on the
+      # network, because a pod cannot reach a loopback. An operator changes it in the
+      # module's settings.
+      DOGIT_REGISTRY_PUBLIC_ADDRESS: ${DOGIT_REGISTRY_PUBLIC_URL:-http://127.0.0.1:8091}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_REGISTRY_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
+      REGISTRY_URL: http://registry:5000
+      REGISTRY_STORAGE_DIR: /var/lib/registry
+      # Published to the host during development. In production the module is
+      # reached through the shared web server on 80/443, under a name of its own.
+      DOGIT_MODULE_LISTEN: ":8091"
+    ports:
+      # On the loopback, for the browser and for docker on this machine.
+      - "127.0.0.1:8091:8091"
+      # And on this machine's address in the network, because a pod cannot reach a
+      # loopback: 127.0.0.1 inside a pod is that pod. An image name the cluster cannot
+      # pull is a deployment that rolls out and then sits at ImagePullBackOff, which
+      # looks like a broken cluster rather than a published port.
+      - "${DOGIT_REGISTRY_BIND:-192.168.1.103}:8091:8091"
+    volumes:
+      - dogit-registry:/var/lib/registry:ro
+
+  # A runner: claims jobs and builds images.
+  #
+  # It is a module rather than part of the core so that it can live on a machine
+  # the deployment knows nothing about — a virtual machine with a usable Docker,
+  # where building images is allowed. Nothing here depends on it being in the same
+  # compose file, which is the point.
+  module-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-runner"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-runner:8092
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_RUNNER_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
+      DOGIT_RUNNER_CONCURRENCY: ${DOGIT_RUNNER_CONCURRENCY:-1}
+      DOGIT_RUNNER_WORKSPACE: /data/work
+      # The volume that workspace is in and where that volume is mounted here, so that
+      # the job's own container can be given the same view: the daemon is the host's, so a
+      # path is not an answer about where this runner keeps its checkouts, and a volume
+      # mounted anywhere else is a checkout one level out of reach.
+      DOGIT_RUNNER_WORKSPACE_VOLUME: dogit-runner-work
+      DOGIT_RUNNER_WORKSPACE_MOUNT: /data
+      DOGIT_DOCKER_BINARY: /usr/bin/docker
+    # The socket's group, so the client inside the container is allowed to talk to
+    # it. Running as root is the other way and is how a build ends up able to do
+    # anything at all; a group id is the smallest thing that works.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    # The label, off, for the reason the runner service above gives: the host's Docker
+    # socket is labelled for containers rather than for the daemon's clients, and a
+    # container that mounts it cannot stat it. This is the service that builds, so it is
+    # the one that cannot do without.
+    security_opt:
+      - label=disable
+    volumes:
+      - dogit-runner-work:/data
+      # The socket, because this is the machine that runs the jobs. A runner without
+      # it would be a runner that cannot do anything.
+      # Mounted at /run/docker.sock rather than /var/run/docker.sock: inside the
+      # image /var/run is a symlink to ../run, and a file mounted through it lands
+      # somewhere the process never looks.
+      - /var/run/docker.sock:/run/docker.sock
+
+  # Notifications to Telegram.
+  #
+  # The token is in the environment rather than in this file, because a bot token
+  # in a repository is a bot token in every clone of it.
+  module-notify-telegram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-notify-telegram"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-notify-telegram:8093
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_NOTIFY_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
+      DOGIT_PUBLIC_URL: ${DOGIT_PUBLIC_URL:-}
+
+  # Deploys a project's built image onto a Kubernetes cluster.
+  #
+  # It is a module rather than part of the core because the core has no idea
+  # Kubernetes exists: the day something deploys to Nomad, or unpacks an archive over
+  # SSH, that is another module rather than another branch in the core.
+  #
+  # Clusters are configured in its own settings: a row per place, each either the
+  # contents of a kubeconfig or "this module runs inside that cluster and uses its own
+  # service account". Nothing to mount and nothing to point at a file, so the same
+  # settings work in every deployment.
+  module-deploy-kubernetes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-deploy-kubernetes"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-deploy-kubernetes:8094
+      DOGIT_MODULE_NAME: ${DOGIT_MODULE_DEPLOY_NAME:-kubernetes}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_DEPLOY_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
+    # A development convenience: a name for the machine this container runs on.
+    #
+    # A cluster reached at 127.0.0.1 is not reachable from inside a container, so a
+    # kubeconfig pasted in as-is points at the module's own empty network. Naming the
+    # host means an administrator can write the address that works rather than
+    # discovering the problem from a rollout that timed out.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # The credentials for this module's own database are handed over once, at
+      # registration, and never again — the core does not store a password. Keeping
+      # them here is the only way the history survives a restart, and a history that
+      # is empty after every restart is a history that cannot answer the one question
+      # anybody opens it for.
+      - module-deploy-state:/var/lib/dogit-deploy
+
+  # Reference implementation of the module protocol. It has no product
+  # behaviour: it exists to prove that registration, heartbeats and
+  # introspection work before the real modules are built.
+  module-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-cache-demo"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-demo:8090
+      DOGIT_MODULE_NAME: ${DOGIT_MODULE_DEMO_NAME:-demo}
+      # Instance token: created with "dogit module token create" and stored here.
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_DEMO_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
+      # What the module reports about the storage it uses. It is a directory of
+      # its own rather than the instance's, so its numbers mean something.
+      MODULE_CACHE_DIR: /data/cache
+    volumes:
+      - dogit-module-cache:/data
+    ports:
+      - "127.0.0.1:8090:8090"
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["dogit", "runner"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DOGIT_ENV: ${DOGIT_ENV:-development}
+      DOGIT_LOG_LEVEL: ${DOGIT_LOG_LEVEL:-debug}
+      DOGIT_DATABASE_URL: postgres://${POSTGRES_USER:-dogit}:${POSTGRES_PASSWORD:-dogit}@postgres:5432/${POSTGRES_DB:-dogit}?sslmode=disable
+      DOGIT_DATA_DIR: /data
+      DOGIT_REPO_DIR: /data/repos
+      DOGIT_ARTIFACT_DIR: /data/artifacts
+      DOGIT_RUNNER_CONCURRENCY: ${DOGIT_RUNNER_CONCURRENCY:-2}
+      DOGIT_S3_ENDPOINT: ${DOGIT_S3_ENDPOINT:-}
+      DOGIT_S3_ACCESS_KEY: ${DOGIT_S3_ACCESS_KEY:-}
+      DOGIT_S3_SECRET_KEY: ${DOGIT_S3_SECRET_KEY:-}
+      DOGIT_S3_BUCKET: ${DOGIT_S3_BUCKET:-}
+      DOGIT_S3_REGION: ${DOGIT_S3_REGION:-us-east-1}
+      DOGIT_OBJECTS_PREFIX: ${DOGIT_OBJECTS_PREFIX:-dogit}
+    # The host's Docker socket carries the label `container_var_run_t`, which denies the
+    # container itself: with SELinux enforcing, a service that mounts the socket cannot
+    # even stat it, and the failure is "permission denied" on a socket the service was
+    # given on purpose. Relabelling the socket to `docker_var_run_t` would be the narrower
+    # fix, but the daemon recreates that socket on every restart and the label goes with it,
+    # so the label has to be put back by something that runs after the daemon — a policy
+    # change on the host, which is not a thing a compose file may quietly do.
+    #
+    # Turning the label off for these two services is the smaller concession, and it is
+    # small: a container holding the Docker socket is already root on the host, whatever
+    # SELinux says about it, so confining it buys nothing that handing it the socket did
+    # not already give away.
+    security_opt:
+      - label=disable
+    volumes:
+      - dogit-data:/data
+      # Jobs run in containers; the runner needs access to the Docker socket,
+      # which is why it is a separate service and not part of "app".
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  # This module's own state: the credentials for the database the core handed it once.
+  module-deploy-state:
+  postgres-data:
+  dogit-data:
+  # The generated proxy configuration, shared between the writer and the reader.
+  dogit-routes:
+  # The demo module's cache. A volume of its own so that what it reports about
+  # disk usage is about something real.
+  dogit-module-cache:
+  # The images themselves, shared between the registry that writes them and the
+  # module that reports how much of the disk they take.
+  dogit-registry:
+  # Checkouts a runner makes. Its own volume, so that a runner can be replaced
+  # without losing the workspace it was in the middle of using.
+  #
+  # Named, rather than left to whatever the compose project is called: the job's own
+  # container is handed this volume by name, and a name that changes with the directory
+  # the compose file happens to sit in is a name that quietly stops matching.
+  dogit-runner-work:
+    name: dogit-runner-work
