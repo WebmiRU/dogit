@@ -86,6 +86,7 @@ watch(state, load)
           <span class="icon">⑂</span>
           <div class="mr-body">
             <NuxtLink class="name" :to="`/p/${projectPath}/-/merge_requests/${mr.iid}`">
+              <span v-if="mr.is_draft" class="mr-draft-prefix">Draft:</span>
               {{ mr.title }}
             </NuxtLink>
             <div class="meta">
@@ -128,6 +129,7 @@ watch(state, load)
 .mr-list-results .meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .mr-open { display:inline-flex; align-items:center; gap:8px; min-height:36px; margin:0 0 2px; padding:7px 12px; border-radius:5px; font-size:13px; font-weight:600; text-decoration:none; }
 .mr-open-icon { display:inline-grid; place-items:center; width:17px; height:17px; border:1px solid rgba(255,255,255,.25); border-radius:4px; font-size:15px; line-height:1; }
+.mr-draft-prefix { display:inline-flex; align-items:center; margin-right:5px; padding:1px 5px; border:1px solid var(--border-strong); border-radius:4px; color:var(--text-muted); font-size:10px; font-weight:600; text-transform:uppercase; vertical-align:middle; }
 .add { color:#3fb950; }
 .del { color:#f85149; }
 </style>

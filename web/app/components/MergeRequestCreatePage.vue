@@ -41,8 +41,18 @@ const diffsExpanded = ref(true)
 const filesPaneOpen = ref(true)
 const fileSearch = ref('')
 const visibleFiles = computed(() => {
+  const raw = fileSearch.value.trim()
+  if (!raw) return files.value
+  // Treat * as a path wildcard, so examples such as *.vue work like the diff
+  // viewer's file picker rather than searching for a literal asterisk.
+  const pattern = raw.split('*')
+    .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\const visibleFiles = computed(() => {
   const needle = fileSearch.value.trim().toLocaleLowerCase()
   return needle ? files.value.filter(file => file.path.toLocaleLowerCase().includes(needle)) : files.value
+})'))
+    .join('.*')
+  const matcher = new RegExp(pattern, 'i')
+  return files.value.filter(file => matcher.test(file.path))
 })
 const sourceCandidates = computed(() => branches.value.filter(branch => branch.name !== target.value))
 const targetCandidates = computed(() => branches.value.filter(branch => branch.name !== source.value))
