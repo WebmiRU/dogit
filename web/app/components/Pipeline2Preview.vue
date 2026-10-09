@@ -74,7 +74,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
           <button class="p2-delete" type="button">Delete</button>
           <h1>#562</h1>
           <div class="p2-summary-status">
-            <span class="p2-passed"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8"/><path d="m5 9 2.5 2.5L13 6"/></svg>Passed</span>
+            <span class="p2-passed">Passed</span>
             <span>Created 1 week ago by <strong>group-deploy-1</strong>, finished 1 week ago</span>
           </div>
           <div class="p2-commit-line">
@@ -134,7 +134,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
             </div>
             <div class="p2-job-row">
               <div class="p2-job-status">
-                <span class="p2-passed"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8"/><path d="m5 9 2.5 2.5L13 6"/></svg>Passed</span>
+                <span class="p2-passed">Passed</span>
                 <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 5v5l3 2"/></svg>00:01:01</span>
                 <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="12" rx="1"/><path d="M6 2v5M14 2v5M3 9h14"/></svg>1 week ago</span>
               </div>
@@ -148,7 +148,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
             </div>
             <div class="p2-job-row">
               <div class="p2-job-status">
-                <span class="p2-passed"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8"/><path d="m5 9 2.5 2.5L13 6"/></svg>Passed</span>
+                <span class="p2-passed">Passed</span>
                 <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 5v5l3 2"/></svg>00:00:15</span>
                 <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="12" rx="1"/><path d="M6 2v5M14 2v5M3 9h14"/></svg>1 week ago</span>
               </div>
@@ -162,7 +162,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
             </div>
             <div class="p2-job-row">
               <div class="p2-job-status">
-                <span class="p2-passed"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8"/><path d="m5 9 2.5 2.5L13 6"/></svg>Passed</span>
+                <span class="p2-passed">Passed</span>
                 <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 5v5l3 2"/></svg>00:01:39</span>
                 <span class="p2-job-detail"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="12" rx="1"/><path d="M6 2v5M14 2v5M3 9h14"/></svg>1 week ago</span>
               </div>
@@ -275,7 +275,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 .p2-delete { position: absolute; top: 17px; right: 14px; height: 28px; padding: 0 13px; border: 0; border-radius: 7px; color: #f3f3f5; background: #414148; font: inherit; font-size: 12px; }
 .p2-summary-status { display: flex; align-items: center; gap: 5px; color: #c7c7ce; font-size: 12px; line-height: 21px; }
 .p2-summary-status strong { color: #e8e8ed; font-weight: 650; }
-.p2-passed { display: inline-flex; align-items: center; gap: 4px; height: 21px; padding: 0 7px 0 4px; border-radius: 15px; background: #3d9a68; color: #092c19; font-size: 11px; }
+.p2-passed { display: inline-flex; align-items: center; height: 20px; padding: 2px 8px; border: 0; border-radius: 4px; background: #1d4227; color: #7ee29a; font-size: 12px; font-weight: 500; line-height: 1.4; white-space: nowrap; }
 .p2-passed svg { width: 16px; height: 16px; fill: #1f7047; stroke: #1b3529; stroke-width: 1; }
 .p2-passed svg path { fill: none; stroke: #153b2a; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .p2-commit-line, .p2-related-line { display: flex; align-items: center; gap: 7px; min-height: 20px; color: #c6c6ce; font-size: 12px; }
@@ -287,14 +287,15 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 .p2-related-line .p2-related-link { color: #78b6f3; text-decoration: none; cursor: pointer; }
 .p2-related-line .p2-related-link:hover { text-decoration: underline; }
 .p2-pipeline-meta { display: flex; align-items: center; gap: 5px; min-height: 25px; margin-top: 1px; color: #c7c7cf; font-size: 12px; }
-.p2-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 12px; font-size: 10px; line-height: 18px; }
-.p2-tag-green { color: #092918; background: #45ba82; }
-.p2-tag-blue { color: #102238; background: #67b7f4; }
+.p2-tag { display: inline-flex; align-items: center; height: 20px; padding: 2px 8px; border: 0; border-radius: 4px; font-size: 12px; font-weight: 500; line-height: 1.4; white-space: nowrap; }
+.p2-tag-green { color: #7ee29a; background: #1d4227; }
+.p2-tag-blue { color: var(--info, #8bbdff); background: #303136; }
 .p2-meta-item { display: inline-flex; align-items: center; gap: 4px; margin-left: 1px; white-space: nowrap; }
 .p2-meta-item svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; }
 .p2-content-tabs { display: flex; flex: 0 0 43px; align-items: stretch; gap: 0; margin: 0 14px; border-bottom: 1px solid #303037; }
-.p2-content-tabs > button { display: inline-flex; align-items: center; gap: 5px; padding: 0 18px; margin: 0 0 -1px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #ddddE3; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
-.p2-content-tabs > button.active { border-bottom-color: #4f9de8; color: #f4f4f6; }
+.p2-content-tabs > button { position: relative; display: inline-flex; align-items: center; gap: 5px; padding: 0 18px; margin: 0 0 -1px; border: 0 !important; border-radius: 0 !important; box-shadow: none !important; background: transparent; color: #ddddE3; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.p2-content-tabs > button.active { color: #f4f4f6; }
+.p2-content-tabs > button.active::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 3px; border-radius: 0; background: #4f9de8; pointer-events: none; }
 .p2-content-tabs > button:focus-visible { outline: 2px solid #4f9de8; outline-offset: -3px; }
 .p2-content-tabs b { display: inline-flex; flex: 0 0 16px; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: #85858d; color: #1b1b20; font: inherit; font-size: 12px; font-weight: 650; line-height: 16px; }
 .p2-pipeline-canvas { position: relative; flex: 1 1 auto; min-height: 300px; margin: 14px 14px 0; border-radius: 8px; background: #28282e; overflow: hidden; }
@@ -305,8 +306,8 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 .p2-jobs { padding: 4px 5px; border-radius: 7px; background: #17171d; }
 .p2-job { display: flex; align-items: center; gap: 7px; min-width: 0; height: 38px; padding: 0 5px; color: #e2e2e7; font-size: 12px; }
 .p2-job-check { width: 22px; height: 22px; flex: 0 0 22px; fill: none; stroke: #42c77a; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.p2-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 48px; height: 48px; flex: 0 0 48px; border: 0; border-radius: 12px; padding: 0; background: #414148; color: #f0f0f4; cursor: default; }
-.p2-retry svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.p2-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 32px; height: 32px; flex: 0 0 32px; border: 0; border-radius: 50%; padding: 0; background: #414148; color: #f0f0f4; cursor: default; }
+.p2-retry svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .p2-mini-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: #414148; color: #d0d0d6; }
 .p2-mini-retry svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .p2-flow-line { position: absolute; z-index: 0; top: 35px; left: 242px; width: 27px; height: 2px; background: #a5a5ad; }
@@ -370,7 +371,9 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 .p2-job-name { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; padding: 5px 22px; }
 .p2-job-name a { color: #8fbee9; text-decoration: none; white-space: nowrap; }
 .p2-job-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.p2-job-tags > span { display: inline-flex; align-items: center; gap: 4px; padding: 0 5px; border-radius: 4px; background: #37373e; color: #bdbdc6; line-height: 18px; white-space: nowrap; }
+.p2-job-tags > span { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 0; border-radius: 4px; background: #303136; color: #bfc9d4; font-size: 12px; line-height: 18px; white-space: nowrap; }
+.p2-job-tags > span:first-child { background: #303136; color: var(--info, #8bbdff); }
+.p2-job-tags > span:last-child { background: #262b36; color: var(--text-muted, #b6bdc8); }
 .p2-job-tags svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .p2-job-stage { align-self: stretch; display: flex; align-items: flex-start; padding: 9px 22px; color: #bcbcc5; }
 .p2-job-coverage { align-self: stretch; }
@@ -385,7 +388,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
   .p2-jobs-table-wrap { margin-right: 8px; margin-left: 8px; }
   .p2-jobs-table-head, .p2-job-row { grid-template-columns: 150px minmax(260px, 2.5fr) minmax(100px, 1fr) minmax(50px, 1fr) 58px; }
   .p2-job-status, .p2-job-name, .p2-job-stage { padding-right: 8px; padding-left: 8px; }
-  .p2-job-row .p2-retry { width: 44px; height: 44px; flex-basis: 44px; }
+  .p2-job-row .p2-retry { width: 30px; height: 30px; flex-basis: 30px; }
 }
 
 </style>
