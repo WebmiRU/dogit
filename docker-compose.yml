@@ -181,7 +181,7 @@ services:
       # network, because a pod cannot reach a loopback. An operator changes it in the
       # module's settings.
       DOGIT_REGISTRY_PUBLIC_ADDRESS: ${DOGIT_REGISTRY_PUBLIC_URL:-http://127.0.0.1:8091}
-      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_REGISTRY_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
       REGISTRY_URL: http://registry:5000
       REGISTRY_STORAGE_DIR: /var/lib/registry
       # Published to the host during development. In production the module is
@@ -216,7 +216,7 @@ services:
     environment:
       DOGIT_CORE_URL: http://app:8080
       DOGIT_MODULE_ENDPOINT: http://module-runner:8092
-      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_RUNNER_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
       DOGIT_RUNNER_CONCURRENCY: ${DOGIT_RUNNER_CONCURRENCY:-1}
       DOGIT_RUNNER_WORKSPACE: /data/work
       # The volume that workspace is in and where that volume is mounted here, so that
@@ -262,7 +262,7 @@ services:
     environment:
       DOGIT_CORE_URL: http://app:8080
       DOGIT_MODULE_ENDPOINT: http://module-notify-telegram:8093
-      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_NOTIFY_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       DOGIT_PUBLIC_HOST: ${DOGIT_PUBLIC_HOST:-localhost}
@@ -291,7 +291,7 @@ services:
       DOGIT_CORE_URL: http://app:8080
       DOGIT_MODULE_ENDPOINT: http://module-deploy-kubernetes:8094
       DOGIT_MODULE_NAME: ${DOGIT_MODULE_DEPLOY_NAME:-kubernetes}
-      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_DEPLOY_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
     # A development convenience: a name for the machine this container runs on.
     #
     # A cluster reached at 127.0.0.1 is not reachable from inside a container, so a
@@ -325,7 +325,7 @@ services:
       DOGIT_MODULE_ENDPOINT: http://module-demo:8090
       DOGIT_MODULE_NAME: ${DOGIT_MODULE_DEMO_NAME:-demo}
       # Instance token: created with "dogit module token create" and stored here.
-      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_TOKEN:-}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_DEMO_TOKEN:-${DOGIT_MODULE_TOKEN:-}}
       # What the module reports about the storage it uses. It is a directory of
       # its own rather than the instance's, so its numbers mean something.
       MODULE_CACHE_DIR: /data/cache
