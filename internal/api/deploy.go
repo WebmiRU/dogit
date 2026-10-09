@@ -349,25 +349,13 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		// another is about the same record, so the core says which.
 		lastRecord map[string]any
 	)
-	// The order phases are shown in when restoring a page that did not watch this run.
-	//
-	// A hint and not knowledge: this core deploys through whichever module a project names,
-	// and the phases below are the ones the kubernetes module happens to use. It is here to put
-	// the familiar ones in a sensible order, not to decide what a deployment went through —
-	// a phase it does not name is kept too, after these, in the order it was said. Written down
-	// once, because a second copy of a list of names is a list that will be edited in one place.
-	phaseOrder := []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"}
-
 	// Persist the set of phases still in progress alongside the last line. The latest
 	// line alone cannot tell a page opened mid-rollout that both rollout and retire
 	// may be active, or that a phase was explicitly closed.
-	activePhases := []string{}
-	// Keep the latest line for every phase as well. This lets a page opened mid-run
-	// restore the completed ticks without pretending it watched the earlier events.
-	phaseHistory := map[string]map[string]any{}
-	// Every phase this run has named, in the order it named them, kept whatever has since
-	// finished: the open set is pruned as phases close and cannot say what came before.
-	saidPhases := []string{}
+	// What a page opened mid-run needs to rebuild this deployment from: the phases still open
+	// and the last line of each. Shared with the other road a deployment's lines travel, so
+	// the two cannot describe the same moment differently.
+	memory := newPhaseMemory()
 	reader := bufio.NewReader(response.Body)
 	// Пауза между строками от модуля, для разработки и демонстраций.
 	//
@@ -413,44 +401,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// field every time a module learns to say something. What belongs here
 				// is routing, not editing: who is allowed to hear it, and where it goes.
 				relayed := relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy")
-				if progress.Phase != "" {
-					if _, named := phaseHistory[progress.Phase]; !named {
-						saidPhases = append(saidPhases, progress.Phase)
-					}
-					if progress.Finished {
-						kept := activePhases[:0]
-						for _, phase := range activePhases {
-							if phase != progress.Phase {
-								kept = append(kept, phase)
-							}
-						}
-						activePhases = kept
-					} else {
-						found := false
-						for _, phase := range activePhases {
-							if phase == progress.Phase {
-								found = true
-								break
-							}
-						}
-						if !found {
-							activePhases = append(activePhases, progress.Phase)
-						}
-					}
-				}
-				relayed["active_phases"] = append([]string(nil), activePhases...)
-				if progress.Phase != "" {
-					// Copy before adding phase_history below; retaining relayed itself would
-					// create a map cycle and make JSON encoding fail.
-					snapshot := make(map[string]any, len(relayed))
-					for key, value := range relayed {
-						snapshot[key] = value
-					}
-					delete(snapshot, "phase_history")
-					phaseHistory[progress.Phase] = snapshot
-				}
-				history := phaseHistoryInOrder(phaseHistory, saidPhases, phaseOrder)
-				relayed["phase_history"] = history
+				memory.note(relayed, progress.Phase, progress.Finished)
 				s.rememberDeployProgress(ctx, job.ID, relayed)
 				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, relayed)
 

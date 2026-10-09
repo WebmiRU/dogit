@@ -64,6 +64,15 @@ type Server struct {
 	// that reported, since a pipeline runs several at once and their phases are unrelated.
 	lastPhaseMu sync.Mutex
 	lastPhase   map[int64]string
+	// memory is what each reporting job's lines have said so far, kept so the snapshot this
+	// endpoint writes can carry the same account a module's own lines carry.
+	//
+	// Without it a page reloaded while the image was being built was handed a phase and a
+	// message and nothing else: no history to mark the earlier steps with, and no list of what
+	// is open, so the phase being built carried an arrow with nothing that could take it away.
+	// The same two fields a module's lines carry, written by the second road a deployment's
+	// lines travel.
+	memory map[int64]*phaseMemory
 }
 
 // phaseBefore says which phase a new one ends, and forgets it afterwards.
@@ -88,6 +97,19 @@ func (s *Server) phaseBefore(jobID int64, phase string) string {
 	return previous
 }
 
+// phasesOf is what this job's lines have said, and is the first one asked of.
+func (s *Server) phasesOf(jobID int64) *phaseMemory {
+	s.lastPhaseMu.Lock()
+	defer s.lastPhaseMu.Unlock()
+	if s.memory == nil {
+		s.memory = map[int64]*phaseMemory{}
+	}
+	if s.memory[jobID] == nil {
+		s.memory[jobID] = newPhaseMemory()
+	}
+	return s.memory[jobID]
+}
+
 // closePhases says which phase a finished job was in, and forgets it.
 //
 // Forgets as it reads: the only reason the phase was remembered is that a job which has ended
@@ -98,6 +120,7 @@ func (s *Server) closePhases(jobID int64) string {
 	defer s.lastPhaseMu.Unlock()
 	phase := s.lastPhase[jobID]
 	delete(s.lastPhase, jobID)
+	delete(s.memory, jobID)
 	return phase
 }
 
