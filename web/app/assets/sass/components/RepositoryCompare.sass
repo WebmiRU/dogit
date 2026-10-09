@@ -1,22 +1,41 @@
-// components/RepositoryCompare, out of its own stylesheet.
-//
-// The element attribute that made this scoped is gone with it: global styles are
-// selected by name, so a name used here has to mean one thing across the site.
-
+// Compare form and diff files.
 .compare-form
-  display: flex
-  align-items: flex-end
+  display: grid
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) auto
+  align-items: end
   gap: 12px
-  flex-wrap: wrap
+  width: 100%
+
 .compare-form .field
-  min-width: 200px
-.arrow
-  padding-bottom: 8px
-  color: var(--muted)
+  display: flex
+  flex-direction: column
+  min-width: 0
+  margin: 0
+
+.compare-form label
+  margin-bottom: 6px
+
+.compare-form select
+  width: 100%
+  min-height: 38px
+  box-sizing: border-box
+
+.compare-form > button
+  min-height: 38px
+  justify-content: center
+  white-space: nowrap
+
+.compare-form .arrow
+  padding-bottom: 9px
+  color: var(--text-muted)
+  line-height: 38px
+  text-align: center
+
 .diff-file + .diff-file
   margin-top: 16px
   border-top: 1px solid var(--border)
   padding-top: 12px
+
 .patch
   margin: 8px 0 0
   padding: 10px
@@ -25,7 +44,20 @@
   overflow-x: auto
   font: 12px/1.5 var(--mono)
   white-space: pre
+
 .add
   color: #3fb950
+
 .del
   color: #f85149
+
+@media (max-width: 700px)
+  .compare-form
+    grid-template-columns: minmax(0, 1fr)
+    gap: 10px
+
+  .compare-form .arrow
+    display: none
+
+  .compare-form > button
+    justify-self: start

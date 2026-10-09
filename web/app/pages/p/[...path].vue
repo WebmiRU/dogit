@@ -315,8 +315,8 @@ async function copyCloneUrl() {
             <div class="project-path">{{ project.path.split('/').slice(0, -1).join(' / ') || 'Projects' }}</div>
             <h1 class="page-title project-page-title">
               {{ project.name || project.path.split('/').pop() }}
-              <span class="badge" :class="`badge-${project.visibility}`">{{ project.visibility }}</span>
-              <span class="badge">{{ project.access_name }}</span>
+              <span class="badge badge-label" :class="`badge-${project.visibility}`">{{ project.visibility }}</span>
+              <span class="badge badge-label">{{ project.access_name }}</span>
             </h1>
             <p class="page-subtitle">{{ project.description || 'No description yet.' }}</p>
           </div>
