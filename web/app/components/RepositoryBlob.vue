@@ -84,7 +84,7 @@ const rawUrl = computed(() =>
 
 <template>
   <div class="card">
-    <div class="toolbar">
+    <div class="toolbar repository-toolbar">
       <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
 
       <div class="breadcrumbs">

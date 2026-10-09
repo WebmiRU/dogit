@@ -58,7 +58,7 @@ watch(() => props.sha, load)
       </div>
 
       <div class="card">
-        <div class="toolbar">
+        <div class="toolbar repository-toolbar">
           <strong>{{ diff.stats.files_changed }} files changed</strong>
           <span class="stat-add">+{{ diff.stats.additions }}</span>
           <span class="stat-del">−{{ diff.stats.deletions }}</span>
