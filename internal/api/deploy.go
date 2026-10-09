@@ -356,6 +356,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// and the last line of each. Shared with the other road a deployment's lines travel, so
 	// the two cannot describe the same moment differently.
 	memory := newPhaseMemory()
+	// The last line the module said, kept so the settled snapshot can be that line with its
+	// phases brought up to date rather than a fresh document with nothing else in it.
+	var lastRelayed map[string]any
 	reader := bufio.NewReader(response.Body)
 	// Пауза между строками от модуля, для разработки и демонстраций.
 	//
@@ -402,6 +405,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// is routing, not editing: who is allowed to hear it, and where it goes.
 				relayed := relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy")
 				memory.note(relayed, progress.Phase, progress.Finished)
+				lastRelayed = relayed
 				s.rememberDeployProgress(ctx, job.ID, relayed)
 				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, relayed)
 
@@ -414,6 +418,45 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		if readErr != nil {
 			break
 		}
+	}
+
+	// Whatever is still open when the module stops talking is finished, because it has stopped.
+	//
+	// A module closes a phase when the next one begins, which leaves the last one to be closed by
+	// whatever ends it. For a deployment that is the bare "finished" line it writes at the end —
+	// and that line names no phase, so it closes nothing, and the phase the deployment ended on
+	// stayed open in the snapshot for ever. A page opened afterwards read a completed deployment
+	// as still rolling out.
+	//
+	// Said here rather than by teaching the closing rule about a line with no phase in it: a line
+	// that names nothing has no phase to close, and asking it to close the one before it is a
+	// rule about what comes after rather than about what the line says.
+	for _, phase := range append([]string(nil), memory.open...) {
+		closing := map[string]any{
+			"job_id":   job.ID,
+			"phase":    phase,
+			"message":  "finished",
+			"finished": true,
+		}
+		// The place, taken from the last line the module said rather than from a record that is
+		// out of scope by now — and a closing with no place on it is dropped by every page that
+		// is watching one.
+		if lastRelayed != nil {
+			if where, ok := lastRelayed["deployment"]; ok {
+				closing["deployment"] = where
+			}
+		}
+		memory.note(closing, phase, true)
+		s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, closing)
+	}
+	// The snapshot a page reads after a refresh, written last so it is the settled one: the
+	// deployment's own last line, with what is open now rather than what was open when it was
+	// said. Re-stamped rather than replaced, because that line is what says what the deployment
+	// was and how it ended — a fresh document with only the phases in it describes no
+	// deployment at all.
+	if lastRelayed != nil && len(memory.open) == 0 {
+		memory.stamp(lastRelayed)
+		s.rememberDeployProgress(ctx, job.ID, lastRelayed)
 	}
 
 	if failed != "" {

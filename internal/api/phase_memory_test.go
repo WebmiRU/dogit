@@ -174,3 +174,39 @@ func TestAStoredSnapshotKeepsBothOfTwoOverlappingPhases(t *testing.T) {
 
 	assertOpen(t, done, "retire")
 }
+
+// Nothing is open once it has stopped, even the phase that was open when it did.
+//
+// A module closes a phase when the next one begins, which leaves the last to be closed by
+// whatever ends it. For a deployment that is the bare "finished" line it writes at the end — and
+// it names no phase, so it closes nothing. The phase a deployment ended on then stayed open in
+// the snapshot, and a page opened afterwards read a completed deployment as still rolling out.
+//
+// This is the state the closing loop in the handler produces, and it is the state a page reads.
+func TestNothingIsOpenAfterTheStreamEnds(t *testing.T) {
+	memory := newPhaseMemory()
+
+	memory.note(lineOf("rollout", "3 of 3 running the new image"), "rollout", false)
+
+	// The last line a deployment says: done, and naming no phase at all.
+	settled := lineOf("", "finished")
+	settled["job_id"] = 9
+	memory.note(settled, "", false)
+
+	// Nothing has closed it yet, which is the bug: it is still open with the module finished.
+	assertOpen(t, settled, "rollout")
+
+	for _, phase := range append([]string(nil), memory.open...) {
+		memory.note(lineOf(phase, "finished"), phase, true)
+	}
+	memory.stamp(settled)
+
+	assertOpen(t, settled)
+
+	// And the closing says what it closed, so the history explains why the arrow went.
+	history, _ := settled["phase_history"].([]map[string]any)
+	last := history[len(history)-1]
+	if last["phase"] != "rollout" || last["message"] != "finished" {
+		t.Errorf("the last line of the history is %v, want the closing of rollout", last)
+	}
+}
