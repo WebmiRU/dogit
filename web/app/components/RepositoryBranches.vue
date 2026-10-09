@@ -69,7 +69,7 @@ async function remove(name: string) {
       <div v-else-if="branches.length === 0" class="empty">
         No branch matches “{{ filter }}”.
       </div>
-      <div class="repository-table-wrap">
+      <div v-else class="repository-table-wrap">
         <table class="admin-table repository-data-table branches-table">
           <thead><tr><th>Branch</th><th>Last commit</th><th>Updated</th><th class="numeric">Actions</th></tr></thead>
           <tbody>

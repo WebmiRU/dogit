@@ -172,7 +172,7 @@ async function remove(name: string) {
         No tags yet. A tag is created from the API; nothing in this interface makes one yet.
       </div>
       <div v-else-if="tags.length === 0" class="empty">No tag matches “{{ filter }}”.</div>
-      <div class="repository-table-wrap">
+      <div v-else class="repository-table-wrap">
         <table class="admin-table repository-data-table tag-list">
           <thead><tr><th>Name</th><th>Commit</th><th>Created</th><th class="numeric">Actions</th></tr></thead>
           <tbody>
