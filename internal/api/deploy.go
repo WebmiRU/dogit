@@ -425,7 +425,14 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				}
 				relayed["active_phases"] = append([]string(nil), activePhases...)
 				if progress.Phase != "" {
-					phaseHistory[progress.Phase] = relayed
+					// Copy before adding phase_history below; retaining relayed itself would
+					// create a map cycle and make JSON encoding fail.
+					snapshot := make(map[string]any, len(relayed))
+					for key, value := range relayed {
+						snapshot[key] = value
+					}
+					delete(snapshot, "phase_history")
+					phaseHistory[progress.Phase] = snapshot
 				}
 				history := make([]map[string]any, 0, len(phaseHistory))
 				for _, phase := range []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"} {
