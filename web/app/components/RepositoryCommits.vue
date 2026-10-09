@@ -39,7 +39,7 @@ const commits = computed<CommitInfo[]>(() => response.value?.commits ?? [])
 
 <template>
   <div class="card">
-    <div class="toolbar">
+    <div class="toolbar repository-toolbar">
       <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
       <div class="spacer" />
       <span v-if="response" class="muted">{{ response.total }} commits</span>
@@ -48,21 +48,23 @@ const commits = computed<CommitInfo[]>(() => response.value?.commits ?? [])
     <div v-if="loading" class="spinner">Loading commits…</div>
     <div v-else-if="loadError" class="alert alert-error" style="margin: 16px">{{ loadError }}</div>
     <div v-else-if="commits.length === 0" class="empty">No commits on this branch yet.</div>
-    <ul v-else class="commit-list">
-      <li v-for="commit in commits" :key="commit.sha">
-        <div class="msg">
-          <NuxtLink :to="`/p/${projectPath}/-/commit/${commit.sha}`">
-            {{ commit.subject }}
-          </NuxtLink>
-          <div class="sub">
-            {{ commit.author_name }} committed {{ timeAgo(commit.timestamp) }}
-          </div>
-        </div>
-        <div class="sub mono">{{ commit.sha }}</div>
-      </li>
-    </ul>
+    <div v-else class="repository-table-wrap">
+      <table class="admin-table repository-data-table commits-table">
+        <thead>
+          <tr><th>Commit</th><th>Author</th><th>Committed</th><th>SHA</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="commit in commits" :key="commit.sha">
+            <td><NuxtLink :to="`/p/${projectPath}/-/commit/${commit.sha}`">{{ commit.subject }}</NuxtLink></td>
+            <td class="muted">{{ commit.author_name }}</td>
+            <td class="muted small">{{ timeAgo(commit.timestamp) }}</td>
+            <td class="mono small">{{ commit.sha.slice(0, 10) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
-    <div v-if="response" class="toolbar" style="border-top: 1px solid var(--border); border-bottom: none">
+    <div v-if="response" class="toolbar repository-toolbar repository-pager">
       <button class="btn" type="button" :disabled="page === 1" @click="page -= 1">Newer</button>
       <span class="muted">Page {{ response.page }}</span>
       <button class="btn" type="button" :disabled="!response.has_more" @click="page += 1">Older</button>
