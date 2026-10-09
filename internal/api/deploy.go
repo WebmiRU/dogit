@@ -353,6 +353,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// line alone cannot tell a page opened mid-rollout that both rollout and retire
 	// may be active, or that a phase was explicitly closed.
 	activePhases := []string{}
+	// Keep the latest line for every phase as well. This lets a page opened mid-run
+	// restore the completed ticks without pretending it watched the earlier events.
+	phaseHistory := map[string]map[string]any{}
 	reader := bufio.NewReader(response.Body)
 	// Пауза между строками от модуля, для разработки и демонстраций.
 	//
@@ -421,6 +424,25 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 					}
 				}
 				relayed["active_phases"] = append([]string(nil), activePhases...)
+				if progress.Phase != "" {
+					phaseHistory[progress.Phase] = relayed
+				}
+				history := make([]map[string]any, 0, len(phaseHistory))
+				for _, phase := range []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"} {
+					if line, ok := phaseHistory[phase]; ok {
+						history = append(history, line)
+					}
+				}
+				// Keep unknown module-specific phases too, in their insertion-independent
+				// map order only after the standard phases.
+				for phase, line := range phaseHistory {
+					known := false
+					for _, key := range []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"} {
+						if phase == key { known = true; break }
+					}
+					if !known { history = append(history, line) }
+				}
+				relayed["phase_history"] = history
 				s.rememberDeployProgress(ctx, job.ID, relayed)
 				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, relayed)
 
