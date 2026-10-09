@@ -237,7 +237,7 @@ const visibilities = [
               <div class="places-tags">
                 <span v-if="place.kind === 'group'" class="badge badge-neutral">Group</span>
                 <span v-else-if="place.visibility" class="badge badge-label" :class="'badge-' + place.visibility">{{ place.visibility }}</span>
-                <span v-if="place.access_name" class="badge badge-neutral">{{ place.access_name }}</span>
+                <span v-if="place.access_name" class="badge badge-neutral badge-label">{{ place.access_name }}</span>
                 <span v-if="place.kind === 'project' && filters.scope === 'inactive'" class="badge badge-neutral">Archived</span>
                 <span v-if="place.kind === 'group' && place.project_count !== undefined" class="muted small">{{ place.project_count }} projects</span>
               </div>
