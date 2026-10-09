@@ -10,7 +10,7 @@
  * Every run has its own page, where the log is — watching a build is what people
  * come here for, and a table that also did that would do neither well.
  */
-import type { ModulePipeline, PipelineStage, PipelineStageJob } from '~/types/pipeline'
+import type { ModulePipeline, PipelineStageJob } from '~/types/pipeline'
 import { formatDuration, statusClass, statusText } from '~/types/pipeline'
 
 const props = defineProps<{
@@ -35,6 +35,8 @@ const apiRef = computed(() => props.projectId || encodeURIComponent(props.projec
 const pipelines = ref<ModulePipeline[]>([])
 const loading = ref(true)
 const error = ref('')
+// Ignore responses from older searches/filters if a newer request finishes first.
+let requestVersion = 0
 const starting = ref(false)
 
 /** The run list, and how much of it there is. */
@@ -95,6 +97,7 @@ function remember(change: Partial<PipelineView>) {
  * page of it, would drop them on a different page entirely.
  */
 async function load(quiet = false) {
+  const version = ++requestVersion
   if (!quiet) loading.value = true
   error.value = ''
   try {
@@ -110,14 +113,16 @@ async function load(quiet = false) {
       pages: number
     }>(`/projects/${apiRef.value}/pipelines?${parts.toString()}`)
 
+    if (version !== requestVersion) return
     pipelines.value = answer.pipelines ?? []
     total.value = answer.total ?? 0
     page.value = answer.page ?? 1
     pages.value = Math.max(1, answer.pages ?? 1)
   } catch (caught) {
+    if (version !== requestVersion) return
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
-    loading.value = false
+    if (version === requestVersion) loading.value = false
   }
 }
 
@@ -130,7 +135,6 @@ watch(typing, (word) => {
   wait = setTimeout(() => {
     if (word !== view.value.search) {
       remember({ search: word })
-      void load()
     }
   }, 300)
 })
@@ -437,7 +441,7 @@ watch(() => props.projectPath, () => load())
       <button class="btn btn-small" type="button" @click="clearFilters()">Clear filters</button>
     </div>
 
-    <div v-else class="pipeline-table-wrap">
+    <div v-else class="pipeline-table-wrap" :aria-busy="loading">
     <table class="pipeline-table">
       <thead>
         <tr>
@@ -624,29 +628,6 @@ watch(() => props.projectPath, () => load())
 }
 .pipelines-breadcrumb a:hover { color: var(--text); }
 .pipelines-breadcrumb span[aria-current="page"] { color: var(--text); font-weight: 600; }
-
-.eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 9px;
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .13em;
-}
-
-.eyebrow-mark {
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border: 1px solid var(--pipeline-line);
-  border-radius: 6px;
-  color: var(--accent);
-  font-size: 14px;
-  letter-spacing: 0;
-}
 
 .pipelines-title {
   margin: 0;
@@ -840,10 +821,6 @@ watch(() => props.projectPath, () => load())
   .pipeline-table { min-width: 760px; }
 }
 
-.section-title {
-  font-size: 18px;
-}
-
 .toolbar {
   display: flex;
   gap: 8px;
@@ -910,31 +887,6 @@ watch(() => props.projectPath, () => load())
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
-}
-
-/* Artifacts, not yet implemented. Disabled rather than hidden so that the
-   column's position is already where the button will be. */
-/* Just the arrow. It is disabled until there is something to download, and a wide
-   button saying so on every row of a list of runs is a lot of words about nothing. */
-.download {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 5px 7px;
-  font: inherit;
-  font-size: 12px;
-  color: var(--text-muted);
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.05));
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.download-arrow {
-  font-size: 14px;
-  line-height: 1;
 }
 
 /* The rows are positioned so that a popover opened from one is not painted over
@@ -1207,13 +1159,6 @@ td a:hover {
   font-size: 12px;
 }
 
-.live-indicator, .refreshing-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--green);
-}
 .refreshing { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11px; }
 .refreshing-dot { background: var(--accent); animation: pipeline-pulse 1.2s ease-in-out infinite; }
 .clear-filters {
