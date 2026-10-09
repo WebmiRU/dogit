@@ -110,6 +110,7 @@ certManager:
     # that do not support spec.ingressClassName on solver Ingress resources.
     ingressClassName: ""
     class: ""
+    annotations: {}
 
 objectStorage:
   # Optional S3-compatible storage for shared artifacts/caches. If disabled, data lives on
