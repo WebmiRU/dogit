@@ -230,7 +230,13 @@ const steps = computed<Step[]>(() => {
   // of them ended the list early — steps painted green that were never touched, and an
   // arrow that had already left. A page that is showing a live operation knows it is
   // live; only a page describing a finished one may call it finished.
-  const over = !props.live && (props.activePhases?.length ?? 0) === 0 && said === ''
+  //
+  // It also used to ask the message as well, on the grounds that a line naming a phase
+  // means work is still going. It does not: a deployment that ended on a rollout leaves
+  // its last stored line still naming it, and asking made every finished operation look
+  // unfinished — so the step the arrow was last on stayed drawn as never reached, blue,
+  // beside a log saying it finished. The page knows; the message does not.
+  const over = !props.live && (props.activePhases?.length ?? 0) === 0
 
   // Whether anything went wrong, which decides what an unreached step means.
   //
@@ -245,9 +251,14 @@ const steps = computed<Step[]>(() => {
     const heard = wasSaid.get(step.key)
     let state: StepState = 'waiting'
 
-    if (heard?.failed) state = 'failed'
-    else if (now.includes(step.key)) state = 'now'
-    else if (reachedAt > -1 && position < reachedAt) state = 'done'
+    // Reaching a step includes being on it, once the operation is over.
+    //
+    // While it runs, the furthest step mentioned is the one the arrow is on and everything
+    // before it is done. When it ends, that step ran too — it is the last thing that happened —
+    // and holding it back leaves the operation's final step drawn as never reached, on a card
+    // that says it succeeded. A blue dot and the word "Success" are two answers to one
+    // question, and it is the blue one that is being read.
+    else if (reachedAt > -1 && (position < reachedAt || (over && position === reachedAt))) state = 'done'
     else if (over && position > reachedAt) state = anythingFailed ? 'skipped' : 'done'
 
     return {
