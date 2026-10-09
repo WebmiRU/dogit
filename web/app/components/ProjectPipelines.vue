@@ -1251,5 +1251,6 @@ td a:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .stage-mark, .pipeline-table tbody tr { transition: none; }
+  .refreshing-dot { animation: none; }
 }
 </style>
