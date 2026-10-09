@@ -81,6 +81,15 @@ type jobRequest struct {
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
 	Body       string `json:"body"`
+
+	// Image and Command are the other spelling of a one-shot job: a command to run from an
+	// image, rather than a manifest to apply. Both are documented in the pipeline
+	// configuration, the core reads both and builds both, and without these two fields the
+	// command arrived here with nowhere to go: the body was empty, the kind was empty, and
+	// the cluster refused it with "no matches for kind \"\" in version \"\"" — which is the
+	// only thing anybody learns about a form that is written down and does not work.
+	Image   string   `json:"image"`
+	Command []string `json:"command"`
 }
 
 // deployRegistry is what the core tells this module about the registry a place pulls from:
@@ -996,6 +1005,13 @@ func pullSecretName(requested string) string {
 func jobs(substitution k8s.Substitution, requests []jobRequest, namespace string) []deploy.Job {
 	out := make([]deploy.Job, 0, len(requests))
 	for _, one := range requests {
+		if one.Image != "" {
+			out = append(out, deploy.Job{
+				Name:   one.Name,
+				Object: jobFromCommand(one, namespace),
+			})
+			continue
+		}
 		out = append(out, deploy.Job{
 			Name: one.Name,
 			Object: k8s.Object{
@@ -1005,6 +1021,55 @@ func jobs(substitution k8s.Substitution, requests []jobRequest, namespace string
 		})
 	}
 	return out
+}
+
+// jobFromCommand is a one-shot job written as a command rather than as a manifest.
+//
+// The manifest is built here rather than by the core, because the core has no business knowing
+// what shape a Kubernetes Job takes: it knows a step may be written either way, and the module is
+// the one that knows what to do about it. Sending an empty kind and an empty body instead — which
+// is what the command form amounted to — is the cluster being asked for something that is not
+// there, and the answer names neither the module nor the configuration.
+func jobFromCommand(one jobRequest, namespace string) k8s.Object {
+	command := one.Command
+	if len(command) == 0 {
+		// A container with no command is one that runs the image's own, which is a reasonable
+		// thing to ask for and is why this is not an error.
+		command = nil
+	}
+	body := fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: step
+          image: %s
+          command: %s
+`, one.Name, namespace, one.Image, jsonList(command))
+
+	return k8s.Object{
+		APIVersion: "batch/v1", Kind: "Job", Namespace: namespace,
+		Name: one.Name, Body: []byte(body),
+	}
+}
+
+// jsonList is a shell argument list as JSON, which is what a container's command is written as.
+//
+// By hand rather than by marshalling, so that a command containing a quote or a newline is
+// escaped by the one library in the process that is trusted to escape things. A manifest built
+// by string concatenation is a manifest that a repository can break with a character.
+func jsonList(args []string) string {
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
 }
 
 // viewOf is a deployment as the interface sees it.
