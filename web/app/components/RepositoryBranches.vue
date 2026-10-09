@@ -57,7 +57,7 @@ async function remove(name: string) {
     <div v-if="error" class="alert alert-error">{{ error }}</div>
 
     <div class="card" style="margin-bottom: 16px">
-      <div class="toolbar">
+      <div class="toolbar repository-toolbar">
         <strong>Branches ({{ allBranches.length }})</strong>
         <div class="spacer" />
         <div class="field" style="max-width: 260px; margin: 0">
@@ -69,32 +69,28 @@ async function remove(name: string) {
       <div v-else-if="branches.length === 0" class="empty">
         No branch matches “{{ filter }}”.
       </div>
-      <ul v-else class="tree-list">
-        <li v-for="branch in branches" :key="branch.name">
-          <span class="icon">⑂</span>
-          <NuxtLink
-            class="name"
-            :to="repoViewUrl(projectPath, 'tree', branch.name)"
-          >
-            {{ branch.name }}
-          </NuxtLink>
-          <span v-if="isDefault(branch.name)" class="badge">Default</span>
-          <span v-if="branch.name === refName" class="badge">Current</span>
-          <span v-if="branch.created_at" class="meta">{{ timeAgo(branch.created_at) }}</span>
-          <span class="meta mono">{{ branch.target.slice(0, 8) }}</span>
-          <!-- The default branch is not offered: the server refuses it, and a
-               button that always fails reads as a broken page. -->
-          <button
-            v-if="!isDefault(branch.name)"
-            class="btn"
-            type="button"
-            :disabled="pending === branch.name"
-            @click="remove(branch.name)"
-          >
-            {{ pending === branch.name ? 'Deleting…' : 'Delete' }}
-          </button>
-        </li>
-      </ul>
+      <div class="repository-table-wrap">
+        <table class="admin-table repository-data-table branches-table">
+          <thead><tr><th>Branch</th><th>Last commit</th><th>Updated</th><th class="numeric">Actions</th></tr></thead>
+          <tbody>
+            <tr v-for="branch in branches" :key="branch.name">
+              <td>
+                <NuxtLink class="name" :to="repoViewUrl(projectPath, 'tree', branch.name)">{{ branch.name }}</NuxtLink>
+                <span v-if="isDefault(branch.name)" class="badge badge-green badge-label">Default</span>
+                <span v-if="branch.name === refName" class="badge badge-neutral badge-label">Current</span>
+              </td>
+              <td class="mono small">{{ branch.target.slice(0, 10) }}</td>
+              <td class="muted small">{{ branch.created_at ? timeAgo(branch.created_at) : '—' }}</td>
+              <td class="numeric">
+                <button v-if="!isDefault(branch.name)" class="btn btn-small" type="button" :disabled="pending === branch.name" @click="remove(branch.name)">
+                  {{ pending === branch.name ? 'Deleting…' : 'Delete' }}
+                </button>
+                <span v-else class="muted small">—</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </template>

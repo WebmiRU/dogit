@@ -160,7 +160,7 @@ async function remove(name: string) {
     <div v-if="error" class="alert alert-error">{{ error }}</div>
 
     <div class="card">
-      <div class="toolbar">
+      <div class="toolbar repository-toolbar">
         <strong>Tags ({{ allTags.length }})</strong>
         <div class="spacer" />
         <div class="field" style="max-width: 260px; margin: 0">
@@ -172,48 +172,26 @@ async function remove(name: string) {
         No tags yet. A tag is created from the API; nothing in this interface makes one yet.
       </div>
       <div v-else-if="tags.length === 0" class="empty">No tag matches “{{ filter }}”.</div>
-      <ul v-else class="tree-list tag-list">
-        <!-- The header is what the columns are for: without it the date and the
-             commit are two grey numbers with nothing to say which is which. -->
-        <li class="head">
-          <span />
-          <span>Name</span>
-          <span class="sha">Commit</span>
-          <span>Created</span>
-          <span />
-        </li>
-        <li v-for="tag in tags" :key="tag.name">
-          <span class="icon">◈</span>
-          <span class="cell-name">
-            <NuxtLink
-              class="name"
-              :to="repoViewUrl(projectPath, 'tree', tag.name)"
-            >
-              {{ tag.name }}
-            </NuxtLink>
-            <!-- Only an annotated tag has a release note, so only an annotated tag
-                 shows one, and it sits next to the name rather than in a column of
-                 its own. -->
-            <span v-if="saidAbout(tag)" class="note" :title="saidAbout(tag)">
-              {{ saidAbout(tag) }}
-            </span>
-          </span>
-          <span class="meta sha">{{ tag.target.slice(0, 8) }}</span>
-          <span v-if="tag.created_at" class="meta">{{ timeAgo(tag.created_at) }}</span>
-          <!-- The row ends in a door to a menu rather than in the actions themselves:
-               reading the list must not be an act of almost destroying something. -->
-          <button
-            class="row-menu"
-            type="button"
-            aria-haspopup="menu"
-            :aria-expanded="open === tag.name"
-            :aria-label="`Actions for tag ${tag.name}`"
-            @click="showMenu(tag.name, $event)"
-          >
-            ⋯
-          </button>
-        </li>
-      </ul>
+      <div class="repository-table-wrap">
+        <table class="admin-table repository-data-table tag-list">
+          <thead><tr><th>Name</th><th>Commit</th><th>Created</th><th class="numeric">Actions</th></tr></thead>
+          <tbody>
+            <tr v-for="tag in tags" :key="tag.name">
+              <td>
+                <div class="cell-name">
+                  <NuxtLink class="name" :to="repoViewUrl(projectPath, 'tree', tag.name)">{{ tag.name }}</NuxtLink>
+                  <span v-if="saidAbout(tag)" class="note" :title="saidAbout(tag)">{{ saidAbout(tag) }}</span>
+                </div>
+              </td>
+              <td class="mono small">{{ tag.target.slice(0, 10) }}</td>
+              <td class="muted small">{{ tag.created_at ? timeAgo(tag.created_at) : '—' }}</td>
+              <td class="numeric">
+                <button class="row-menu" type="button" aria-haspopup="menu" :aria-expanded="open === tag.name" :aria-label="`Actions for tag ${tag.name}`" @click="showMenu(tag.name, $event)">⋯</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- In the body, not in the row: the card clips whatever is inside it, and a
            menu that belongs to the last row would be cut off by that clip. Fixed
