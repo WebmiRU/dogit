@@ -1,24 +1,20 @@
 :root {
-  --bg: #0f1117;
-  --bg-elevated: #161923;
-  --bg-inset: #0b0d12;
-  --border: #262b36;
-  --border-strong: #333a48;
-  --text: #e6e9ef;
-  --text-muted: #9aa3b2;
-  --accent: #4c8dff;
-  --accent-soft: rgba(76, 141, 255, 0.12);
-  /* A light, transparent yellow: for marking a row somebody asked to see. Blue is
-     wrong for it here because the rows are already on a blue-tinted surface, and a
-     highlight that is a shade of the background highlights nothing. */
+  --bg: #111214;
+  --bg-elevated: #1a1b1e;
+  --bg-inset: #0d0e10;
+  --border: #2b2c30;
+  --border-strong: #414248;
+  --text: #e7e7e9;
+  --text-muted: #a0a0a8;
+  --accent: #b9b9c1;
+  --accent-soft: rgba(185, 185, 193, 0.12);
+  /* A light, transparent yellow marks a row somebody explicitly asked to see. */
   --yellow-soft: rgba(210, 153, 34, 0.16);
   --green: #3fb950;
   --red: #f85149;
   --yellow: #d29922;
-  /* The blue a badge uses for "Available", and the blue an informational notice is
-     drawn in, so that a thing which is merely the case and a thing that is settled both
-     read as calm rather than as two different accents. */
-  --info: #9ec7f0;
+  /* Informational states use the same quiet neutral accent as links and controls. */
+  --info: #c2c2c9;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
 }
@@ -244,8 +240,8 @@ label {
 
 .alert-info {
   background: var(--accent-soft);
-  border: 1px solid rgba(76, 141, 255, 0.35);
-  color: #bcd5ff;
+  border: 1px solid rgba(185, 185, 193, 0.3);
+  color: #d0d0d5;
 }
 
 /* Tags are names, not statuses: an outline rather than a fill, and no colour spent on
@@ -303,8 +299,8 @@ label {
 }
 
 .badge-internal {
-  background: #23384f;
-  color: #9ec7f0;
+  background: #303136;
+  color: #d0d0d5;
 }
 
 .badge-public {
@@ -319,8 +315,8 @@ label {
 }
 
 .badge.state-merged {
-  background: #35285a;
-  color: #c3abff;
+  background: #343438;
+  color: #dedee2;
 }
 
 .badge.state-closed,
@@ -342,12 +338,9 @@ label {
   color: #ffb4ae;
 }
 
-/* Waiting. Blue, not grey.
-   Grey is what a canceled or skipped build wears, and a build waiting for a runner
-   has not failed and will not: it is the one state where nothing is wrong yet.
-   Using the same colour for both makes a quiet queue look like a pile of trouble. */
+/* Waiting is neutral: it is neither a success nor a failure. */
 .badge-blue {
-  background: #23384f;
+  background: #303136;
   color: var(--info);
 }
 
@@ -751,7 +744,7 @@ label {
 }
 
 .code-view .hunk {
-  color: #6b7688;
+  color: #96969e;
   background: var(--accent-soft);
 }
 
@@ -1396,7 +1389,7 @@ label {
 }
 
 .switch:focus-visible {
-  outline: 2px solid var(--accent, #58a6ff);
+  outline: 2px solid var(--accent, #b9b9c1);
   outline-offset: 2px;
 }
 
