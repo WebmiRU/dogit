@@ -22,3 +22,7 @@ logs
 .env
 .env.*
 !.env.example
+
+module-deploy-kubernetes
+module-runner
+bin
