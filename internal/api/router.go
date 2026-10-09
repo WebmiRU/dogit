@@ -88,12 +88,17 @@ func (s *Server) phaseBefore(jobID int64, phase string) string {
 	return previous
 }
 
-// forgetPhases drops what a finished job was doing, so a job id that is never reused and a
-// server that is long-lived do not grow a map of everything that has ever run.
-func (s *Server) forgetPhases(jobID int64) {
+// closePhases says which phase a finished job was in, and forgets it.
+//
+// Forgets as it reads: the only reason the phase was remembered is that a job which has ended
+// has nothing left to be in the middle of, and a map keyed by a job id that is never reused grows
+// to be everything this instance has ever run.
+func (s *Server) closePhases(jobID int64) string {
 	s.lastPhaseMu.Lock()
 	defer s.lastPhaseMu.Unlock()
+	phase := s.lastPhase[jobID]
 	delete(s.lastPhase, jobID)
+	return phase
 }
 
 // New creates the API server.

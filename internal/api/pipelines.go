@@ -1243,10 +1243,33 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	job.Status = status
 	job.DurationMS = duration.Milliseconds()
 
-	// What this job was in the middle of goes with it too. A map keyed by job id that is
-	// never emptied is a map of everything this instance has ever run, and the only reason
-	// it exists is to answer a question about a job that is still going.
-	s.forgetPhases(jobID)
+	// The phase the job was in when it stopped, said out loud before it is forgotten.
+	//
+	// A phase is normally closed by the next one beginning, which leaves the last phase of a job
+	// with nothing to close it: the build says "build", then "push", then the job is over. Without
+	// this, "push" stayed open until the page was closed — an arrow on a step of an image that
+	// had been pushed and was sitting on the cluster minutes earlier.
+	//
+	// Only for phases this endpoint heard about. A deployment's phases come from its module,
+	// which closes its own, and a job that never said a phase has nothing to close.
+	if closed := s.closePhases(jobID); closed != "" {
+		if project, perr := s.store.Projects().ByID(r.Context(), job.ProjectID); perr == nil {
+			for _, place := range s.placesOfRun(r.Context(), project, job.PipelineID) {
+				record := map[string]any{"cluster": place.place}
+				if place.namespace != "" {
+					record["namespace"] = place.namespace
+				}
+				s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation,
+					map[string]any{
+						"job_id":     whichOperation(jobID, job.Deploy != nil, place),
+						"phase":      closed,
+						"message":    "finished",
+						"finished":   true,
+						"deployment": record,
+					})
+			}
+		}
+	}
 
 	// The key goes with the job. A credential that outlived the build it was made
 	// for would be a credential nobody is watching.

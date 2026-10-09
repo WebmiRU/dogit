@@ -84,8 +84,44 @@ func TestAFinishedJobTakesItsPhaseWithIt(t *testing.T) {
 	s := &Server{}
 
 	s.phaseBefore(12, "build")
-	s.forgetPhases(12)
+	if got := s.closePhases(12); got != "build" {
+		t.Errorf("a finished job said it was in %q, want build", got)
+	}
 	if got := s.phaseBefore(12, "push"); got != "" {
-		t.Errorf("a job id that was forgotten still had a phase to close (%q)", got)
+		t.Errorf("a job id that was closed still had a phase to close (%q)", got)
+	}
+}
+
+// The last phase of a job is closed by the job ending, because nothing follows it.
+//
+// A build says "build", then "push", then the job is over — and a rule that closes a phase when
+// the next one begins has nothing to close "push" with. Left open, it is an arrow on a step of an
+// image that was pushed and was sitting on the cluster minutes earlier, and it stays there as
+// long as the card is open: seen on a stand as an arrow on "Push the image" while "Read the
+// manifests" beside it was already done.
+func TestTheLastPhaseOfAJobIsClosedWhenTheJobEnds(t *testing.T) {
+	s := &Server{}
+
+	s.phaseBefore(13, "build")
+	if got := s.phaseBefore(13, "push"); got != "build" {
+		t.Fatalf("moving from build to push closed %q, want build", got)
+	}
+	// Nothing follows push — the job simply finishes.
+	if got := s.closePhases(13); got != "push" {
+		t.Errorf("a job that ended on push closed %q, want push", got)
+	}
+}
+
+// A job that never named a phase has nothing to close, and saying so is not an error.
+func TestAJobThatNeverSaidAPhaseClosesNothing(t *testing.T) {
+	s := &Server{}
+
+	if got := s.closePhases(14); got != "" {
+		t.Errorf("a job that never reported a phase closed %q, want nothing", got)
+	}
+	s.phaseBefore(14, "build")
+	s.closePhases(14)
+	if got := s.closePhases(14); got != "" {
+		t.Errorf("closing twice said %q the second time, want nothing", got)
 	}
 }
