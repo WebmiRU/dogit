@@ -57,7 +57,12 @@ const props = defineProps<{
   activePhases?: string[]
 }>()
 
-type StepState = 'done' | 'now' | 'failed' | 'waiting'
+// `skipped` is a step the operation never got to, because it was cut short. Not the same as
+// `waiting`: waiting is a step still to come, and on a finished operation there is nothing still
+// to come. It was in the code and not in this list, which is why a step nobody reached was drawn
+// in the colour of a step that had not started yet — the one reading that is wrong for a
+// deployment that stopped.
+type StepState = 'done' | 'now' | 'failed' | 'waiting' | 'skipped'
 
 interface Step {
   key: string
@@ -251,6 +256,8 @@ const steps = computed<Step[]>(() => {
     const heard = wasSaid.get(step.key)
     let state: StepState = 'waiting'
 
+    if (heard?.failed) state = 'failed'
+    else if (now.includes(step.key)) state = 'now'
     // Reaching a step includes being on it, once the operation is over.
     //
     // While it runs, the furthest step mentioned is the one the arrow is on and everything
@@ -417,6 +424,14 @@ const steps = computed<Step[]>(() => {
 }
 
 .step.done .label {
+  color: var(--text-muted);
+}
+
+/* Cut short, so it is not greyed out the way `done` is: this one did not finish, and drawing it
+   the way a finished step is drawn says the operation had no trouble. Dimmed the way `waiting` is,
+   because what it is — a step that was not reached — is the same thing, and the difference the
+   reader needs is on the card, not in the shade of one line. */
+.step.skipped .label {
   color: var(--text-muted);
 }
 
