@@ -427,22 +427,24 @@ watch(() => props.projectPath, () => load())
     <table class="pipeline-table">
       <thead>
         <tr>
-          <th class="col-status">Status</th>
-          <th class="col-pipeline">Pipeline</th>
-          <th class="col-by">Created by</th>
-          <th class="col-stages">Stages</th>
-          <th class="col-actions">Actions</th>
+          <th class="col-status">Result</th>
+          <th class="col-pipeline">Pipeline / commit</th>
+          <th class="col-by">Triggered by</th>
+          <th class="col-stages">Stage progress</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="run in pipelines" :key="run.iid">
           <td class="col-status">
-            <NuxtLink :to="`/p/${projectPath}/-/pipelines/${run.iid}`">
-              <span class="badge" :class="statusClass[run.status] ?? 'badge-neutral'">
+            <NuxtLink :to="`/p/${projectPath}/-/pipelines/${run.iid}`" class="result-link">
+              <span class="result-state" :class="statusClass[run.status] ?? 'badge-neutral'">
+                <span class="result-symbol" aria-hidden="true">
+                  {{ run.status === 'success' ? '✓' : run.status === 'failed' ? '!' : isLive(run) ? '◷' : '—' }}
+                </span>
                 {{ statusText[run.status] }}
               </span>
               <span class="cell-line mono duration">
-                {{ isLive(run) ? 'in progress' : formatDuration(run.duration_ms) }}
+                {{ isLive(run) ? 'Running now' : formatDuration(run.duration_ms) }}
               </span>
               <span class="cell-line muted small">{{ timeAgo(run.created_at) }}</span>
             </NuxtLink>
@@ -450,14 +452,14 @@ watch(() => props.projectPath, () => load())
 
           <td class="col-pipeline">
             <NuxtLink :to="`/p/${projectPath}/-/pipelines/${run.iid}`" class="cell-link">
-              <span class="cell-line mono number">#{{ run.iid }}</span>
-              <span class="cell-line title" :title="run.title">{{ run.title || '—' }}</span>
+              <span class="cell-line mono number">Pipeline #{{ run.iid }}</span>
+              <span class="cell-line title commit-title" :title="run.title">{{ run.title || 'No commit message' }}</span>
               <span class="cell-line meta">
                 <span class="branch">
-                  <span class="branch-icon">⑂</span>{{ run.ref }}
+                  <span class="branch-icon" aria-hidden="true">⑂</span>{{ run.ref }}
                 </span>
                 <span class="sha mono">
-                  <span class="sha-icon">⟨⟩</span>{{ run.sha.slice(0, 8) }}
+                  <span class="sha-icon" aria-hidden="true">⌘</span>{{ run.sha.slice(0, 8) }}
                 </span>
                 <img
                   v-if="avatar(run.avatar_url, run.author_name)"
@@ -537,18 +539,7 @@ watch(() => props.projectPath, () => load())
             </div>
           </td>
 
-          <!-- Artifacts. Nothing has been declared yet, so this is here as the
-               place they will appear rather than as a promise of a download: a
-               button that cannot download anything is worse than no button. -->
-          <td class="col-actions">
-            <button
-              type="button"
-              class="download"
-              disabled
-              title="No artifacts have been declared yet"
-              aria-label="Download artifacts"
-            ><span class="download-arrow">⬇</span></button>
-          </td>
+
         </tr>
       </tbody>
     </table>
@@ -888,10 +879,33 @@ watch(() => props.projectPath, () => load())
   background: var(--bg-subtle, rgba(255, 255, 255, 0.03));
 }
 
-.col-status { width: 132px; }
+.col-status { width: 148px; }
 .col-by { width: 190px; }
-.col-stages { width: 150px; }
-.col-actions { width: 140px; }
+.col-stages { width: 180px; }
+
+.result-link { display: block; }
+.result-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.result-symbol {
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+  font-size: 12px;
+  line-height: 1;
+}
+.commit-title { font-weight: 550; }
+.pipeline-table tbody tr { transition: background .15s ease; }
+.pipeline-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 5%, var(--bg-elevated)); }
+.pipeline-table tbody tr:hover .commit-title { color: var(--accent); }
+
 
 /* One column holds one fact, and the fact is the whole cell — no underlines
    under text that is a link, no hover affordance pretending to be a button. */
@@ -989,29 +1003,38 @@ td a:hover {
    and asking somebody to do that to see a job's name is asking too much. */
 .stage-mark {
   width: 26px;
-  height: 26px;
+  height: 28px;
+  flex: 0 0 26px;
   padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: none;
+  border: 1px solid var(--pipeline-line);
+  border-radius: 7px;
+  background: var(--bg-inset);
   cursor: pointer;
   position: relative;
+  transition: border-color .15s ease, background .15s ease, transform .15s ease;
 }
 
 .stage-mark::after {
   content: '';
   position: absolute;
-  inset: 6px;
+  inset: 8px;
   border-radius: 50%;
   background: currentColor;
 }
 
+.stage-mark:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .stage-mark:hover {
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.08));
+  transform: translateY(-1px);
+  border-color: currentColor;
 }
 
 .stage-mark.open {
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.12));
+  background: color-mix(in srgb, currentColor 12%, var(--bg-elevated));
+  border-color: currentColor;
   box-shadow: inset 0 0 0 1px currentColor;
 }
 
@@ -1108,5 +1131,9 @@ td a:hover {
 
 .small {
   font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-mark, .pipeline-table tbody tr { transition: none; }
 }
 </style>
