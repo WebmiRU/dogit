@@ -104,12 +104,12 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
               <div class="p2-job">
                 <svg class="p2-job-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/></svg>
                 <span>build-php</span>
-                <span class="p2-retry" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M16 7V3l-2 2a6 6 0 1 0 2 8"/><path d="M14 3h2v4"/></svg></span>
+                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M16 7V3l-2 2a6 6 0 1 0 2 8"/><path d="M14 3h2v4"/></svg></span>
               </div>
               <div class="p2-job">
                 <svg class="p2-job-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/></svg>
                 <span>build-web</span>
-                <span class="p2-retry" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M16 7V3l-2 2a6 6 0 1 0 2 8"/><path d="M14 3h2v4"/></svg></span>
+                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M16 7V3l-2 2a6 6 0 1 0 2 8"/><path d="M14 3h2v4"/></svg></span>
               </div>
             </div>
           </div>
@@ -120,7 +120,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
               <div class="p2-job">
                 <svg class="p2-job-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/></svg>
                 <span>deploy</span>
-                <span class="p2-retry" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M16 7V3l-2 2a6 6 0 1 0 2 8"/><path d="M14 3h2v4"/></svg></span>
+                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M16 7V3l-2 2a6 6 0 1 0 2 8"/><path d="M14 3h2v4"/></svg></span>
               </div>
             </div>
           </div>
@@ -306,6 +306,8 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
 .p2-job-check { width: 22px; height: 22px; flex: 0 0 22px; fill: none; stroke: #42c77a; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .p2-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 48px; height: 48px; flex: 0 0 48px; border: 0; border-radius: 12px; padding: 0; background: #414148; color: #f0f0f4; cursor: default; }
 .p2-retry svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.p2-mini-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: #414148; color: #d0d0d6; }
+.p2-mini-retry svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .p2-flow-line { position: absolute; z-index: 0; top: 35px; left: 242px; width: 27px; height: 2px; background: #a5a5ad; }
 .p2-feedback-tab { position: fixed; top: 151px; right: 0; display: flex; align-items: center; justify-content: center; width: 25px; height: 22px; border: 1px solid #494950; border-right: 0; border-radius: 5px 0 0 5px; color: #dedee3; background: #34343a; }
 .p2-feedback-tab svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
@@ -341,6 +343,12 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
   .p2-deploy-stage { left: 197px; }
   .p2-flow-line { left: 181px; width: 16px; }
 }
+
+
+/* Controls that inherit their font through a shorthand need an explicit size too. */
+.p2-global-search kbd, .p2-top-counter small { font-size: 14px; }
+.p2-content-tabs > button { font-size: 14px; }
+.p2-content-tabs b { font-size: 14px; }
 
 /* Typography follows the supplied reference: 14px across the page with the explicit badge/title exceptions. */
 .p2-preview { font-size: 14px; }
