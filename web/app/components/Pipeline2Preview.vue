@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
+const props = defineProps<{ projectPath: string }>()
+const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 </script>
 
 <template>
@@ -81,7 +82,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
             <svg class="p2-copy" viewBox="0 0 18 18" aria-hidden="true"><rect x="2" y="4" width="9" height="11" rx="1"/><path d="M6 2h9v11"/></svg>
             <span class="p2-commit-title">Настройка «Клик по ссылке: переход или отбор»</span>
           </div>
-          <div class="p2-related-line">1 related merge request: <a>!1 Права доступа (каскад склад-&gt;хранилище-&gt;предметы), аватар и logout</a></div>
+          <div class="p2-related-line">1 related merge request: <NuxtLink class="p2-related-link" :to="`/p/${props.projectPath}/-/merge_requests/1`">!1 Права доступа (каскад склад-&gt;хранилище-&gt;предметы), аватар и logout</NuxtLink></div>
           <div class="p2-pipeline-meta">
             <span class="p2-tag p2-tag-green">latest</span>
             <span class="p2-tag p2-tag-blue">branch</span>
@@ -104,12 +105,12 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
               <div class="p2-job">
                 <svg class="p2-job-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/></svg>
                 <span>build-php</span>
-                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></span>
+                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 2v6h6"/><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/></svg></span>
               </div>
               <div class="p2-job">
                 <svg class="p2-job-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/></svg>
                 <span>build-web</span>
-                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></span>
+                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 2v6h6"/><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/></svg></span>
               </div>
             </div>
           </div>
@@ -120,7 +121,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
               <div class="p2-job">
                 <svg class="p2-job-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/></svg>
                 <span>deploy</span>
-                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></span>
+                <span class="p2-mini-retry" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 2v6h6"/><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/></svg></span>
               </div>
             </div>
           </div>
@@ -143,7 +144,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
               </div>
               <div class="p2-job-stage">deploy</div>
               <div class="p2-job-coverage"></div>
-              <button class="p2-retry" type="button" aria-label="Retry deploy job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></button>
+              <button class="p2-retry" type="button" aria-label="Retry deploy job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 2v6h6"/><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/></svg></button>
             </div>
             <div class="p2-job-row">
               <div class="p2-job-status">
@@ -157,7 +158,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
               </div>
               <div class="p2-job-stage">build</div>
               <div class="p2-job-coverage"></div>
-              <button class="p2-retry" type="button" aria-label="Retry build-web job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></button>
+              <button class="p2-retry" type="button" aria-label="Retry build-web job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 2v6h6"/><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/></svg></button>
             </div>
             <div class="p2-job-row">
               <div class="p2-job-status">
@@ -171,7 +172,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
               </div>
               <div class="p2-job-stage">build</div>
               <div class="p2-job-coverage"></div>
-              <button class="p2-retry" type="button" aria-label="Retry build-php job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></button>
+              <button class="p2-retry" type="button" aria-label="Retry build-php job"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 2v6h6"/><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/></svg></button>
             </div>
           </div>
         </section>
@@ -283,8 +284,8 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
 .p2-copy { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: #dedee3; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .p2-commit-title { color: #c6c6ce; }
 .p2-related-line { margin-top: 4px; }
-.p2-related-line a { color: #78b6f3; text-decoration: none; cursor: pointer; }
-.p2-related-line a:hover { text-decoration: underline; }
+.p2-related-line .p2-related-link { color: #78b6f3; text-decoration: none; cursor: pointer; }
+.p2-related-line .p2-related-link:hover { text-decoration: underline; }
 .p2-pipeline-meta { display: flex; align-items: center; gap: 5px; min-height: 25px; margin-top: 1px; color: #c7c7cf; font-size: 12px; }
 .p2-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 12px; font-size: 10px; line-height: 18px; }
 .p2-tag-green { color: #092918; background: #45ba82; }
@@ -295,7 +296,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
 .p2-content-tabs > button { display: inline-flex; align-items: center; gap: 5px; padding: 0 18px; margin: 0 0 -1px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #ddddE3; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .p2-content-tabs > button.active { border-bottom-color: #4f9de8; color: #f4f4f6; }
 .p2-content-tabs > button:focus-visible { outline: 2px solid #4f9de8; outline-offset: -3px; }
-.p2-content-tabs b { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #777780; color: #1b1b20; font: inherit; font-weight: 600; }
+.p2-content-tabs b { display: inline-flex; flex: 0 0 18px; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: #85858d; color: #1b1b20; font: inherit; font-size: 12px; font-weight: 650; line-height: 18px; }
 .p2-pipeline-canvas { position: relative; flex: 1 1 auto; min-height: 300px; margin: 14px 14px 0; border-radius: 8px; background: #28282e; overflow: hidden; }
 .p2-stage { position: absolute; top: 20px; width: 222px; border-radius: 10px; padding: 5px 5px 6px; background: #39393f; }
 .p2-build-stage { left: 20px; }
@@ -356,22 +357,22 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>("pipeline")
 .p2-tag { font-size: 12px; }
 .p2-jobs-table-wrap { flex: 1 1 auto; min-height: 0; margin: 12px 24px 0; overflow: auto; }
 .p2-jobs-table { width: 100%; min-width: 820px; color: #e4e4e8; }
-.p2-jobs-table-head, .p2-job-row { display: grid; grid-template-columns: 220px minmax(350px, 2.5fr) minmax(170px, 1fr) minmax(120px, 1.4fr) 70px; align-items: center; }
+.p2-jobs-table-head, .p2-job-row { display: grid; grid-template-columns: 220px minmax(350px, 1.2fr) minmax(170px, .3fr) minmax(120px, 1.3fr) 70px; align-items: center; }
 .p2-jobs-table-head { min-height: 42px; border-top: 1px solid #37373e; border-bottom: 1px solid #45454d; font-weight: 650; }
 .p2-jobs-table-head > span { padding: 0 22px; }
 .p2-jobs-table-head > span:last-child { padding: 0; }
 .p2-job-row { min-height: 68px; border-bottom: 1px solid #45454d; }
-.p2-job-status { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; padding: 5px 12px; }
+.p2-job-status { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; padding: 5px 22px; }
 .p2-job-status .p2-passed { height: 20px; padding: 0 7px 0 3px; gap: 3px; font-size: 12px; line-height: 20px; }
 .p2-job-status .p2-passed svg { width: 15px; height: 15px; }
 .p2-job-detail { display: inline-flex; align-items: center; gap: 5px; color: #b5b5bf; line-height: 1.3; white-space: nowrap; }
 .p2-job-detail svg { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.p2-job-name { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; padding: 5px 12px; }
+.p2-job-name { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; padding: 5px 22px; }
 .p2-job-name a { color: #8fbee9; text-decoration: none; white-space: nowrap; }
 .p2-job-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .p2-job-tags > span { display: inline-flex; align-items: center; gap: 4px; padding: 0 5px; border-radius: 4px; background: #37373e; color: #bdbdc6; line-height: 18px; white-space: nowrap; }
 .p2-job-tags svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.p2-job-stage { align-self: stretch; display: flex; align-items: flex-start; padding: 9px 12px; color: #bcbcc5; }
+.p2-job-stage { align-self: stretch; display: flex; align-items: flex-start; padding: 9px 22px; color: #bcbcc5; }
 .p2-job-coverage { align-self: stretch; }
 .p2-job-row .p2-retry { margin: 0 0 0 auto; align-self: center; }
 .p2-tests-empty { flex: 1 1 auto; min-height: 300px; margin: 12px 24px 0; border-top: 1px solid #37373e; }
