@@ -683,9 +683,18 @@ function lateProgress(operation: DeployOperation): Watching | null {
   if (progress.phase && !seen.some((line) => line.phase === progress.phase)) {
     seen.push(progress)
   }
-  const active = Array.isArray(said.active_phases)
+  // Older module versions sometimes report a terminal progress message ("finished")
+  // without setting the structured finished flag. The snapshot's active_phases may then still
+  // contain that phase. Prefer the latest per-phase history when reconciling active arrows.
+  const finishedByHistory = new Set(history
+    .filter((line) => line.finished === true ||
+      (typeof line.message === 'string' && /^finished[.!]?$/i.test(line.message.trim())))
+    .map((line) => String(line.phase ?? ''))
+    .filter(Boolean))
+  const active = (Array.isArray(said.active_phases)
     ? said.active_phases.filter((phase): phase is string => typeof phase === 'string')
-    : (progress.phase && !progress.finished ? [progress.phase] : [])
+    : (progress.phase && !progress.finished ? [progress.phase] : []))
+    .filter((phase) => !finishedByHistory.has(phase))
   const saidAbout = said.deployment as { kind?: unknown } | undefined
   return {
     ...(typeof saidAbout?.kind === 'string' && saidAbout.kind ? { kind: saidAbout.kind } : {}),
