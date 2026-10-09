@@ -150,7 +150,7 @@ async function createProject() {
       <NuxtLink to="/projects?scope=inactive" :class="{ active: $route.query.scope === 'inactive' }">Inactive <span v-if="scopeCounts.inactive !== undefined" class="project-tab-count">{{ scopeCounts.inactive }}</span></NuxtLink>
     </nav>
 
-    <PlacesTable type="project" :filter-kind="false" />
+    <PlacesTable type="project" />
 
   </div>
 </template>

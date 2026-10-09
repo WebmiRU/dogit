@@ -1895,7 +1895,6 @@ select:focus-visible {
 .places-last-commit time { flex:0 0 auto; font-size:11px; }
 .project-index .table td { vertical-align:middle; }
 .project-index .table td:nth-child(2) { min-width:160px; }
-.places-row-menu-popover { position:fixed; }
 .project-index .table { overflow:visible; }
 @media(max-width:900px) {
   .project-index .table { min-width:820px; }
@@ -1909,3 +1908,15 @@ select:focus-visible {
 .places-sort-direction svg.descending { transform:rotate(180deg); }
 .project-tab-count { display:inline-flex; min-width:18px; justify-content:center; padding:0 5px; margin-left:4px; border-radius:10px; background:#2a2b31; color:#b3b4bd; font-size:10px; font-weight:500; line-height:17px; }
 .places-row-menu-popover { position:absolute; }
+
+.places-row-menu[open] { z-index: 30; }
+.places-row-menu-popover { position:absolute; top:calc(100% + 4px); right:0; z-index:50; }
+.pipeline-state-canceled, .pipeline-state-interrupted, .pipeline-state-skipped { color:var(--text-muted); }
+.pipeline-state-canceled .pipeline-state-dot, .pipeline-state-interrupted .pipeline-state-dot, .pipeline-state-skipped .pipeline-state-dot { background:#737781; }
+.project-index .table th:last-child, .project-index .table td:last-child { width:42px; min-width:42px; }
+.project-index .table th:first-child { min-width:250px; }
+.project-index .table th:nth-child(2) { min-width:145px; }
+@media(max-width:760px) {
+ .project-index .table { min-width:900px; }
+ .project-index .table th:first-child { min-width:220px; }
+}

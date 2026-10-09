@@ -23,15 +23,12 @@ const props = withDefaults(
     type?: '' | 'project' | 'group'
     /** A page heading of its own. */
     title?: string
-    /** Whether the kind filter is offered. Off when the page is about one kind. */
-    filterKind?: boolean
     filterVisibility?: boolean
   }>(),
-  { type: '', filterKind: true, filterVisibility: true },
+  { type: '', filterVisibility: true },
 )
 
 const route = useRoute()
-const { add: notify } = useNotifyPool()
 
 function formatDate(value?: string): string {
   if (!value) return '—'
@@ -43,7 +40,7 @@ function formatDate(value?: string): string {
 function pipelineLabel(value: string): string {
   const labels: Record<string, string> = {
     success: 'Passed', failed: 'Failed', running: 'Running', pending: 'Pending',
-    canceled: 'Canceled', interrupted: 'Interrupted',
+    canceled: 'Canceled', interrupted: 'Interrupted', skipped: 'Skipped', manual: 'Manual',
   }
   return labels[value] ?? value
 }
@@ -158,7 +155,7 @@ const visibilities = [
           <circle cx="10.8" cy="10.8" r="6.3" />
           <path d="m15.5 15.5 4.2 4.2" />
         </svg>
-        <input v-model="typing" class="search" type="search" placeholder="Filter or search projects" aria-label="Search projects and groups">
+        <input v-model="typing" class="search" type="search" :placeholder="type === 'group' ? 'Search groups' : 'Filter or search projects'" :aria-label="type === 'group' ? 'Search groups' : 'Search projects'">
       </div>
 
       <label class="places-sort">
@@ -189,10 +186,10 @@ const visibilities = [
 
     <div v-else-if="places.length === 0" class="card empty">
       <template v-if="filters.search">
-        Nothing here is called “{{ filters.search }}”.
+        No {{ type === 'group' ? 'groups' : 'projects' }} match “{{ filters.search }}”.
       </template>
       <template v-else>
-        Nothing here yet.
+        No {{ type === 'group' ? 'groups' : 'projects' }} yet.
       </template>
     </div>
 
@@ -200,7 +197,7 @@ const visibilities = [
       <table class="table">
         <thead>
           <tr>
-            <th>Project</th>
+            <th>{{ type === 'group' ? 'Group' : 'Project' }}</th>
             <th>Tags</th>
             <th>Pipeline</th>
             <th>Activity</th>
@@ -238,6 +235,7 @@ const visibilities = [
               <div v-if="place.latest_pipeline_at" class="muted small">{{ formatDate(place.latest_pipeline_at) }}</div>
             </td>
             <td class="places-activity-cell">
+              <template v-if="place.kind === 'project'">
               <div class="places-activity-counts">
                 <span class="places-count muted" title="Fork count is not enabled yet">
                   <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5" /><circle cx="12" cy="13" r="1.5" /><circle cx="12" cy="3" r="1.5" /><path d="M4 4.5v4a4 4 0 0 0 4 4h2.5M5.5 3H10.5" /></svg>0
@@ -255,6 +253,8 @@ const visibilities = [
                 <time class="muted small" :datetime="place.last_commit_at">{{ formatDate(place.last_commit_at) }}</time>
               </div>
               <span v-else class="muted small">No commits yet</span>
+              </template>
+              <span v-else class="muted small">—</span>
             </td>
             <td class="places-actions-cell">
               <details class="places-row-menu">
