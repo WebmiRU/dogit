@@ -1925,18 +1925,21 @@ select:focus-visible {
 .places-row-menu-popover { position:absolute; top:calc(100% + 4px); right:0; z-index:90; }
 
 /* The direction toggle is physically attached to the sort field so it reads as one control. */
-.places-sort-control { display:inline-flex; flex:0 0 auto; align-items:stretch; }
-.places-sort-control .places-sort select { border-top-right-radius:0; border-bottom-right-radius:0; }
-.places-sort-control .places-sort { display:flex; }
+.places-sort-control { display:inline-flex; flex:0 0 auto; align-items:stretch; height:38px; vertical-align:top; }
+.places-sort-control .places-sort { display:flex; height:38px; margin:0; }
+.places-sort-control .places-sort select { height:38px; min-height:38px; box-sizing:border-box; border-top-right-radius:0; border-bottom-right-radius:0; }
+.places-sort-control .places-sort-direction { align-self:stretch; }
 .places-sort-direction {
-  display:inline-flex; flex:0 0 36px; align-items:center; justify-content:center;
-  width:36px; height:38px; margin:0; padding:0;
+  display:inline-flex; flex:0 0 auto; align-items:center; justify-content:center; gap:5px;
+  height:38px; margin:0; padding:0 10px;
   border:1px solid var(--border-strong); border-left:0;
   border-radius:0 6px 6px 0; background:#101113; color:var(--text-muted);
+  font:inherit; font-size:12px; line-height:1; white-space:nowrap;
   cursor:pointer; transition:background 120ms ease,color 120ms ease;
+  box-sizing:border-box; vertical-align:top;
 }
 .places-sort-direction:hover { color:var(--text); background:#222328; }
-.places-sort-direction svg { display:block; width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.25; stroke-linecap:round; stroke-linejoin:round; transition:transform 120ms ease; }
+.places-sort-direction svg { display:block; flex:0 0 16px; width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; transition:transform 120ms ease; }
 .places-sort-direction svg.descending { transform:rotate(180deg); }
 .places-sort-direction:focus-visible { position:relative; z-index:1; outline:2px solid #747986; outline-offset:1px; }
 .places-issue-icon { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.25; stroke-linecap:round; stroke-linejoin:round; }
