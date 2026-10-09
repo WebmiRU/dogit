@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/retry"
 )
 
 // Object is one thing to apply, as it came out of a manifest in the repository.
@@ -594,14 +595,47 @@ func (c *clusterClient) SetImage(ctx context.Context, namespace, name, image str
 			"%s is already running %s, so there is nothing to put back", name, image)
 	}
 
-	changed := deployment.DeepCopy()
-	for index := range changed.Spec.Template.Spec.Containers {
-		changed.Spec.Template.Spec.Containers[index].Image = image
-	}
-
-	if _, err := c.typed.AppsV1().Deployments(namespace).Update(ctx, changed,
-		metav1.UpdateOptions{}); err != nil {
-		return Rollout{}, fmt.Errorf("set the image of %s: %w", name, err)
+	// Written on top of whatever is there now, and read again every time it is refused.
+	//
+	// The refusal is the whole of the design and not a fault to report: Kubernetes stamps every
+	// object with a version, and a write must name the version it was built on. The deployment
+	// controller is writing to this same object the whole time — status, conditions, how many
+	// replicas — so a write built on a version from a moment ago is refused, precisely so that a
+	// stale copy cannot overwrite something fresher. Treating that as a failure meant one
+	// deployment in four or six failed with "the object has been modified" for no reason a
+	// reader could act on, and it failed *after* a rollout, which is when the controller is
+	// busiest and the chance is highest.
+	//
+	// The library's own choice for this, which is `DefaultBackoff` and not `DefaultRetry` beside
+	// it, and the difference is the whole of it. Both are five-or-so attempts; one waits 10ms
+	// between every one of them and is finished inside fortieth of a second, the other waits 10,
+	// then 50, then 250, then 1250 — spread across a second and a half. The first suits a conflict
+	// with another client that will stop writing the moment we do; the second suits a resource
+	// under a controller that writes on its own schedule, which is what this is. Its own words:
+	// "the recommended backoff for a conflict where a client may be attempting to make an unrelated
+	// modification to a resource under active management by one or more controllers."
+	//
+	// Not ten of them either. Retrying harder cannot fix a conflict that spacing does not: an
+	// object being rewritten back to back fails any number of times, and that is a thing worth
+	// being told about rather than retrying away. A revert's own budget is minutes, so the second
+	// and a half costs nothing next to the thing being waited for.
+	//
+	// Only a conflict is retried. Missing, forbidden or refused come back at once, which is right:
+	// they are answers, and asking again changes nothing.
+	setErr := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		fresh, err := c.typed.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		changed := fresh.DeepCopy()
+		for index := range changed.Spec.Template.Spec.Containers {
+			changed.Spec.Template.Spec.Containers[index].Image = image
+		}
+		_, err = c.typed.AppsV1().Deployments(namespace).Update(ctx, changed, metav1.UpdateOptions{})
+		return err
+	})
+	if setErr != nil {
+		return Rollout{}, fmt.Errorf("set the image of %s: %w", name, setErr)
 	}
 
 	return c.awaitImage(ctx, namespace, name, image, timeout)
