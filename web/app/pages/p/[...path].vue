@@ -453,7 +453,7 @@ async function copyCloneUrl() {
         />
         <!-- A run has its own page: watching the log is what people come for, and
              a list that also did that would do neither thing well. -->
-        <Pipeline2Preview v-else-if="view.name === 'pipeline2'" />
+        <Pipeline2Preview v-else-if="view.name === 'pipeline2'" :project-path="project.path" />
         <ProjectPipelineRun
           v-else-if="view.name === 'pipelines' && view.rest[0]"
           :project-id="projectId"
