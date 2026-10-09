@@ -43,7 +43,8 @@ jobs:
           grep -q 'component: module-notify-telegram' /tmp/dogit-modules.yaml
           grep -q 'component: module-runner-buildkit' /tmp/dogit-modules.yaml
           grep -q 'moby/buildkit:rootless' /tmp/dogit-modules.yaml
-          grep -A 1 'appArmorProfile:' /tmp/dogit-modules.yaml | grep -q 'type: Unconfined'
+          grep -A 1 'appArmorProfile:' /tmp/dogit-modules.yaml > /tmp/dogit-apparmor.yaml
+          grep -q 'type: Unconfined' /tmp/dogit-apparmor.yaml
       - name: Render TLS with ingress-nginx
         run: >-
           helm template dogit charts/dogit --namespace dogit
