@@ -199,7 +199,15 @@ const steps = computed<Step[]>(() => {
   // new pods come up while the old ones go away, and drawing one arrow for that says
   // one of them is not happening. With no list given — this page describing a finished
   // operation — the latest thing said is the one that counts.
-  const now = props.activePhases?.length ? [...props.activePhases] : (lastNamed ? [lastNamed] : [])
+  // An arrow means this is happening now, so there is none once the operation is over.
+  //
+  // It used to be decided by the list of open phases being empty, and a finished operation's
+  // list is always empty — so the arrow went onto the last phase anybody mentioned and stayed
+  // there. A card saying "Success" with a pointer on "Bring the new pods up" is two answers to
+  // one question, and the one the eye reads second is the one that is wrong.
+  const now = props.live
+    ? (props.activePhases?.length ? [...props.activePhases] : (lastNamed ? [lastNamed] : []))
+    : []
 
   const nowAt = order.value.findIndex((one) => one.key === lastNamed)
 

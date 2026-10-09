@@ -156,8 +156,24 @@ const cards = computed(() => [
   ...operations.value.filter((one) => !one.running && !one.queued),
 ])
 
-/** What is drawn, after the reader has put some of it away. */
-const shown = computed(() => cards.value.filter((one) => !putAway.value[one.job_id]))
+/**
+ * The reader's own cards: what is under way, and what they caught and have not put away.
+ *
+ * Above the list rather than instead of it. A deployment they watched is *also* down there,
+ * with its own log — the card here is an extra thing to watch something while it happens, and it
+ * was never meant to take the place of the record. It did, for as long as the two were the same
+ * thing, and a page that stops listing what it has done the moment somebody starts watching it
+ * is a page that forgets.
+ *
+ * A card here keeps the shape it had while it was running when it finishes: the steps, the log
+ * under them, and the cross. A deployment that ends does not take its card down — the moment it
+ * ended is usually the moment somebody starts reading why.
+ */
+const live = computed(() =>
+  cards.value.filter((one) => (one.running || caught.value[one.job_id]) && !putAway.value[one.job_id]))
+
+/** The record, as it always was: every operation, whether or not anybody watched it. */
+const history = computed(() => cards.value)
 
 /** Everything the core sends in one answer is both halves; the sort is by what was begun. */
 function reorder(answer: OperationsAnswer) {
@@ -616,20 +632,16 @@ watchEvents({
 
     <div v-if="reason" class="empty">{{ reason }}</div>
     <div v-else-if="loading && cards.length === 0" class="empty">Looking…</div>
-    <!-- Every card put away and nothing new to show. Not the same message as an empty page:
-         this one says the reader decided, and the other says there is nothing there. -->
     <div v-else-if="cards.length === 0" class="empty">
       Nothing is being deployed to this place, and nothing has been for a while.
     </div>
-    <div v-else-if="shown.length === 0" class="empty">
-      All {{ cards.length }} of the deployments here are put away. Open the page again to see them.
-    </div>
 
-    <!-- One card per operation. The key is the job: two cards for one operation is the bug this
-         replaces, and a card that changes identity as it runs is the same bug wearing a hat. -->
+    <!-- The reader's own: under way, and caught. The key carries the kind, because the same
+         operation is deliberately in both this and the list below — a key of the job alone
+         would make the second copy a duplicate of the first and Vue would drop one of them. -->
     <section
-      v-for="operation in shown"
-      :key="operation.job_id"
+      v-for="operation in live"
+      :key="`live-${operation.job_id}`"
       class="card operation"
       :class="edgeOf(operation)"
     >
@@ -643,15 +655,10 @@ watchEvents({
 
           <span class="spacer" />
 
-          <!-- Put away by the reader, and only by the reader — and only on a card the reader
-               watched. A deployment does not take its own card off the page when it ends: it
-               goes from yellow to green and stays as it was, because the moment it finished is
-               usually the moment somebody starts reading why.
+          <span v-if="when(operation)" class="muted small">{{ when(operation) }}</span>
+          <span v-if="took(operation)" class="muted small mono">took {{ took(operation) }}</span>
 
-               Top right and visible, not a small mark in the middle of a row. It is the one
-               control on the card, and a control nobody can find is not a control. -->
           <button
-            v-if="isCaught(operation)"
             class="put-away"
             type="button"
             title="Put this card away. It comes back when you open the page again."
@@ -660,53 +667,66 @@ watchEvents({
           >
             ×
           </button>
-
-          <span v-if="when(operation)" class="muted small">{{ when(operation) }}</span>
-          <!-- Only when it took something. A duration of zero is a card saying "0s" beside
-               "3 days ago", which reads as a machine that has just run rather than one that
-               finished three days ago in no time at all. -->
-          <span v-if="took(operation)" class="muted small mono">took {{ took(operation) }}</span>
         </div>
 
-        <!-- The steps, from the core's plan, marked off by what is known about this operation.
-             Drawn for a card the reader is watching and for one they watched: those are the two
-             cards that have a beginning, and a card the reader saw the end of should not lose
-             its steps on the way there. -->
+        <p v-if="verdictOf(operation)" class="why" :class="{ bad: operation.status === 'failed' }">
+          {{ verdictOf(operation) }}
+        </p>
+
         <DeploySteps
-          v-if="isCaught(operation) && knows(operation)"
-          :progress="knows(operation)!.progress"
-          :seen="knows(operation)!.seen"
+          v-if="isCaught(operation) || knows(operation)"
+          :progress="knows(operation)?.progress ?? null"
+          :seen="knows(operation)?.seen ?? []"
           :live="operation.running"
           :plan="planOf(operation.job_id)"
           :active-phases="openPhases(operation)"
         />
 
-        <!-- The log. Two sources and one shape: the lines a card the reader watched arrived on,
-             and the lines a card that was already under way are asked for once. A card the
-             reader watched keeps the log it streamed — it is the one they were reading, and
-             replacing it with a fetched copy of the same thing is a card changing under the
-             reader's hand. -->
         <DeployLog
-          v-if="isCaught(operation) && watched(operation.job_id)"
+          v-if="watched(operation.job_id)"
           :lines="logLines(operation.job_id)"
           :plan="planOf(operation.job_id)"
         />
-        <div v-else-if="isCaught(operation)" class="operation-log-wrap">
+        <div v-else class="operation-log-wrap">
           <ul v-if="logOf(operation.job_id)?.length" class="operation-log">
             <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
               <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
               <span>{{ entry.text }}</span>
             </li>
           </ul>
-          <p v-else class="muted small">
-            {{ logLabel(operation.job_id) }}
-          </p>
+          <p v-else class="muted small">{{ logLabel(operation.job_id) }}</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- The record. One row per operation, as it has always been: badge, when, and the account
+         folded away. No cross — the reader did not watch these happen, and a card offering to be
+         put away invites the reader to treat it as theirs. -->
+    <section
+      v-for="operation in history"
+      :key="`in-${operation.job_id}`"
+      class="card operation"
+      :class="edgeOf(operation)"
+    >
+      <div class="card-body">
+        <div class="block-head">
+          <span class="badge" :class="tone[operation.status] ?? 'badge-neutral'">
+            {{ stateOf(operation) }}
+          </span>
+          <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
+          <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
+
+          <span class="spacer" />
+
+          <span v-if="when(operation)" class="muted small">{{ when(operation) }}</span>
+          <span v-if="took(operation)" class="muted small mono">took {{ took(operation) }}</span>
         </div>
 
-        <!-- An ordinary entry in the history: a badge, when, and the account folded away. Not
-             the reader's card — they did not watch it happen — so no cross, and nothing here
-             claiming they did. -->
-        <details v-if="!isCaught(operation)" class="log" @toggle="askLog(operation.job_id)">
+        <p v-if="verdictOf(operation)" class="why" :class="{ bad: operation.status === 'failed' }">
+          {{ verdictOf(operation) }}
+        </p>
+
+        <details class="log" @toggle="askLog(operation.job_id)">
           <summary class="muted small">{{ logLabel(operation.job_id) }}</summary>
           <ul v-if="logOf(operation.job_id)?.length" class="operation-log">
             <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
@@ -715,20 +735,22 @@ watchEvents({
             </li>
           </ul>
         </details>
-
-        <!-- Why, and near the top. A refused deployment is the one card on the page whose
-             reason is the whole of it, and the reason was at the bottom, under a log the reader
-             has to open — which is how "1 declined" came and went without anybody noticing it.
-             A refusal is not a fault, so it is not drawn as an alert either. -->
-        <p v-if="verdictOf(operation)" class="why" :class="{ bad: operation.status === 'failed' }">
-          {{ verdictOf(operation) }}
-        </p>
       </div>
     </section>
   </div>
 </template>
 
 <style scoped>
+/* The gap that pushes everything after it to the right end of a card's head.
+ *
+ * It was the one class in this row that did not exist: the head is a flex row, but with nothing
+ * in it that grows, the row is exactly as wide as its contents — so the cross, which belongs in
+ * the corner, sat pressed against the place chip instead. A missing class is invisible in a
+ * screenshot and obvious the moment a control ends up in the wrong place. */
+.spacer {
+  flex: 1 1 auto;
+}
+
 .operations {
   display: flex;
   flex-direction: column;
