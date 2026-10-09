@@ -400,3 +400,76 @@ func TestTheProgressKeptIsTheLatestOneSaid(t *testing.T) {
 		t.Errorf("the progress kept is %v, want the last thing said", got)
 	}
 }
+
+// What is happening is above what has not started, even when the second was asked for later.
+//
+// Two cards on one place, which is what a second commit during a deployment produces and not a
+// corner of anything. Newest-first put the waiting one on top: it has no start time of its own, so
+// it was ordered by the run that wants it, and that run was created after the other one began. The
+// reader reads the top of this list as what the place is doing now, and was being told the answer
+// to a different question — with the two cards drawn differently on purpose, so the order between
+// them is the whole of what the reader sees.
+func TestWhatIsHappeningIsAboveWhatIsWaiting(t *testing.T) {
+	st := dbtest.Open(t)
+	project := dbtest.NewProject(t, st, "ops-order", nil)
+
+	// The one that began, a minute ago, and is still going.
+	began := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
+	running := namedOperation(t, st, project.ID, "first", "jabjab.ru", &began, nil, "running")
+
+	// The one that was asked for ten seconds later and has not begun: newer by every measure
+	// there is, and the one that was being read first.
+	waiting := namedOperation(t, st, project.ID, "second", "jabjab.ru", nil, nil, "pending")
+
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "jabjab.ru", 10)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("read %d operations, want 2: %+v", len(found), found)
+	}
+	if found[0].JobID != running {
+		t.Errorf("the card on top is job %d (status %q), want the running job %d",
+			found[0].JobID, found[0].Status, running)
+	}
+	if found[1].JobID != waiting {
+		t.Errorf("the second card is job %d, want the waiting job %d", found[1].JobID, waiting)
+	}
+	if !found[0].Running() || !found[1].Queued() {
+		t.Errorf("want running then queued, got running=%v queued=%v",
+			found[0].Running(), found[1].Queued())
+	}
+}
+
+// And the newest is still the newest within each half, which is what the order is for.
+//
+// The two halves exist so a reader can find the thing that is happening without reading past a
+// history. Sorting within them by anything else makes the list move about between two reloads of
+// the same second, and a list that cannot be looked at is a list nobody reads the running one off.
+func TestTheRecentIsStillFirstWithinEachHalf(t *testing.T) {
+	st := dbtest.Open(t)
+	project := dbtest.NewProject(t, st, "ops-recent", nil)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	older := now.Add(-2 * time.Minute)
+	newer := now.Add(-time.Minute)
+
+	second := namedOperation(t, st, project.ID, "older", "jabjab.ru", &older,
+		ptrTime(now.Add(-time.Minute)), "success")
+	first := namedOperation(t, st, project.ID, "newer", "jabjab.ru", &newer,
+		ptrTime(now.Add(-30*time.Second)), "success")
+
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "jabjab.ru", 10)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("read %d operations, want 2: %+v", len(found), found)
+	}
+	if found[0].JobID != first || found[1].JobID != second {
+		t.Errorf("want the newer finished operation %d first, got %d and then %d",
+			first, found[0].JobID, found[1].JobID)
+	}
+}
+
+func ptrTime(at time.Time) *time.Time { return &at }

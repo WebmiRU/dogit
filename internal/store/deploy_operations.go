@@ -153,7 +153,24 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		           AND ($2 = '' OR COALESCE(NULLIF(j2.deploy->>'Cluster', ''), j2.deploy->>'Target') = $2)
 		         ORDER BY COALESCE(j2.started_at, p2.started_at, p2.created_at) DESC, j2.id DESC LIMIT $4
 		       ))
-		ORDER BY COALESCE(j.started_at, p.started_at, p.created_at) DESC, j.id DESC`,
+		ORDER BY
+		  -- What is under way first, and then what is waiting, before anything that is over.
+		  --
+		  -- Newest-first alone put a card for a deployment that has not begun above the one that
+		  -- is happening, because it was asked for later: the waiter has no start time, so it
+		  -- falls back to the run that wants it, and that run was created after the other one
+		  -- started. The reader reads the top of this list as what the place is doing now, and
+		  -- on a page with two cards they were reading the answer to a different question.
+		  --
+		  -- Two deployments at once is the ordinary case, not the rare one — a second commit while
+		  -- the first is still deploying is what any repository does — and the two are drawn
+		  -- differently on purpose, so the order between them is the whole of it.
+		  CASE
+		    WHEN j.finished_at IS NULL AND j.started_at IS NOT NULL THEN 0
+		    WHEN j.finished_at IS NULL AND j.status = 'pending' THEN 1
+		    ELSE 2
+		  END,
+		  COALESCE(j.started_at, p.started_at, p.created_at) DESC, j.id DESC`,
 		projectID, place, finishedStatuses, finished)
 	if err != nil {
 		return nil, fmt.Errorf("list deploy operations: %w", err)
