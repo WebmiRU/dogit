@@ -25,8 +25,9 @@ const props = withDefaults(
     title?: string
     /** Whether the kind filter is offered. Off when the page is about one kind. */
     filterKind?: boolean
+    filterVisibility?: boolean
   }>(),
-  { type: '', filterKind: true },
+  { type: '', filterKind: true, filterVisibility: true },
 )
 
 const route = useRoute()
@@ -173,6 +174,7 @@ const visibilities = [
       </button>
 
       <select
+        v-if="filterVisibility"
         :value="filters.visibility"
         aria-label="Visibility"
         @change="go({ visibility: ($event.target as HTMLSelectElement).value })"
@@ -237,8 +239,8 @@ const visibilities = [
             </td>
             <td class="places-activity-cell">
               <div class="places-activity-counts">
-                <span class="places-count" :class="{ muted: !place.forks }" :title="place.forks + ' forks'">
-                  <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5" /><circle cx="12" cy="13" r="1.5" /><circle cx="12" cy="3" r="1.5" /><path d="M4 4.5v4a4 4 0 0 0 4 4h2.5M5.5 3H10.5" /></svg>{{ place.forks }}
+                <span class="places-count muted" title="Fork count is not enabled yet">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5" /><circle cx="12" cy="13" r="1.5" /><circle cx="12" cy="3" r="1.5" /><path d="M4 4.5v4a4 4 0 0 0 4 4h2.5M5.5 3H10.5" /></svg>0
                 </span>
                 <NuxtLink v-if="place.open_merge_requests > 0" :to="place.kind === 'project' ? '/p/' + place.path + '/-/merge_requests' : placeHref(place)" :title="place.open_merge_requests + ' open merge requests'" class="places-count">
                   <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M4 4h5a3 3 0 0 1 3 3v2M9 12l3 3 3-3" /></svg>{{ place.open_merge_requests }}

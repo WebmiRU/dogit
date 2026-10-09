@@ -122,7 +122,6 @@ func (s *Server) handleListPlaces(w http.ResponseWriter, r *http.Request) {
 			LatestPipelineAt: row.LatestPipelineAt,
 			OpenMergeRequests: row.OpenMergeRequests,
 			OpenIssues: row.OpenIssues,
-			Forks: row.Forks,
 		})
 	}
 
@@ -160,7 +159,6 @@ type placeView struct {
 	LatestPipelineAt *time.Time `json:"latest_pipeline_at,omitempty"`
 	OpenMergeRequests int `json:"open_merge_requests"`
 	OpenIssues int `json:"open_issues"`
-	Forks int `json:"forks"`
 }
 
 // atoiOr reads a number from a query, falling back when it is absent or nonsense.

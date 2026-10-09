@@ -46,7 +46,6 @@ type Listing struct {
 	LatestPipelineAt *time.Time
 	OpenMergeRequests int
 	OpenIssues int
-	Forks int
 	// AccessLevel is what the reader may do here, in the words the rest of the
 	// instance uses for it.
 	AccessLevel int
@@ -139,8 +138,7 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 			       COALESCE((SELECT pl.status FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1), '') AS latest_pipeline_status,
 			       (SELECT pl.created_at FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1) AS latest_pipeline_at,
 			       (SELECT count(*)::int FROM merge_requests mr WHERE mr.project_id = p.id AND mr.state = 'opened') AS open_merge_requests,
-			       (SELECT count(*)::int FROM issues i WHERE i.project_id = p.id AND i.state = 'opened') AS open_issues,
-			       (SELECT count(*)::int FROM projects fork WHERE fork.forked_from_project_id = p.id) AS forks
+			       (SELECT count(*)::int FROM issues i WHERE i.project_id = p.id AND i.state = 'opened') AS open_issues
 			FROM projects p
 			WHERE (($5 = 'inactive' AND p.archived_at IS NOT NULL) OR ($5 <> 'inactive' AND p.archived_at IS NULL))
 			  AND (p.visibility <> 'private'
@@ -164,7 +162,7 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 			       'private', NULL::uuid, (
 			           SELECT count(*)::int FROM projects gp
 			           WHERE gp.group_id = g.id AND gp.archived_at IS NULL
-			       ), g.created_at, NULL::timestamptz, '', '', NULL::timestamptz, 0::int, 0::int, 0::int
+			       ), g.created_at, NULL::timestamptz, '', '', NULL::timestamptz, 0::int, 0::int
 			FROM groups g
 			WHERE (EXISTS (SELECT 1 FROM group_members m WHERE m.group_id = g.id AND m.user_id = $1)
 			    OR EXISTS (SELECT 1 FROM group_roles r WHERE r.group_id = g.id AND r.source_user_id = $1)
@@ -208,7 +206,7 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 		if err := rows.Scan(&row.Kind, &row.ID, &row.Path, &row.Name, &row.Description,
 			&row.Visibility, &row.GroupID, &row.ProjectCount, &row.CreatedAt,
 			&row.LastCommitAt, &row.LastCommitMessage, &row.LatestPipelineStatus, &row.LatestPipelineAt,
-			&row.OpenMergeRequests, &row.OpenIssues, &row.Forks, &total); err != nil {
+			&row.OpenMergeRequests, &row.OpenIssues, &total); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, row)

@@ -68,7 +68,7 @@ async function createGroup() {
       <NuxtLink to="/groups" class="active">All groups</NuxtLink>
     </nav>
 
-    <PlacesTable :key="created" type="group" :filter-kind="false" />
+    <PlacesTable :key="created" type="group" :filter-kind="false" :filter-visibility="false" />
 
   </div>
 </template>
