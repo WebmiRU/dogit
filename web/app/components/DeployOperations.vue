@@ -304,7 +304,7 @@ function note(payload: Record<string, unknown>) {
       ...operations.value,
       { job_id: jobID, status: 'running', name: '', place: props.place ?? '',
         error: '', started_at: Date.now(),
-        finished_at: null, running: true },
+        finished_at: null, running: true, queued: false },
     ]
   }
 }
@@ -376,11 +376,13 @@ function logLabel(jobID: number): string {
  * the single card made with its steps.
  */
 function logLines(jobID: number): { phase: string; message: string; step: number; of: number }[] {
+  // A line that names no step in a list of them is a line about the operation as a whole, and
+  // zero of zero is what that is: the step list it is filed under has nothing to number yet.
   return (watching.value[jobID]?.seen ?? []).map((one) => ({
     phase: one.phase,
     message: one.message,
-    step: one.step,
-    of: one.of,
+    step: one.step ?? 0,
+    of: one.of ?? 0,
   }))
 }
 
@@ -612,6 +614,23 @@ function lateProgress(operation: DeployOperation): Watching | null {
 /** What this card knows about its own operation: what it watched, or what it was told. */
 function knows(operation: DeployOperation): Watching | null {
   return watched(operation.job_id) ?? lateProgress(operation)
+}
+
+/**
+ * Putting a card away, which is the one thing the reader decides about this page.
+ *
+ * It takes away the card the reader was watching and nothing else: the operation itself stays in
+ * the list below with its own log, because the card up here was an extra way to watch something
+ * happen and not the record that it happened.
+ *
+ * Kept by operation and not by position, and not written down anywhere. A card put away comes
+ * back when the page is opened again, which is the escape hatch: a card that could be hidden with
+ * no way to bring it back is a card somebody stops trusting the page to show them. Deciding when
+ * it returns instead — a day, a week, until the deployment is pruned — is a rule about somebody's
+ * memory, and the interface has no business making it.
+ */
+function hide(operation: DeployOperation): void {
+  putAway.value = { ...putAway.value, [operation.job_id]: true }
 }
 
 /** The core announcing a plan on the socket, which it does as well as over HTTP. */
