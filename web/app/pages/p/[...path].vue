@@ -301,14 +301,18 @@ async function copyCloneUrl() {
     <div v-else-if="loadError" class="alert alert-error">{{ loadError }}</div>
 
     <template v-else-if="project">
-      <div class="repo-head">
-        <div class="title">
-          <h1 class="page-title">
-            {{ project.name || project.path }}
-            <span class="badge" :class="`badge-${project.visibility}`">{{ project.visibility }}</span>
-            <span class="badge">{{ project.access_name }}</span>
-          </h1>
-          <p class="page-subtitle">{{ project.description || 'No description yet.' }}</p>
+      <div class="repo-head project-page-head">
+        <div class="project-identity">
+          <div class="project-mark" aria-hidden="true">{{ (project.name || project.path).slice(0, 1).toUpperCase() }}</div>
+          <div class="title project-title-block">
+            <div class="project-path">{{ project.path.split('/').slice(0, -1).join(' / ') || 'Projects' }}</div>
+            <h1 class="page-title project-page-title">
+              {{ project.name || project.path.split('/').pop() }}
+              <span class="badge" :class="`badge-${project.visibility}`">{{ project.visibility }}</span>
+              <span class="badge">{{ project.access_name }}</span>
+            </h1>
+            <p class="page-subtitle">{{ project.description || 'No description yet.' }}</p>
+          </div>
         </div>
         <div class="repo-clone">
           <span class="muted">git clone</span>

@@ -1679,3 +1679,156 @@ label {
     padding-bottom: 12px;
   }
 }
+
+
+/* --- project overview: quiet GitLab-inspired repository chrome ---------- */
+.project-page-head {
+  align-items: center;
+  gap: 20px;
+  padding: 2px 0 20px;
+  margin-bottom: 0;
+}
+
+.project-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.project-mark {
+  display: flex;
+  flex: 0 0 52px;
+  width: 52px;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #41434b;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #292b32, #1d1e23);
+  color: #d5d7df;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -1px;
+}
+
+.project-title-block {
+  min-width: 0;
+}
+
+.project-path {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.project-page-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: clamp(21px, 2vw, 27px);
+  font-weight: 650;
+  letter-spacing: -0.55px;
+  line-height: 1.35;
+}
+
+.project-page-head .page-subtitle {
+  margin: 5px 0 0;
+  font-size: 13px;
+}
+
+.project-page-head .repo-clone {
+  max-width: 46%;
+  min-width: 260px;
+  margin-left: auto;
+}
+
+.project-page-head .clone-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-page-head + .repo-tabs {
+  margin-top: 0;
+  gap: 2px;
+}
+
+.project-page-head + .repo-tabs a {
+  padding: 12px 13px 11px;
+  font-size: 13px;
+}
+
+.project-page-head + .repo-tabs a.active {
+  color: var(--text);
+  border-bottom-color: #8b9bb4;
+}
+
+select:focus,
+input:focus,
+textarea:focus {
+  border-color: #626773;
+  box-shadow: 0 0 0 2px rgba(117, 124, 140, 0.12);
+}
+
+select:focus-visible {
+  outline: 1px solid #626773;
+  outline-offset: 1px;
+}
+
+.mr-state-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.mr-state-tab {
+  min-height: 32px;
+  padding: 5px 11px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.mr-state-tab:hover:not(:disabled) {
+  border-color: var(--border);
+  background: #222328;
+  color: var(--text);
+}
+
+.mr-state-tab.active,
+.mr-state-tab.active:hover:not(:disabled) {
+  border-color: #454751;
+  background: #2a2b31;
+  color: #e4e5ea;
+  box-shadow: inset 0 -2px 0 #9298a6;
+}
+
+@media (max-width: 760px) {
+  .project-page-head {
+    align-items: stretch;
+  }
+
+  .project-identity {
+    flex-basis: 100%;
+  }
+
+  .project-page-head .repo-clone {
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .project-page-head + .repo-tabs {
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}

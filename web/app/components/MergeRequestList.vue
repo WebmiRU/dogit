@@ -70,12 +70,12 @@ async function created(mr: MergeRequest) {
 
     <div class="card">
       <div class="toolbar">
-        <nav class="repo-tabs" style="border: 0; margin: 0; padding: 0">
+        <nav class="mr-state-tabs" aria-label="Filter merge requests">
           <button
             v-for="option in states"
             :key="option.value"
-            class="btn"
-            :class="{ 'btn-primary': state === option.value }"
+            class="btn mr-state-tab"
+            :class="{ active: state === option.value }"
             type="button"
             @click="state = option.value"
           >
