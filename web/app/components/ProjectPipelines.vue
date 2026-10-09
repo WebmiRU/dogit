@@ -319,23 +319,48 @@ watch(() => props.projectPath, () => load())
 </script>
 
 <template>
-  <div>
-    <div class="repo-head">
-      <div class="title">
-        <h2 class="section-title" style="margin: 0">Pipelines</h2>
-        <p class="page-subtitle">
-          Runs of this project's <code class="mono">.dogit-ci.yml</code>, whether a
-          push started one or you did.
+  <section class="pipelines-page">
+    <header class="pipelines-heading">
+      <div class="pipelines-heading-copy">
+        <div class="eyebrow"><span class="eyebrow-mark">↗</span> CONTINUOUS INTEGRATION</div>
+        <h1 class="pipelines-title">Pipelines</h1>
+        <p class="pipelines-description">
+          Track builds, inspect stages, and follow every change through
+          <code class="mono">.dogit-ci.yml</code>.
         </p>
       </div>
-      <button class="btn btn-primary" type="button" :disabled="starting" @click="start">
+      <button class="btn btn-primary pipelines-new" type="button" :disabled="starting" @click="start">
+        <span class="new-plus" aria-hidden="true">＋</span>
         {{ starting ? 'Starting…' : 'New pipeline' }}
       </button>
+    </header>
+
+    <div class="pipelines-summary" aria-label="Pipeline summary for this page">
+      <div class="summary-item">
+        <span class="summary-value">{{ total }}</span>
+        <span class="summary-label">Matching runs</span>
+      </div>
+      <div class="summary-divider" />
+      <div class="summary-item">
+        <span class="summary-value summary-running">{{ pipelines.filter(run => isLive(run)).length }}</span>
+        <span class="summary-label">Active on this page</span>
+      </div>
+      <div class="summary-divider" />
+      <div class="summary-item">
+        <span class="summary-value summary-failed">{{ pipelines.filter(run => run.status === 'failed').length }}</span>
+        <span class="summary-label">Failed on this page</span>
+      </div>
+      <span class="summary-context">Current results</span>
     </div>
 
     <div v-if="error" class="alert alert-error">{{ error }}</div>
 
-    <div class="toolbar">
+    <div class="pipeline-toolbar">
+      <div class="toolbar-heading">
+        <span class="toolbar-title">Run history</span>
+        <span class="toolbar-count">{{ range }}</span>
+      </div>
+      <div class="toolbar">
       <input
         v-model="typing"
         class="filter"
@@ -373,23 +398,33 @@ watch(() => props.projectPath, () => load())
         <option value="push">Pushes</option>
         <option value="manual">Started by hand</option>
       </select>
+      </div>
     </div>
 
-    <div v-if="loading && pipelines.length === 0" class="spinner">Loading pipelines…</div>
+    <div v-if="loading && pipelines.length === 0" class="spinner pipelines-loading">Loading pipelines…</div>
 
-    <div v-else-if="pipelines.length === 0" class="card empty">
-      Nothing has run yet. Add a <code class="mono">.dogit-ci.yml</code> to the project
-      and press “New pipeline”.
+    <div v-else-if="pipelines.length === 0 && !view.search && !view.status && !view.ref && !view.source" class="card empty pipelines-empty">
+      <div class="empty-symbol" aria-hidden="true">⌁</div>
+      <h3>No pipelines yet</h3>
+      <p>Add a <code class="mono">.dogit-ci.yml</code> to the project, then start a run to see its progress here.</p>
+      <button class="btn btn-primary" type="button" :disabled="starting" @click="start">
+        {{ starting ? 'Starting…' : 'Run a pipeline' }}
+      </button>
     </div>
 
-    <div v-else-if="pipelines.length === 0" class="card empty">
-      Nothing runs here
-      <template v-if="view.search">that matches “{{ view.search }}”</template>
-      <template v-else-if="view.status || view.ref">with these filters</template>.
-      <button class="btn btn-small" type="button" @click="clearFilters()">Clear the filters</button>
+    <div v-else-if="pipelines.length === 0" class="card empty pipelines-empty">
+      <div class="empty-symbol" aria-hidden="true">⌕</div>
+      <h3>No matching runs</h3>
+      <p>
+        <template v-if="view.search">No runs match “{{ view.search }}”.</template>
+        <template v-else>No runs match the selected filters.</template>
+        Try broadening your search or clearing the filters.
+      </p>
+      <button class="btn btn-small" type="button" @click="clearFilters()">Clear filters</button>
     </div>
 
-    <table v-else class="pipeline-table">
+    <div v-else class="pipeline-table-wrap">
+    <table class="pipeline-table">
       <thead>
         <tr>
           <th class="col-status">Status</th>
@@ -517,6 +552,7 @@ watch(() => props.projectPath, () => load())
         </tr>
       </tbody>
     </table>
+    </div>
 
     <div v-if="total > 0" class="pager">
       <span class="muted small">{{ range }}</span>
@@ -539,10 +575,212 @@ watch(() => props.projectPath, () => load())
         Older
       </button>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
+.pipelines-page {
+  --pipeline-line: color-mix(in srgb, var(--border) 82%, transparent);
+  max-width: 1440px;
+  margin: 0 auto;
+  color: var(--text);
+}
+
+.pipelines-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 10px 0 22px;
+}
+
+.pipelines-heading-copy { min-width: 0; }
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .13em;
+}
+
+.eyebrow-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--pipeline-line);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.pipelines-title {
+  margin: 0;
+  font-size: clamp(27px, 3vw, 34px);
+  font-weight: 680;
+  letter-spacing: -.045em;
+  line-height: 1.15;
+}
+
+.pipelines-description {
+  max-width: 660px;
+  margin: 9px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.pipelines-description code {
+  padding: 2px 5px;
+  border: 1px solid var(--pipeline-line);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.pipelines-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  white-space: nowrap;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .12);
+}
+
+.new-plus { font-size: 17px; line-height: 12px; }
+
+.pipelines-summary {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  min-height: 78px;
+  padding: 15px 20px;
+  margin-bottom: 22px;
+  border: 1px solid var(--pipeline-line);
+  border-radius: 11px;
+  background: var(--bg-elevated);
+}
+
+.summary-item { display: flex; flex-direction: column; gap: 4px; }
+.summary-value {
+  font-size: 21px;
+  line-height: 1;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.035em;
+}
+.summary-label { color: var(--text-muted); font-size: 11px; }
+.summary-running { color: var(--info, #58a6ff); }
+.summary-failed { color: var(--red, #f85149); }
+.summary-divider { width: 1px; height: 34px; background: var(--pipeline-line); }
+.summary-context {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pipeline-toolbar {
+  overflow: visible;
+  margin-bottom: 0;
+  border: 1px solid var(--pipeline-line);
+  border-bottom: 0;
+  border-radius: 11px 11px 0 0;
+  background: var(--bg-elevated);
+}
+
+.toolbar-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 16px 2px;
+}
+.toolbar-title { font-size: 13px; font-weight: 650; }
+.toolbar-count { color: var(--text-muted); font-size: 11px; }
+
+.pipeline-toolbar .toolbar {
+  padding: 12px 16px 15px;
+  margin: 0;
+  border: 0;
+}
+
+.pipeline-toolbar .filter {
+  min-width: 220px;
+  min-height: 36px;
+  padding: 8px 12px;
+  background: var(--bg-inset);
+  border-color: var(--pipeline-line);
+  border-radius: 7px;
+}
+
+.pipeline-toolbar select {
+  min-height: 36px;
+  padding: 7px 30px 7px 10px;
+  border-radius: 7px;
+  background-color: var(--bg-inset);
+  border-color: var(--pipeline-line);
+}
+
+.pipeline-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--pipeline-line);
+  border-radius: 0 0 11px 11px;
+  background: var(--bg-elevated);
+}
+
+.pipelines-loading {
+  border: 1px solid var(--pipeline-line);
+  border-radius: 0 0 11px 11px;
+}
+
+.pipelines-empty {
+  margin-top: 0;
+  padding: 52px 24px;
+  border: 1px solid var(--pipeline-line);
+  border-radius: 0 0 11px 11px;
+  background: var(--bg-elevated);
+}
+.pipelines-empty h3 { margin: 12px 0 6px; color: var(--text); font-size: 16px; }
+.pipelines-empty p {
+  max-width: 440px;
+  margin: 0 auto 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.empty-symbol {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto;
+  border: 1px solid var(--pipeline-line);
+  border-radius: 12px;
+  background: var(--bg-inset);
+  color: var(--accent);
+  font-size: 27px;
+}
+
+@media (max-width: 760px) {
+  .pipelines-heading { gap: 14px; flex-direction: column; }
+  .pipelines-new { align-self: flex-start; }
+  .pipelines-summary { gap: 12px; padding: 13px; }
+  .summary-context { display: none; }
+  .summary-value { font-size: 18px; }
+  .summary-label { max-width: 88px; font-size: 10px; }
+  .pipeline-toolbar .toolbar { align-items: stretch; }
+  .pipeline-toolbar .filter { flex: 1 1 100%; max-width: none; }
+  .pipeline-toolbar select { flex: 1 1 calc(50% - 8px); min-width: 0; }
+  .pipeline-table { min-width: 760px; }
+}
+
+.section-title {
 .section-title {
   font-size: 18px;
 }
