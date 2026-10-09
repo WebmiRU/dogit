@@ -13,8 +13,20 @@
 {{- end }}
 {{- else if eq .Values.ingress.className "traefik" }}
 {{- if .Values.ingress.tls.enabled }}
-{{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.entrypoints" "websecure" -}}
-{{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.tls" "true" -}}
+{{- /* Both entrypoints, not just websecure: with websecure alone Traefik owns no
+       route for plain HTTP on :80 and answers 404 there, so the site is reachable
+       only by typing https://, which reads as "the domain is dead" to anyone who
+       tried http:// first.
+       Note there is deliberately NO router.tls annotation here. That annotation is
+       a filter on req.TLS, so setting it alongside "web" silently defeats the whole
+       point: every request arriving on :80 is plain and gets rejected. TLS does not
+       need to be requested for the secure side either — Traefik requires TLS on a
+       TLS entrypoint on its own and takes the certificate from spec.tls below.
+       Serving HTTP instead of bouncing it to HTTPS is also a deliberate choice:
+       a redirect is a Traefik middleware (IngressRoute) or an entrypoint-level
+       redirection in the static config, and the latter would change behaviour for
+       every other host on this shared cluster. */}}
+{{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.entrypoints" "web,websecure" -}}
 {{- else }}
 {{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.entrypoints" "web" -}}
 {{- end }}

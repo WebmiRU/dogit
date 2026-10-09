@@ -182,7 +182,12 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-              add: ["CHOWN"]
+              # CHOWN hands the directories to the runner's uid and FOWNER is what lets
+              # this container set their mode afterwards: chmod needs either ownership
+              # or CAP_FOWNER, and the chown on the line above has already given the
+              # ownership away. With CHOWN alone the sequence fails on its own second
+              # line — "chmod: Operation not permitted" — and the Pod never starts.
+              add: ["CHOWN", "FOWNER"]
           resources:
             requests:
               cpu: 10m
@@ -300,7 +305,13 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-              add: ["CHOWN", "SETUID", "SETGID"]
+              # FOWNER for the same reason as the init container above, and here it is not
+              # a nicety: the entrypoint copies the credentials into an in-memory
+              # directory, chowns them to the runner's uid and only then chmods them to
+              # 0400. After the chown the files belong to someone else, and chmod needs
+              # either ownership or CAP_FOWNER — so the sequence failed on its own last
+              # line and the runner never started.
+              add: ["CHOWN", "FOWNER", "SETUID", "SETGID"]
           resources:
             {{- toYaml .Values.modules.runner.resources | nindent 12 }}
       volumes:
