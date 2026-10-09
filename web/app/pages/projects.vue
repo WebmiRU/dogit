@@ -54,7 +54,7 @@ async function createProject() {
   <div class="project-index">
     <div class="repo-head project-index-head">
       <div class="title">
-        <h1 class="page-title">Projects and groups</h1>
+        <h1 class="page-title">Projects</h1>
         
       </div>
       <button class="btn project-create-button" type="button" @click="showForm = !showForm">
@@ -117,12 +117,14 @@ async function createProject() {
     </div>
 
     <nav class="project-index-tabs" aria-label="Project views">
-      <NuxtLink to="/projects" :class="{ active: !$route.query.type }">All</NuxtLink>
-      <NuxtLink to="/projects?type=project" :class="{ active: $route.query.type === 'project' }">Projects</NuxtLink>
-      <NuxtLink to="/projects?type=group" :class="{ active: $route.query.type === 'group' }">Groups</NuxtLink>
+      <NuxtLink to="/projects" :class="{ active: !$route.query.scope }">All</NuxtLink>
+      <NuxtLink to="/projects?scope=contributed" :class="{ active: $route.query.scope === 'contributed' }">Contributed</NuxtLink>
+      <NuxtLink to="/projects?scope=personal" :class="{ active: $route.query.scope === 'personal' }">Personal</NuxtLink>
+      <NuxtLink to="/projects?scope=member" :class="{ active: $route.query.scope === 'member' }">Member</NuxtLink>
+      <NuxtLink to="/projects?scope=inactive" :class="{ active: $route.query.scope === 'inactive' }">Inactive</NuxtLink>
     </nav>
 
-    <PlacesTable />
+    <PlacesTable type="project" :filter-kind="false" />
 
   </div>
 </template>

@@ -32,15 +32,13 @@ async function createGroup() {
 </script>
 
 <template>
-  <div>
-    <div class="repo-head">
+  <div class="project-index">
+    <div class="repo-head project-index-head">
       <div class="title">
         <h1 class="page-title">Groups</h1>
-        <p class="page-subtitle">
-          Groups own projects and carry the access levels their members have.
-        </p>
       </div>
-      <button class="btn btn-primary" type="button" @click="showForm = !showForm">
+      <button class="btn project-create-button" type="button" @click="showForm = !showForm">
+        <span class="project-create-icon" aria-hidden="true">{{ showForm ? '−' : '+' }}</span>
         {{ showForm ? 'Cancel' : 'New group' }}
       </button>
     </div>
@@ -66,6 +64,10 @@ async function createGroup() {
     </div>
 
     <!-- Keyed on the create counter so a new group shows up without a reload. -->
+    <nav class="project-index-tabs" aria-label="Group views">
+      <NuxtLink to="/groups" class="active">All groups</NuxtLink>
+    </nav>
+
     <PlacesTable :key="created" type="group" :filter-kind="false" />
 
   </div>

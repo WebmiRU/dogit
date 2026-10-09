@@ -19,6 +19,14 @@ export interface Place {
   project_count?: number
   access_level: number
   access_name?: string
+  last_commit_at?: string
+  last_commit_message?: string
+  latest_pipeline_status?: string
+  latest_pipeline_at?: string
+  open_merge_requests: number
+  open_issues: number
+  created_at?: string
+  archived_at?: string | null
 }
 
 /**
@@ -40,6 +48,8 @@ export interface PlaceFilters {
   search?: string
   type?: '' | 'project' | 'group'
   visibility?: string
+  scope?: '' | 'contributed' | 'personal' | 'member' | 'inactive'
+  sort?: 'name' | 'created' | 'last_activity'
   page?: number
   per_page?: number
 }
@@ -51,6 +61,8 @@ export function placeQuery(filters: PlaceFilters): string {
   if (filters.search?.trim()) parts.set('search', filters.search.trim())
   if (filters.type) parts.set('type', filters.type)
   if (filters.visibility) parts.set('visibility', filters.visibility)
+  if (filters.scope) parts.set('scope', filters.scope)
+  if (filters.sort) parts.set('sort', filters.sort)
   if (filters.page && filters.page > 1) parts.set('page', String(filters.page))
   if (filters.per_page) parts.set('per_page', String(filters.per_page))
 

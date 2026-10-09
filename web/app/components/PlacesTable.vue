@@ -32,6 +32,21 @@ const props = withDefaults(
 const route = useRoute()
 const { add: notify } = useNotifyPool()
 
+function formatDate(value?: string): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
+function pipelineLabel(value: string): string {
+  const labels: Record<string, string> = {
+    success: 'Passed', failed: 'Failed', running: 'Running', pending: 'Pending',
+    canceled: 'Canceled', interrupted: 'Interrupted',
+  }
+  return labels[value] ?? value
+}
+
 const places = ref<Place[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -41,7 +56,6 @@ const error = ref('')
 
 /** The word being typed, kept apart from what has been searched for yet. */
 const typing = ref('')
-const sortBy = ref('name')
 const sortedPlaces = computed(() => places.value)
 
 /** What is asked of the server, read out of the address bar. */
@@ -49,6 +63,8 @@ const filters = computed<Required<PlaceFilters>>(() => ({
   search: String(route.query.search ?? ''),
   type: (props.type || String(route.query.type ?? '')) as PlaceFilters['type'] as 'project' | 'group' | '',
   visibility: String(route.query.visibility ?? ''),
+  scope: String(route.query.scope ?? '') as PlaceFilters['scope'],
+  sort: (String(route.query.sort ?? 'name') || 'name') as PlaceFilters['sort'],
   page: Math.max(1, Number(route.query.page ?? 1) || 1),
   per_page: 20,
 }))
@@ -78,7 +94,7 @@ function go(change: Partial<PlaceFilters>) {
   const next: PlaceFilters = { ...filters.value, ...change }
   // Any narrowing starts again at the first page: page seven of a search that now
   // matches three things is a page about nothing.
-  if (change.search !== undefined || change.type !== undefined || change.visibility !== undefined) {
+  if (change.search !== undefined || change.type !== undefined || change.visibility !== undefined || change.scope !== undefined) {
     next.page = 1
   }
   const search = placeQuery(next)
@@ -102,6 +118,17 @@ onMounted(() => {
 })
 
 watch(query, () => void load())
+onMounted(() => {
+  const closeMenus = (event: MouseEvent) => {
+    const target = event.target as HTMLElement | null
+    if (target?.closest('.places-row-menu')) return
+    document.querySelectorAll<HTMLDetailsElement>('.places-row-menu[open]').forEach((menu) => {
+      menu.open = false
+    })
+  }
+  document.addEventListener('click', closeMenus)
+  onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
+})
 onBeforeUnmount(() => clearTimeout(wait))
 
 /** The range shown in the footer: "1–20 of 340". */
@@ -111,12 +138,6 @@ const range = computed(() => {
   const last = Math.min(first + places.value.length - 1, total.value)
   return `${first}–${last} of ${total.value}`
 })
-
-const kinds = [
-  { value: '', label: 'Everything' },
-  { value: 'project', label: 'Projects' },
-  { value: 'group', label: 'Groups' },
-]
 
 const visibilities = [
   { value: '', label: 'Any visibility' },
@@ -137,21 +158,12 @@ const visibilities = [
         <input v-model="typing" class="search" type="search" placeholder="Filter or search projects" aria-label="Search projects and groups">
       </div>
 
-      <select
-        v-if="filterKind"
-        :value="filters.type"
-        aria-label="Which kind of place"
-        @change="go({ type: ($event.target as HTMLSelectElement).value as PlaceFilters['type'] })"
-      >
-        <option v-for="one in kinds" :key="one.value" :value="one.value">{{ one.label }}</option>
-      </select>
-
       <label class="places-sort">
         <span class="sr-only">Sort projects</span>
-        <select v-model="sortBy" aria-label="Sort projects">
+        <select :value="filters.sort" aria-label="Sort projects" @change="go({ sort: ($event.target as HTMLSelectElement).value as PlaceFilters['sort'] })">
           <option value="name">Name</option>
-          <option value="path">Path</option>
-          <option value="visibility">Visibility</option>
+          <option value="created">Created date</option>
+          <option value="last_activity">Last activity</option>
         </select>
         <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 4h10M3 8h7M3 12h4M11 7l2 2 2-2" /></svg>
       </label>
@@ -184,7 +196,8 @@ const visibilities = [
           <tr>
             <th>Project</th>
             <th>Tags</th>
-            <th>Access</th>
+            <th>Pipeline</th>
+            <th>Activity</th>
             <th></th>
           </tr>
         </thead>
@@ -204,12 +217,36 @@ const visibilities = [
             </td>
             <td>
               <div class="places-tags">
-                <span class="badge badge-neutral">{{ place.kind }}</span>
-                <span v-if="place.kind === 'project' && place.visibility" class="badge" :class="'badge-' + place.visibility">{{ place.visibility }}</span>
+                <span v-if="place.kind === 'group'" class="badge badge-neutral">Group</span>
+                <span v-else-if="place.visibility" class="badge" :class="'badge-' + place.visibility">{{ place.visibility }}</span>
+                <span v-if="place.access_name" class="badge badge-neutral">{{ place.access_name }}</span>
                 <span v-if="place.kind === 'group' && place.project_count !== undefined" class="muted small">{{ place.project_count }} projects</span>
               </div>
             </td>
-            <td class="places-access-cell"><span class="places-access-value">{{ place.access_name || '—' }}</span></td>
+            <td class="places-pipeline-cell">
+              <span v-if="place.kind === 'project' && place.latest_pipeline_status" class="pipeline-state" :class="'pipeline-state-' + place.latest_pipeline_status">
+                <span class="pipeline-state-dot"></span>{{ pipelineLabel(place.latest_pipeline_status) }}
+              </span>
+              <span v-else class="muted small">—</span>
+              <div v-if="place.latest_pipeline_at" class="muted small">{{ formatDate(place.latest_pipeline_at) }}</div>
+            </td>
+            <td class="places-activity-cell">
+              <div class="places-activity-counts">
+                <NuxtLink v-if="place.open_merge_requests > 0" :to="place.kind === 'project' ? '/p/' + place.path + '/-/merge_requests' : placeHref(place)" :title="place.open_merge_requests + ' open merge requests'" class="places-count">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M4 4h5a3 3 0 0 1 3 3v2M9 12l3 3 3-3" /></svg>{{ place.open_merge_requests }}
+                </NuxtLink>
+                <span v-else class="places-count muted" title="Open merge requests: 0"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M4 4h5a3 3 0 0 1 3 3v2M9 12l3 3 3-3" /></svg>0</span>
+                <NuxtLink v-if="place.open_issues > 0" :to="place.kind === 'project' ? '/p/' + place.path + '/-/issues' : placeHref(place)" :title="place.open_issues + ' open issues'" class="places-count">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.4M8 11h.01" /></svg>{{ place.open_issues }}
+                </NuxtLink>
+                <span v-else class="places-count muted" title="Open issues: 0"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.4M8 11h.01" /></svg>0</span>
+              </div>
+              <div class="places-last-commit" v-if="place.last_commit_at">
+                <span class="places-commit-message" :title="place.last_commit_message">{{ place.last_commit_message || 'Commit' }}</span>
+                <time class="muted small" :datetime="place.last_commit_at">{{ formatDate(place.last_commit_at) }}</time>
+              </div>
+              <span v-else class="muted small">No commits yet</span>
+            </td>
             <td class="places-actions-cell">
               <details class="places-row-menu">
                 <summary aria-label="Row actions">···</summary>
