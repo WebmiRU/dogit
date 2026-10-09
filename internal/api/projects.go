@@ -92,6 +92,7 @@ func (s *Server) handleListPlaces(w http.ResponseWriter, r *http.Request) {
 		Visibility: r.URL.Query().Get("visibility"),
 		Scope:      r.URL.Query().Get("scope"),
 		Sort:       r.URL.Query().Get("sort"),
+		Direction:  r.URL.Query().Get("direction"),
 		Page:       atoiOr(r.URL.Query().Get("page"), 1),
 		PerPage:    atoiOr(r.URL.Query().Get("per_page"), store.DefaultPageSize),
 	}

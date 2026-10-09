@@ -2,6 +2,7 @@
 /** Project list with a creation form. */
 import type { GroupSummary } from '~/types/dashboard'
 import type { ProjectSummary } from '~/types/repository'
+import type { PagedPlaces } from '~/types/place'
 
 // The groups the user may put a project into. A project created under a group gets
 // that group's namespace in its path and inherits the group's members.
@@ -18,7 +19,32 @@ async function loadGroups() {
   }
 }
 
-onMounted(loadGroups)
+const scopeCounts = reactive<Record<string, number>>({})
+
+async function loadScopeCounts() {
+  const scopes = [
+    { key: 'all', value: '' },
+    { key: 'contributed', value: 'contributed' },
+    { key: 'personal', value: 'personal' },
+    { key: 'member', value: 'member' },
+    { key: 'inactive', value: 'inactive' },
+  ]
+  await Promise.all(scopes.map(async (scope) => {
+    try {
+      const query = new URLSearchParams({ type: 'project', per_page: '1', sort: 'name' })
+      if (scope.value) query.set('scope', scope.value)
+      const answer = await api.get<PagedPlaces>(`/projects/places?${query.toString()}`)
+      scopeCounts[scope.key] = answer.total
+    } catch {
+      // A count is ancillary; leave it absent if the request failed.
+    }
+  }))
+}
+
+onMounted(() => {
+  void loadGroups()
+  void loadScopeCounts()
+})
 
 const showForm = ref(false)
 const creating = ref(false)
@@ -117,11 +143,11 @@ async function createProject() {
     </div>
 
     <nav class="project-index-tabs" aria-label="Project views">
-      <NuxtLink to="/projects" :class="{ active: !$route.query.scope }">All</NuxtLink>
-      <NuxtLink to="/projects?scope=contributed" :class="{ active: $route.query.scope === 'contributed' }">Contributed</NuxtLink>
-      <NuxtLink to="/projects?scope=personal" :class="{ active: $route.query.scope === 'personal' }">Personal</NuxtLink>
-      <NuxtLink to="/projects?scope=member" :class="{ active: $route.query.scope === 'member' }">Member</NuxtLink>
-      <NuxtLink to="/projects?scope=inactive" :class="{ active: $route.query.scope === 'inactive' }">Inactive</NuxtLink>
+      <NuxtLink to="/projects" :class="{ active: !$route.query.scope }">All <span v-if="scopeCounts.all !== undefined" class="project-tab-count">{{ scopeCounts.all }}</span></NuxtLink>
+      <NuxtLink to="/projects?scope=contributed" :class="{ active: $route.query.scope === 'contributed' }">Contributed <span v-if="scopeCounts.contributed !== undefined" class="project-tab-count">{{ scopeCounts.contributed }}</span></NuxtLink>
+      <NuxtLink to="/projects?scope=personal" :class="{ active: $route.query.scope === 'personal' }">Personal <span v-if="scopeCounts.personal !== undefined" class="project-tab-count">{{ scopeCounts.personal }}</span></NuxtLink>
+      <NuxtLink to="/projects?scope=member" :class="{ active: $route.query.scope === 'member' }">Member <span v-if="scopeCounts.member !== undefined" class="project-tab-count">{{ scopeCounts.member }}</span></NuxtLink>
+      <NuxtLink to="/projects?scope=inactive" :class="{ active: $route.query.scope === 'inactive' }">Inactive <span v-if="scopeCounts.inactive !== undefined" class="project-tab-count">{{ scopeCounts.inactive }}</span></NuxtLink>
     </nav>
 
     <PlacesTable type="project" :filter-kind="false" />

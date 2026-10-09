@@ -50,6 +50,7 @@ export interface PlaceFilters {
   visibility?: string
   scope?: '' | 'contributed' | 'personal' | 'member' | 'inactive'
   sort?: 'name' | 'created' | 'last_activity'
+  direction?: 'asc' | 'desc'
   page?: number
   per_page?: number
 }
@@ -63,6 +64,7 @@ export function placeQuery(filters: PlaceFilters): string {
   if (filters.visibility) parts.set('visibility', filters.visibility)
   if (filters.scope) parts.set('scope', filters.scope)
   if (filters.sort) parts.set('sort', filters.sort)
+  if (filters.direction) parts.set('direction', filters.direction)
   if (filters.page && filters.page > 1) parts.set('page', String(filters.page))
   if (filters.per_page) parts.set('per_page', String(filters.per_page))
 

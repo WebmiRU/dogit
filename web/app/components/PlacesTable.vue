@@ -65,6 +65,7 @@ const filters = computed<Required<PlaceFilters>>(() => ({
   visibility: String(route.query.visibility ?? ''),
   scope: String(route.query.scope ?? '') as PlaceFilters['scope'],
   sort: (String(route.query.sort ?? 'name') || 'name') as PlaceFilters['sort'],
+  direction: (String(route.query.direction ?? 'asc') || 'asc') as PlaceFilters['direction'],
   page: Math.max(1, Number(route.query.page ?? 1) || 1),
   per_page: 20,
 }))
@@ -94,7 +95,7 @@ function go(change: Partial<PlaceFilters>) {
   const next: PlaceFilters = { ...filters.value, ...change }
   // Any narrowing starts again at the first page: page seven of a search that now
   // matches three things is a page about nothing.
-  if (change.search !== undefined || change.type !== undefined || change.visibility !== undefined || change.scope !== undefined) {
+  if (change.search !== undefined || change.type !== undefined || change.visibility !== undefined || change.scope !== undefined || change.sort !== undefined || change.direction !== undefined) {
     next.page = 1
   }
   const search = placeQuery(next)
@@ -121,15 +122,17 @@ watch(query, () => void load())
 onMounted(() => {
   const closeMenus = (event: MouseEvent) => {
     const target = event.target as HTMLElement | null
-    if (target?.closest('.places-row-menu')) return
+    const clickedMenu = target?.closest<HTMLDetailsElement>('.places-row-menu')
     document.querySelectorAll<HTMLDetailsElement>('.places-row-menu[open]').forEach((menu) => {
-      menu.open = false
+      if (menu !== clickedMenu) menu.open = false
     })
   }
   document.addEventListener('click', closeMenus)
-  onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 })
-onBeforeUnmount(() => clearTimeout(wait))
+onBeforeUnmount(() => {
+  clearTimeout(wait)
+  document.removeEventListener('click', closeMenus)
+})
 
 /** The range shown in the footer: "1–20 of 340". */
 const range = computed(() => {
@@ -165,8 +168,10 @@ const visibilities = [
           <option value="created">Created date</option>
           <option value="last_activity">Last activity</option>
         </select>
-        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 4h10M3 8h7M3 12h4M11 7l2 2 2-2" /></svg>
       </label>
+      <button class="places-sort-direction" type="button" :title="filters.direction === 'asc' ? 'Sort descending' : 'Sort ascending'" :aria-label="filters.direction === 'asc' ? 'Sort descending' : 'Sort ascending'" @click="go({ direction: filters.direction === 'asc' ? 'desc' : 'asc' })">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" :class="{ descending: filters.direction === 'desc' }"><path d="M8 2v11M3.5 8.5 8 13l4.5-4.5" /></svg>
+      </button>
 
       <select
         :value="filters.visibility"
@@ -220,6 +225,7 @@ const visibilities = [
                 <span v-if="place.kind === 'group'" class="badge badge-neutral">Group</span>
                 <span v-else-if="place.visibility" class="badge" :class="'badge-' + place.visibility">{{ place.visibility }}</span>
                 <span v-if="place.access_name" class="badge badge-neutral">{{ place.access_name }}</span>
+                <span v-if="place.kind === 'project' && filters.scope === 'inactive'" class="badge badge-neutral">Archived</span>
                 <span v-if="place.kind === 'group' && place.project_count !== undefined" class="muted small">{{ place.project_count }} projects</span>
               </div>
             </td>
@@ -236,10 +242,9 @@ const visibilities = [
                   <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M4 4h5a3 3 0 0 1 3 3v2M9 12l3 3 3-3" /></svg>{{ place.open_merge_requests }}
                 </NuxtLink>
                 <span v-else class="places-count muted" title="Open merge requests: 0"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M4 4h5a3 3 0 0 1 3 3v2M9 12l3 3 3-3" /></svg>0</span>
-                <NuxtLink v-if="place.open_issues > 0" :to="place.kind === 'project' ? '/p/' + place.path + '/-/issues' : placeHref(place)" :title="place.open_issues + ' open issues'" class="places-count">
+                <span class="places-count" :class="{ muted: !place.open_issues }" :title="place.open_issues + ' open issues'">
                   <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.4M8 11h.01" /></svg>{{ place.open_issues }}
-                </NuxtLink>
-                <span v-else class="places-count muted" title="Open issues: 0"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.4M8 11h.01" /></svg>0</span>
+                </span>
               </div>
               <div class="places-last-commit" v-if="place.last_commit_at">
                 <span class="places-commit-message" :title="place.last_commit_message">{{ place.last_commit_message || 'Commit' }}</span>
