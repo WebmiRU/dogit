@@ -247,7 +247,7 @@ const visibilities = [
 .table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--bg-card, #161b22);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -269,8 +269,12 @@ const visibilities = [
   border-bottom: 1px solid var(--border);
 }
 
-.table tbody tr:last-child td {
+ .table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.table tbody tr:hover td {
+  background: rgba(185, 185, 193, 0.045);
 }
 
 .table .name {
