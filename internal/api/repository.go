@@ -518,6 +518,13 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	// Source commits that are not already in the target drive the creation preview.
+	// Both branch names have been resolved to commit IDs above, so the range is safe.
+	commits, err := s.git.Log(r.Context(), rc.RepoDir, fromSHA+".."+toSHA, 100, 0)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 
 	// Ahead/behind counts drive the "N commits ahead" badge.
 	ahead, behind := 0, 0
@@ -528,7 +535,7 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"from": from, "to": to, "from_sha": fromSHA, "to_sha": toSHA,
-		"files": changes, "stats": stat,
+		"files": changes, "stats": stat, "commits": commits,
 		"commits_ahead": ahead, "commits_behind": behind,
 		"three_dot": threeDot,
 	})

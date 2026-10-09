@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/ewolf/dogit/internal/gitx"
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/store"
@@ -15,11 +17,18 @@ import (
 
 // mergeRequestRequest opens or edits a merge request.
 type mergeRequestRequest struct {
-	SourceBranch string `json:"source_branch"`
-	TargetBranch string `json:"target_branch"`
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	Squash       bool   `json:"squash"`
+	SourceBranch       string      `json:"source_branch"`
+	TargetBranch       string      `json:"target_branch"`
+	Title              string      `json:"title"`
+	Description        string      `json:"description"`
+	Squash             bool        `json:"squash"`
+	IsDraft            bool        `json:"is_draft"`
+	AssigneeID         *uuid.UUID  `json:"assignee_id"`
+	ReviewerID         *uuid.UUID  `json:"reviewer_id"`
+	Milestone          string      `json:"milestone"`
+	Labels             []string    `json:"labels"`
+	RemoveSourceBranch bool        `json:"remove_source_branch"`
+	PipelineRequired   bool        `json:"pipeline_required"`
 }
 
 // handleCreateMergeRequest opens a merge request.
@@ -102,10 +111,30 @@ func (s *Server) handleCreateMergeRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Assignment targets must be able to access this project. Checking at the
+	// boundary prevents a caller from assigning requests to unrelated accounts.
+	for _, assigned := range []*uuid.UUID{req.AssigneeID, req.ReviewerID} {
+		if assigned == nil {
+			continue
+		}
+		level, levelErr := s.store.Permissions().AccessLevel(r.Context(), *assigned, rc.Project.ID)
+		if levelErr != nil {
+			s.writeError(w, r, levelErr)
+			return
+		}
+		if level == store.NoAccess && *assigned != user.ID {
+			s.writeError(w, r, errBadRequest("assignee and reviewer must have access to this project"))
+			return
+		}
+	}
+
 	mr, err := s.store.MergeRequests().Create(r.Context(), store.CreateParams{
 		ProjectID: rc.Project.ID, AuthorID: user.ID,
 		SourceBranch: source, TargetBranch: target,
 		Title: title, Description: req.Description, Squash: req.Squash,
+		IsDraft: req.IsDraft, AssigneeID: req.AssigneeID, ReviewerID: req.ReviewerID,
+		Milestone: strings.TrimSpace(req.Milestone), Labels: req.Labels,
+		RemoveSourceBranch: req.RemoveSourceBranch, PipelineRequired: req.PipelineRequired,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -413,6 +442,16 @@ func (s *Server) handleMergeMergeRequest(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, r, errBadRequestf("this merge request is already %s", mr.State))
 		return
 	}
+	if mr.PipelineRequired {
+		var status string
+		err := s.store.Pool().QueryRow(r.Context(),
+			`SELECT status FROM pipelines WHERE project_id = $1 AND ref = $2 ORDER BY id DESC LIMIT 1`,
+				rc.Project.ID, mr.SourceBranch).Scan(&status)
+		if err != nil || status != "success" {
+			s.writeError(w, r, errConflict("this merge request can be merged after its source branch pipeline succeeds"))
+			return
+		}
+	}
 	user := userFrom(r.Context())
 	author := displayName(user)
 
@@ -531,7 +570,7 @@ func (s *Server) handleMergeMergeRequest(w http.ResponseWriter, r *http.Request)
 		// Removing the source branch is part of the merge, not a separate action:
 		// leaving it behind after the work is on the target branch is how a
 		// repository fills up with branches that are already merged.
-		if rc.Project.RemoveSourceBranch || body.ShouldRemove {
+		if rc.Project.RemoveSourceBranch || body.ShouldRemove || mr.RemoveSourceBranch {
 			if err := s.git.DeleteRef(r.Context(), rc.RepoDir, "refs/heads/"+mr.SourceBranch); err != nil {
 				// The merge itself succeeded; failing the whole request now would
 				// report a failure for work that is already done.
