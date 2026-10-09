@@ -190,6 +190,16 @@ modules:
     # contain ca.pem, tls.crt, tls.key, client.crt and client.key.
     tls:
       existingSecret: ""
+    # The init container that mints the registration token runs the application binary,
+    # so it is sized like one rather than like a shell. 64Mi OOMKilled it in about a
+    # second on the first install, which the retry loop made look like a hung Pod.
+    registration:
+      resources:
+        requests:
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
     resources:
       requests:
         cpu: 50m

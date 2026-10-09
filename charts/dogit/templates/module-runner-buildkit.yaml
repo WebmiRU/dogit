@@ -124,6 +124,16 @@ spec:
           volumeMounts:
             - name: state
               mountPath: /var/lib/dogit-runner
+            # The application binary is what mints the token, and it writes ./data
+            # before it says anything: objects, logs. With no /data here it tries to
+            # create /data/logs in the container's own filesystem, and this container
+            # drops every capability, so uid 0 has no DAC_OVERRIDE left to create a
+            # directory it does not own and the command fails silently — the retry loop
+            # swallows stderr, so the symptom was an init container that never finished.
+            # An emptyDir is enough: the run lasts seconds and the state it keeps is the
+            # token, which lives on the PVC above.
+            - name: init-data
+              mountPath: /data
           securityContext:
             runAsUser: 0
             runAsGroup: 0
@@ -131,12 +141,16 @@ spec:
             capabilities:
               drop: ["ALL"]
           resources:
+            # This is the whole application binary, not a shell: it opens the database,
+            # runs migrations and allocates an object store before it prints a token.
+            # At 64Mi it was OOMKilled within a second, which read as a stuck Pod rather
+            # than as a container that had been given no room to work in.
             requests:
               cpu: 10m
-              memory: 16Mi
+              memory: {{ .Values.modules.runner.registration.resources.requests.memory | default "128Mi" | quote }}
             limits:
-              cpu: 100m
-              memory: 64Mi
+              cpu: {{ .Values.modules.runner.registration.resources.limits.cpu | default "500m" | quote }}
+              memory: {{ .Values.modules.runner.registration.resources.limits.memory | default "512Mi" | quote }}
         - name: prepare-runner
           image: alpine:3.21
           imagePullPolicy: IfNotPresent
@@ -290,6 +304,8 @@ spec:
           resources:
             {{- toYaml .Values.modules.runner.resources | nindent 12 }}
       volumes:
+        - name: init-data
+          emptyDir: {}
         - name: state
           persistentVolumeClaim:
             claimName: {{ $stateName }}
