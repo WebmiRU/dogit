@@ -49,6 +49,10 @@ import (
 type channelClient struct {
 	moduleID uuid.UUID
 	name     string
+	// token is the plaintext credential this connection presented at upgrade. The store
+	// deliberately keeps only its hash, but the wire protocol requires every outbound
+	// message to carry the same token so the module can authenticate each frame.
+	token string
 
 	mu       sync.Mutex
 	conn     *websocket.Conn
@@ -58,6 +62,10 @@ type channelClient struct {
 }
 
 func (c *channelClient) send(ctx context.Context, message modulechan.Message) error {
+	// Callers create facts and decisions without a credential. Add the connection's token
+	// at the last possible moment so cached commands remain token-free and each connection
+	// sends its own authenticated envelope.
+	message.Token = c.token
 	frame, err := message.Envelope()
 	if err != nil {
 		return err
@@ -259,7 +267,7 @@ func (s *Server) handleModuleChannel(w http.ResponseWriter, r *http.Request) {
 		s.refuseAndClose(ctx, conn, "", moduleRefusal(err))
 		return
 	}
-	client := ch.attach(ctx, conn, module)
+	client := ch.attach(ctx, conn, module, bearerOf(r))
 	s.log.Info("a module opened its channel", "module", client.name,
 		"kind", module.Kind, "endpoint", module.Endpoint)
 	defer ch.detach(client)
@@ -395,11 +403,12 @@ func (s *Server) refuseAndClose(ctx context.Context, conn *websocket.Conn,
 
 // attach registers a connection under its module and returns the client that stands for it.
 func (ch *ModuleChannel) attach(ctx context.Context, conn *websocket.Conn,
-	module *models.Integration) *channelClient {
+	module *models.Integration, token string) *channelClient {
 
 	client := &channelClient{
 		moduleID: module.ID,
 		name:     module.Kind + "/" + module.Name,
+		token:    token,
 		conn:     conn,
 		openedAt: time.Now(),
 	}
