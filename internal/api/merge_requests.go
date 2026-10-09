@@ -166,17 +166,36 @@ func (s *Server) handleListProjectMergeRequests(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	state := strings.TrimSpace(r.URL.Query().Get("state"))
-	if state == "all" {
-		state = ""
+	filter := store.ListFilter{
+		ProjectID: &rc.Project.ID,
+		State: strings.TrimSpace(r.URL.Query().Get("state")),
+		Query: strings.TrimSpace(r.URL.Query().Get("query")),
+		Sort: strings.TrimSpace(r.URL.Query().Get("sort")),
+		Direction: strings.TrimSpace(r.URL.Query().Get("direction")),
+		Limit: queryInt(r, "limit", 20, 100),
+		Offset: queryInt(r, "offset", 0, 1000000),
+	}
+	if filter.State == "all" {
+		filter.State = ""
+	}
+	switch filter.State {
+	case "", string(models.MRStateOpened), string(models.MRStateMerged), string(models.MRStateClosed):
+	default:
+		s.writeError(w, r, errBadRequest("state must be one of opened, merged, closed or all"))
+		return
 	}
 
-	list, err := s.store.MergeRequests().List(r.Context(), store.ListFilter{
-		ProjectID: &rc.Project.ID,
-		State:     state,
-		Limit:     queryInt(r, "limit", 50, 100),
-		Offset:    queryInt(r, "offset", 0, 10000),
-	})
+	list, err := s.store.MergeRequests().List(r.Context(), filter)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	total, err := s.store.MergeRequests().Count(r.Context(), filter)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	counts, err := s.store.MergeRequests().StateCounts(r.Context(), filter)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -186,22 +205,34 @@ func (s *Server) handleListProjectMergeRequests(w http.ResponseWriter, r *http.R
 	for _, mr := range list {
 		out = append(out, s.mergeRequestToView(r, mr))
 	}
-	s.writeJSON(w, r, http.StatusOK, map[string]any{"merge_requests": out})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"merge_requests": out, "total": total, "counts": counts,
+	})
 }
 
-// handleListMergeRequests returns merge requests, filtered by state and project.
+// handleListMergeRequests returns merge requests, filtered by state, search and project visibility.
 func (s *Server) handleListMergeRequests(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
-	_, levels, err := s.store.Projects().ListVisible(r.Context(), user.ID, "")
+	visibleProjects, levels, err := s.store.Projects().ListVisible(r.Context(), user.ID, "")
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	visibleIDs := make([]uuid.UUID, 0, len(visibleProjects))
+	for _, project := range visibleProjects {
+		if levels[project.ID] != store.NoAccess {
+			visibleIDs = append(visibleIDs, project.ID)
+		}
+	}
 
 	filter := store.ListFilter{
-		State:  strings.TrimSpace(r.URL.Query().Get("state")),
-		Limit:  queryInt(r, "limit", 50, 100),
-		Offset: queryInt(r, "offset", 0, 10000),
+		VisibleProjectIDs: visibleIDs,
+		State: strings.TrimSpace(r.URL.Query().Get("state")),
+		Query: strings.TrimSpace(r.URL.Query().Get("query")),
+		Sort: strings.TrimSpace(r.URL.Query().Get("sort")),
+		Direction: strings.TrimSpace(r.URL.Query().Get("direction")),
+		Limit: queryInt(r, "limit", 20, 100),
+		Offset: queryInt(r, "offset", 0, 1000000),
 	}
 	switch filter.State {
 	case "", string(models.MRStateOpened), string(models.MRStateMerged), string(models.MRStateClosed), "all":
@@ -231,19 +262,29 @@ func (s *Server) handleListMergeRequests(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, r, err)
 		return
 	}
+	total, err := s.store.MergeRequests().Count(r.Context(), filter)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	counts, err := s.store.MergeRequests().StateCounts(r.Context(), filter)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 
-	// The list is filtered to what the caller may read: a merge request inherits
-	// the visibility of its project, so a private project's requests never appear
-	// in a global list.
 	out := []*models.MergeRequest{}
 	for _, mr := range list {
+		// Keep the permission check even though VisibleProjectIDs already scopes
+		// the SQL, so the endpoint remains closed if its visibility query changes.
 		if levels[mr.ProjectID] == store.NoAccess {
 			continue
 		}
 		out = append(out, s.mergeRequestToView(r, mr))
 	}
-
-	s.writeJSON(w, r, http.StatusOK, map[string]any{"merge_requests": out})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"merge_requests": out, "total": total, "counts": counts,
+	})
 }
 
 // mergeRequestContext loads a merge request and checks the caller may see it.

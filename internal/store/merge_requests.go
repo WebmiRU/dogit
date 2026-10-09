@@ -136,22 +136,39 @@ func (r *MergeRequestRepo) ByIID(ctx context.Context, projectID uuid.UUID, iid i
 // ListFilter narrows a merge request listing.
 type ListFilter struct {
 	ProjectID *uuid.UUID
-	State     string
-	// AuthorID limits the list to one person's requests.
-	AuthorID *uuid.UUID
-	Limit    int
-	Offset   int
+	// VisibleProjectIDs is a visibility boundary for global lists. A nil slice
+	// means there is no additional project restriction; an empty slice means none.
+	VisibleProjectIDs []uuid.UUID
+	State             string
+	AuthorID          *uuid.UUID
+	Query             string
+	Sort              string
+	Direction         string
+	Limit             int
+	Offset            int
 }
 
-// List returns merge requests newest first, with the author and the project
-// joined in.
-//
-// The joins are what make the list usable: a page of twenty requests should not
-// need forty extra queries to know who opened each one, and a request is
-// meaningless without the project it belongs to.
+// List returns merge requests matching the filter, with their project and author
+// in the same query so the UI does not need an extra request for each row.
 func (r *MergeRequestRepo) List(ctx context.Context, f ListFilter) ([]*models.MergeRequest, error) {
 	if f.Limit <= 0 || f.Limit > 100 {
-		f.Limit = 50
+		f.Limit = 20
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	orderBy := "mr.created_at"
+	switch strings.ToLower(strings.TrimSpace(f.Sort)) {
+	case "updated":
+		orderBy = "mr.updated_at"
+	case "title":
+		orderBy = "lower(mr.title)"
+	case "state":
+		orderBy = "mr.state"
+	}
+	direction := "DESC"
+	if strings.EqualFold(strings.TrimSpace(f.Direction), "asc") {
+		direction = "ASC"
 	}
 
 	rows, err := r.r.pool.Query(ctx, `
@@ -165,11 +182,21 @@ func (r *MergeRequestRepo) List(ctx context.Context, f ListFilter) ([]*models.Me
 		JOIN projects p ON p.id = mr.project_id
 		LEFT JOIN users merged ON merged.id = mr.merged_by_id
 		WHERE ($1::uuid IS NULL OR mr.project_id = $1)
-		  AND ($2 = '' OR mr.state = $2)
-		  AND ($3::uuid IS NULL OR mr.author_id = $3)
-		ORDER BY mr.updated_at DESC, mr.id DESC
-		LIMIT $4 OFFSET $5`,
-		f.ProjectID, f.State, f.AuthorID, f.Limit, f.Offset)
+		  AND ($2::uuid[] IS NULL OR mr.project_id = ANY($2::uuid[]))
+		  AND ($3 = '' OR mr.state = $3)
+		  AND ($4::uuid IS NULL OR mr.author_id = $4)
+		  AND ($5 = '' OR
+		       mr.title ILIKE '%' || $5 || '%' OR
+		       mr.source_branch ILIKE '%' || $5 || '%' OR
+		       mr.target_branch ILIKE '%' || $5 || '%' OR
+		       COALESCE(u.name, '') ILIKE '%' || $5 || '%' OR
+		       u.username ILIKE '%' || $5 || '%' OR
+		       p.path ILIKE '%' || $5 || '%' OR
+		       ('!' || mr.iid::text) ILIKE $5 || '%')
+		ORDER BY `+orderBy+` `+direction+`, mr.id DESC
+		LIMIT $6 OFFSET $7`,
+		f.ProjectID, f.VisibleProjectIDs, f.State, f.AuthorID,
+		strings.TrimSpace(f.Query), f.Limit, f.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("list merge requests: %w", err)
 	}
@@ -178,8 +205,6 @@ func (r *MergeRequestRepo) List(ctx context.Context, f ListFilter) ([]*models.Me
 	out := []*models.MergeRequest{}
 	for rows.Next() {
 		mr := &models.MergeRequest{}
-		// The project is scanned into a value first: scanning straight into a nil
-		// pointer field would panic on the first row.
 		project := &models.Project{}
 		if err := rows.Scan(
 			&mr.ID, &mr.IID, &mr.ProjectID, &mr.AuthorID, &mr.SourceBranch, &mr.TargetBranch,
@@ -188,8 +213,8 @@ func (r *MergeRequestRepo) List(ctx context.Context, f ListFilter) ([]*models.Me
 			&mr.RemoveSourceBranch, &mr.PipelineRequired,
 			&mr.CreatedAt, &mr.UpdatedAt, &mr.MergedAt, &mr.ClosedAt, &mr.MergedByID,
 			&mr.AuthorName, &mr.AuthorUsername,
-			&project.ID, &project.Path, &project.Name, &project.Description,
-			&project.Visibility, &project.DefaultBranch, &project.MergeMethod, &project.CreatedAt,
+			&project.ID, &project.Path, &project.Name, &project.Description, &project.Visibility,
+			&project.DefaultBranch, &project.MergeMethod, &project.CreatedAt,
 			&mr.MergedByName, &mr.MergedByUsername,
 		); err != nil {
 			return nil, err
@@ -198,6 +223,55 @@ func (r *MergeRequestRepo) List(ctx context.Context, f ListFilter) ([]*models.Me
 		out = append(out, mr)
 	}
 	return out, rows.Err()
+}
+
+// Count returns the number of rows matching the current state/search/scope filter.
+// It is separate from List so pagination can use a small page size without lying
+// about how many results remain.
+func (r *MergeRequestRepo) Count(ctx context.Context, f ListFilter) (int, error) {
+	var count int
+	err := r.r.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM merge_requests mr
+		JOIN users u ON u.id = mr.author_id
+		JOIN projects p ON p.id = mr.project_id
+		WHERE ($1::uuid IS NULL OR mr.project_id = $1)
+		  AND ($2::uuid[] IS NULL OR mr.project_id = ANY($2::uuid[]))
+		  AND ($3 = '' OR mr.state = $3)
+		  AND ($4::uuid IS NULL OR mr.author_id = $4)
+		  AND ($5 = '' OR
+		       mr.title ILIKE '%' || $5 || '%' OR
+		       mr.source_branch ILIKE '%' || $5 || '%' OR
+		       mr.target_branch ILIKE '%' || $5 || '%' OR
+		       COALESCE(u.name, '') ILIKE '%' || $5 || '%' OR
+		       u.username ILIKE '%' || $5 || '%' OR
+		       p.path ILIKE '%' || $5 || '%' OR
+		       ('!' || mr.iid::text) ILIKE $5 || '%')`,
+		f.ProjectID, f.VisibleProjectIDs, f.State, f.AuthorID, strings.TrimSpace(f.Query)).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count merge requests: %w", err)
+	}
+	return count, nil
+}
+
+// StateCounts returns all state totals in the caller's project scope. Query and
+// state filters are intentionally not applied: the tabs report the whole queue.
+func (r *MergeRequestRepo) StateCounts(ctx context.Context, f ListFilter) (map[string]int, error) {
+	var opened, merged, closed, all int
+	err := r.r.pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE mr.state = 'opened'),
+			count(*) FILTER (WHERE mr.state = 'merged'),
+			count(*) FILTER (WHERE mr.state = 'closed'),
+			count(*)
+		FROM merge_requests mr
+		WHERE ($1::uuid IS NULL OR mr.project_id = $1)
+		  AND ($2::uuid[] IS NULL OR mr.project_id = ANY($2::uuid[]))`,
+		f.ProjectID, f.VisibleProjectIDs).Scan(&opened, &merged, &closed, &all)
+	if err != nil {
+		return nil, fmt.Errorf("count merge request states: %w", err)
+	}
+	return map[string]int{"opened": opened, "merged": merged, "closed": closed, "all": all}, nil
 }
 
 // CountOpen returns how many merge requests are waiting in a project, which is
