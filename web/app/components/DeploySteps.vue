@@ -38,6 +38,18 @@ const props = defineProps<{
    */
   live?: boolean
   /**
+   * The operation's own status, when the page knows it.
+   *
+   * Needed because "not running" is not "over". A step that an operation never reached is drawn
+   * as done once the operation is over — a deployment that ended well had nothing left to do in
+   * that step — but a deployment that was *refused*, or is still queued, has not reached it and
+   * never will, and drawing it done is the page claiming work that was never going to happen. It
+   * came from a card that had done nothing at all showing every one of its eight steps ticked off.
+   *
+   * Empty means a run that began, which is what a caller that does not track status describes.
+   */
+  status?: string
+  /**
    * The steps this deployment will go through, in order.
    *
    * From the core, not from here. A client that kept its own list would be drawing a
@@ -241,7 +253,17 @@ const steps = computed<Step[]>(() => {
   // its last stored line still naming it, and asking made every finished operation look
   // unfinished — so the step the arrow was last on stayed drawn as never reached, blue,
   // beside a log saying it finished. The page knows; the message does not.
-  const over = !props.live && (props.activePhases?.length ?? 0) === 0
+  // Whether this operation is over: it is not running, nothing it said is still open, and it is
+  // not waiting to begin.
+  //
+  // The waiting part is the same distinction as saying it differently — `!live` also covers an
+  // operation queued behind another one, and painting the steps it has not reached as done is
+  // saying a place that has not been deployed to has been. "Waiting" with every step ticked is a
+  // card answering a question nobody asked.
+  const waiting = props.status === 'pending'
+  const neverBegan = props.status === 'refused' || props.status === 'skipped'
+  const over = !props.live && !waiting && !neverBegan &&
+    (props.activePhases?.length ?? 0) === 0
 
   // Whether anything went wrong, which decides what an unreached step means.
   //

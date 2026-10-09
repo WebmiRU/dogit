@@ -697,6 +697,7 @@ watchEvents({
           :progress="knows(operation)?.progress ?? null"
           :seen="knows(operation)?.seen ?? []"
           :live="operation.running"
+          :status="operation.status"
           :plan="planOf(operation.job_id)"
           :active-phases="openPhases(operation)"
         />
