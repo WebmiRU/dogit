@@ -591,22 +591,53 @@ function lateProgress(operation: DeployOperation): Watching | null {
   const said = operation.progress
   if (!said || typeof said !== 'object') return null
 
-  const progress: DeployProgress = {
-    phase: String(said.phase ?? ''),
-    message: String(said.message ?? ''),
-    ready: Number(said.ready ?? 0),
-    desired: Number(said.desired ?? 0),
-    step: Number(said.step ?? 0),
-    of: Number(said.of ?? 0),
-    finished: said.finished === true,
-    failed: said.failed === true,
+  const toProgress = (line: Record<string, unknown>): DeployProgress => ({
+    phase: String(line.phase ?? ''),
+    message: String(line.message ?? ''),
+    ready: Number(line.ready ?? 0),
+    desired: Number(line.desired ?? 0),
+    step: Number(line.step ?? 0),
+    of: Number(line.of ?? 0),
+    previous: typeof line.previous === 'string' && line.previous ? line.previous : undefined,
+    retiring: typeof line.retiring === 'number' ? line.retiring : undefined,
+    finished: line.finished === true,
+    failed: line.failed === true,
+  })
+  const progress = toProgress(said)
+  // The core keeps the latest line for each phase and the set of phases still open.
+  // Use both: the last line alone cannot restore earlier green ticks or simultaneous
+  // rollout/retire arrows after a refresh.
+  const history = Array.isArray(said.phase_history)
+    ? said.phase_history.filter((line): line is Record<string, unknown> =>
+      Boolean(line) && typeof line === 'object')
+    : []
+  const seen = history.map(toProgress)
+  if (progress.phase && !seen.some((line) => line.phase === progress.phase)) {
+    seen.push(progress)
+  }
+  const active = Array.isArray(said.active_phases)
+    ? said.active_phases.filter((phase): phase is string => typeof phase === 'string')
+    : (progress.phase && !progress.finished ? [progress.phase] : [])
+  const saidAbout = said.deployment as { kind?: unknown } | undefined
+  if (typeof saidAbout?.kind === 'string' && saidAbout.kind) {
+    watching.value = {
+      ...watching.value,
+      [operation.job_id]: {
+        kind: saidAbout.kind,
+        progress,
+        seen,
+        phases: active,
+        since: 0,
+      },
+    }
   }
   return {
+    ...(typeof saidAbout?.kind === 'string' && saidAbout.kind ? { kind: saidAbout.kind } : {}),
     progress,
-    // No lines and no clock: this card was not watched, and inventing a start time for it would
-    // put a duration on the page that nothing observed.
-    seen: [],
-    phases: progress.phase ? [progress.phase] : [],
+    // No clock: this card was not watched, and inventing a start time would put a duration
+    // on the page that nobody observed.
+    seen,
+    phases: active,
     since: 0,
   }
 }
