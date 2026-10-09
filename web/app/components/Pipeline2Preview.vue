@@ -308,7 +308,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 .p2-job-check { width: 22px; height: 22px; flex: 0 0 22px; fill: none; stroke: #42c77a; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .p2-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 32px; height: 32px; flex: 0 0 32px; border: 0; border-radius: 8px; padding: 0; background: #414148; color: #f0f0f4; cursor: default; }
 .p2-retry svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.p2-mini-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: #414148; color: #d0d0d6; }
+.p2-mini-retry { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 6px; background: #414148; color: #d0d0d6; }
 .p2-mini-retry svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .p2-flow-line { position: absolute; z-index: 0; top: 35px; left: 242px; width: 27px; height: 2px; background: #a5a5ad; }
 @media (max-width: 900px) {
