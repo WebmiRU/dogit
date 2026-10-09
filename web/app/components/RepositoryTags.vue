@@ -6,10 +6,21 @@
  * hundreds of branches would push every tag out of sight, and tags are looked up
  * by name far more often than they are scanned.
  *
- * Laid out as the branch list is, because a tag and a branch are the same kind of thing here and
- * two lists of the same kind of thing should look the same: an icon, the name, the commit, and one
- * line of quiet metadata. The only thing a tag has that a branch does not is who released it and
- * what they said, so that goes in the same place the branch's date would go.
+ * Laid out as columns with a header, which the branch list is not: a
+ * repository's tags outnumber its branches by an order of magnitude — a release
+ * a week is dozens by the end of a year — and an eye picking "which of these two
+ * hundred rows is from last week" is helped by a column it can come back to.
+ * Ten branches fit on a screen without any help, so that list stays a flex line.
+ *
+ * The release note is deliberately not a column of its own: most tags are
+ * lightweight and carry none, and a column that is empty on most rows is a
+ * column that only moves the date away from the name. When there is something
+ * to say it rides along with the name and truncates, so a tag with a note is
+ * still one row.
+ *
+ * Deleting is behind the row being pointed at rather than on every row: a list
+ * of releases is read, not pruned, and a page where every line ends in Delete
+ * is one misdirected click away from doing something nobody meant to do.
  */
 import type { RefsResponse } from '~/types/repository'
 import { timeAgo } from '~/utils/format'
@@ -78,22 +89,36 @@ async function remove(name: string) {
         No tags yet. A tag is created from the API; nothing in this interface makes one yet.
       </div>
       <div v-else-if="tags.length === 0" class="empty">No tag matches “{{ filter }}”.</div>
-      <ul v-else class="tree-list">
+      <ul v-else class="tree-list tag-list">
+        <!-- The header is what the columns are for: without it the date and the
+             commit are two grey numbers with nothing to say which is which. -->
+        <li class="head">
+          <span />
+          <span>Name</span>
+          <span class="sha">Commit</span>
+          <span>Created</span>
+          <span />
+        </li>
         <li v-for="tag in tags" :key="tag.name">
           <span class="icon">◈</span>
-          <NuxtLink
-            class="name"
-            :to="repoViewUrl(projectPath, 'tree', tag.name)"
-          >
-            {{ tag.name }}
-          </NuxtLink>
-          <!-- Only an annotated tag has a release note, so only an annotated tag shows one.
-               Nothing is drawn in place of it rather than something that looks like a value. -->
-          <span v-if="saidAbout(tag)" class="meta">{{ saidAbout(tag) }}</span>
+          <span class="cell-name">
+            <NuxtLink
+              class="name"
+              :to="repoViewUrl(projectPath, 'tree', tag.name)"
+            >
+              {{ tag.name }}
+            </NuxtLink>
+            <!-- Only an annotated tag has a release note, so only an annotated tag
+                 shows one, and it sits next to the name rather than in a column of
+                 its own. -->
+            <span v-if="saidAbout(tag)" class="note" :title="saidAbout(tag)">
+              {{ saidAbout(tag) }}
+            </span>
+          </span>
+          <span class="meta sha">{{ tag.target.slice(0, 8) }}</span>
           <span v-if="tag.created_at" class="meta">{{ timeAgo(tag.created_at) }}</span>
-          <span class="meta mono">{{ tag.target.slice(0, 8) }}</span>
           <button
-            class="btn"
+            class="row-action"
             type="button"
             :disabled="pending === tag.name"
             @click="remove(tag.name)"

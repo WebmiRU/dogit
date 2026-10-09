@@ -556,6 +556,100 @@ label {
   white-space: nowrap;
 }
 
+/* --- tag list ---------------------------------------------------------- */
+
+/* Columns, where the branch list is a flex line. The reason is scale: tags
+   outnumber branches by an order of magnitude — a release a week is dozens by
+   the end of a year — and an eye picking "which of these two hundred rows is
+   from last week" is helped by a column it can return to. Ten branches fit on a
+   screen without any help, so that list has no header to justify.
+
+   Three columns, not four: most tags are lightweight and carry no release note,
+   and a column that is empty on most rows is a column that only moves the date
+   away from the name. The note rides along with the name instead. */
+.tag-list li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 76px 170px 72px;
+  gap: 10px;
+  align-items: center;
+}
+
+.tag-list .head {
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* The header is as quiet as the rows under it, commit column included: the
+   accent colour a sha carries in a row means "this is the interesting part",
+   and in a header it would only be noise. */
+.tag-list .head .sha {
+  color: inherit;
+}
+
+.tag-list .cell-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* A note is longer than a name and shorter than a column: it truncates rather
+   than wraps, so a tag with something to say is still one row. */
+.tag-list .note {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* A hover shade: the row is a link, and this says which line the pointer is on
+   before the button appears at the end of it. */
+.tag-list li:not(.head):hover {
+  background: var(--bg-inset);
+}
+
+/* Deleting is not there until the row is the one being looked at — under the
+   pointer, or under the keyboard's focus. A list where every line ends in
+   Delete reads as work to be done, and it is one misdirected click from doing
+   it; a list with nothing on it reads as a list, and the action is still one
+   hover away for anyone who came for it. */
+.tag-list .row-action {
+  justify-self: end;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.tag-list li:hover .row-action,
+.tag-list li:focus-within .row-action {
+  opacity: 1;
+}
+
+.tag-list .row-action:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  color: var(--red);
+}
+
+/* A touch screen has no hover to reveal anything, so there the button is
+   simply always there. The coarse pointer is part of the test on purpose: an
+   environment that points precisely but cannot hover reports hover:none as
+   well — a screenshot tool is one of those — and without the pointer test every
+   row would light up its button in a place no user will ever see it. */
+@media (hover: none) and (pointer: coarse) {
+  .tag-list .row-action {
+    opacity: 1;
+  }
+}
+
 /* --- code view -------------------------------------------------------- */
 
 .code-view {
