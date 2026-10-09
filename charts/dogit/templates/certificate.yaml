@@ -1,0 +1,20 @@
+{{- if and .Values.ingress.enabled .Values.ingress.tls.enabled .Values.certManager.enabled }}
+{{- $issuerName := default (printf "%s-letsencrypt" (include "dogit.fullname" .)) .Values.certManager.issuerName }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "dogit.fullname" . }}-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+spec:
+  secretName: {{ printf "%s-tls" (include "dogit.fullname" .) | trunc 63 | trimSuffix "-" }}
+  issuerRef:
+    name: {{ $issuerName | quote }}
+    kind: {{ .Values.certManager.issuerKind | quote }}
+  dnsNames:
+    - {{ required "ingress.host is required when TLS is enabled" .Values.ingress.host | quote }}
+    {{- range .Values.ingress.additionalHosts }}
+    - {{ . | quote }}
+    {{- end }}
+{{- end }}
