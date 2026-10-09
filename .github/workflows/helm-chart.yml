@@ -27,8 +27,18 @@ jobs:
         run: bash -n scripts/helm-install.sh
       - name: Lint chart
         run: helm lint charts/dogit
-      - name: Render default install
-        run: helm template dogit charts/dogit --namespace dogit
+      - name: Render default install and confirm modules are absent
+        run: |
+          helm template dogit charts/dogit --namespace dogit > /tmp/dogit-default.yaml
+          ! grep -q 'component: module-deploy-kubernetes' /tmp/dogit-default.yaml
+          ! grep -q 'component: module-notify-telegram' /tmp/dogit-default.yaml
+      - name: Render optional modules
+        run: |
+          helm template dogit charts/dogit --namespace dogit \
+            --set modules.deployKubernetes.enabled=true \
+            --set modules.telegram.enabled=true > /tmp/dogit-modules.yaml
+          grep -q 'component: module-deploy-kubernetes' /tmp/dogit-modules.yaml
+          grep -q 'component: module-notify-telegram' /tmp/dogit-modules.yaml
       - name: Render TLS with ingress-nginx
         run: >-
           helm template dogit charts/dogit --namespace dogit

@@ -16,6 +16,8 @@ domain=""
 email=""
 ingress_class="nginx"
 database_secret=""
+install_deploy_kubernetes=false
+install_telegram=false
 no_tls=false
 skip_cert_manager_install=false
 staging=false
@@ -35,6 +37,8 @@ Options:
   --values FILE                 Additional values file; may be repeated
   --database-secret NAME        Use an existing Secret with a PostgreSQL DSN in key "url"
                                 and skip installing the in-cluster PostgreSQL
+  --deploy-kubernetes            Enable the optional deploy:kubernetes module
+  --telegram                     Enable the optional Telegram notification module
   --no-tls                      Create an HTTP Ingress only; do not install/use cert-manager
   --staging                     Use the Let's Encrypt staging endpoint while testing
   --skip-cert-manager-install   Do not install cert-manager; fail if its CRDs are absent
@@ -75,6 +79,10 @@ while (($#)); do
     --database-secret)
       (($# >= 2)) || die "--database-secret requires a Secret name"
       database_secret="$2"; shift 2 ;;
+    --deploy-kubernetes)
+      install_deploy_kubernetes=true; shift ;;
+    --telegram)
+      install_telegram=true; shift ;;
     --no-tls)
       no_tls=true; shift ;;
     --staging)
@@ -161,6 +169,12 @@ fi
 
 if [[ -n "$database_secret" ]]; then
   helm_args+=(--set postgresql.enabled=false --set-string "database.existingSecret=$database_secret" --set-string database.existingSecretKey=url)
+fi
+if [[ "$install_deploy_kubernetes" == true ]]; then
+  helm_args+=(--set modules.deployKubernetes.enabled=true)
+fi
+if [[ "$install_telegram" == true ]]; then
+  helm_args+=(--set modules.telegram.enabled=true)
 fi
 
 helm_args+=(--wait --timeout 10m)

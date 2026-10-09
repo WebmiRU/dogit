@@ -142,7 +142,7 @@ bash scripts/helm-install.sh --domain git.example.org --email admin@example.org 
 
 Use `--ingress-class traefik` for Traefik. When TLS is requested, the installer reuses cert-manager if it is already installed, or installs it as a separate Helm release if it is absent; the certificate is then issued for the hostname supplied at installation. DNS must point to the Ingress and public ports 80/443 must be reachable.
 
-PostgreSQL is installed in the cluster by default. For an external PostgreSQL server, create a Kubernetes Secret containing the full DSN in key `url`, then pass `--database-secret SECRET_NAME`. The full chart options and backup guidance are in [charts/dogit/README.md](charts/dogit/README.md).
+PostgreSQL is installed in the cluster by default. For an external PostgreSQL server, create a Kubernetes Secret containing the full DSN in key `url`, then pass `--database-secret SECRET_NAME`. The full chart options and backup guidance are in [charts/dogit/README.md](charts/dogit/README.md). Optional modules are off by default; enable `deploy:kubernetes` with `--deploy-kubernetes` and Telegram notifications with `--telegram`. The chart never installs `runner:docker` or mounts a Docker socket. Module configuration details are in [charts/dogit/README.md](charts/dogit/README.md).
 
 ## Layout
 

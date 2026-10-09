@@ -112,6 +112,40 @@ certManager:
     class: ""
     annotations: {}
 
+
+modules:
+  # Optional Dogit modules. Their registration tokens are minted once and kept on
+  # persistent module volumes, so restarting a Pod does not lose its identity.
+  deployKubernetes:
+    enabled: false
+    persistence:
+      size: 256Mi
+      storageClassName: ""
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+  telegram:
+    enabled: false
+    persistence:
+      size: 256Mi
+      storageClassName: ""
+    # Optional Secret with the Telegram bot token. Leave empty to configure it in Dogit.
+    # If supplied, the Secret remains the source of truth after Pod restarts.
+    botTokenSecret: ""
+    botTokenSecretKey: token
+    # Optional initial destination; the bot must already have received a message there.
+    chatId: ""
+    threadId: ""
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+
 objectStorage:
   # Optional S3-compatible storage for shared artifacts/caches. If disabled, data lives on
   # the application's persistent volume, which is suitable for a small/single-node install.

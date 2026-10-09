@@ -38,6 +38,39 @@ For a temporary staging certificate while testing, append `--staging`. It avoids
 
 The default image tags are the project's development images (`yudole/dogit:dev-app` and `yudole/dogit:dev-web`). For a pinned release or a build from your own commit, build and publish the images and set `image.app.repository/tag` and `image.web.repository/tag` in your own values file.
 
+
+## Optional modules
+
+All optional modules are **off by default**. The Docker runner is not installed by this chart and no Docker socket is mounted.
+
+Enable the Kubernetes deployment module and/or Telegram notifications with the installer flags:
+
+```bash
+bash scripts/helm-install.sh --domain git.example.org --email admin@example.org --deploy-kubernetes --telegram
+```
+
+You can enable the same modules directly in a values file or with Helm:
+
+```yaml
+modules:
+  deployKubernetes:
+    enabled: true
+  telegram:
+    enabled: true
+```
+
+Or pass only the option you need: `--deploy-kubernetes` or `--telegram`. Their registration tokens are generated on first start and kept on persistent volumes. The token volumes are deliberately retained when a module is disabled, so enabling it again does not lose its registration identity.
+
+### Kubernetes deployment module
+
+`modules.deployKubernetes.enabled=true` installs `deploy:kubernetes` (binary `module-deploy-kubernetes`). Add clusters, kubeconfig contents, namespaces and registry choices through the module's settings in Dogit. History storage is optional; without a history database, deployments still run but history and revert records are unavailable.
+
+### Telegram notifications
+
+`modules.telegram.enabled=true` installs `notify:telegram`. Configure the bot token and destination in the module's settings in Dogit. To seed the bot token from an existing Kubernetes Secret instead, set `modules.telegram.botTokenSecret` and (if needed) `modules.telegram.botTokenSecretKey`. Optional `modules.telegram.chatId` and `modules.telegram.threadId` seed an initial destination; the bot must already have received a message there.
+
+A separate Kubernetes CI build-runner is not present as an executable in this revision of the repository. This chart therefore does not install `runner:docker` as a substitute. It does not create a Docker-socket mount or a privileged runner.
+
 ## External PostgreSQL
 
 The default is an in-cluster PostgreSQL server and a generated random password stored in a Kubernetes Secret. The chart reuses that Secret on upgrades; do not delete it. For an externally managed database, create a Secret containing a complete DSN under key `url` and pass its name to the installer:

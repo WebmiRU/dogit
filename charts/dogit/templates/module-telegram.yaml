@@ -1,0 +1,160 @@
+{{- if .Values.modules.telegram.enabled }}
+{{- $name := printf "%s-module-telegram" (include "dogit.fullname" .) | trunc 54 | trimSuffix "-" -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-state
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.modules.telegram.persistence.size }}
+  {{- with .Values.modules.telegram.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: module-notify-telegram
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "dogit.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: module-notify-telegram
+  template:
+    metadata:
+      labels:
+        {{- include "dogit.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: module-notify-telegram
+    spec:
+      initContainers:
+        - name: registration-token
+          image: {{ printf "%s:%s" .Values.image.app.repository .Values.image.app.tag | quote }}
+          imagePullPolicy: {{ .Values.image.app.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              token_file=/var/lib/dogit-telegram/.registration-token
+              if [ -s "$token_file" ]; then
+                exit 0
+              fi
+              umask 077
+              for attempt in $(seq 1 60); do
+                output="$(dogit module token create --name helm-notify-telegram --description 'Helm-managed Telegram notification module' 2>/dev/null || true)"
+                token="$(printf '%s\n' "$output" | sed -n 's/^[[:space:]]*token:[[:space:]]*//p' | head -n 1)"
+                if [ -n "$token" ]; then
+                  printf '%s' "$token" > "$token_file.tmp"
+                  chmod 600 "$token_file.tmp"
+                  mv "$token_file.tmp" "$token_file"
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "Could not create Dogit registration token after 5 minutes" >&2
+              exit 1
+          env:
+            - name: DOGIT_ENV
+              value: {{ .Values.app.environment | quote }}
+            - name: DOGIT_LOG_LEVEL
+              value: {{ .Values.app.logLevel | quote }}
+            - name: DOGIT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dogit.appSecretName" . }}
+                  key: {{ .Values.app.secretKeyKey | quote }}
+            {{- include "dogit.databaseEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/dogit-telegram
+      containers:
+        - name: module-notify-telegram
+          image: {{ printf "%s:%s" .Values.image.app.repository .Values.image.app.tag | quote }}
+          imagePullPolicy: {{ .Values.image.app.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              export DOGIT_MODULE_TOKEN="$(cat /var/lib/dogit-telegram/.registration-token)"
+              exec module-notify-telegram
+          env:
+            - name: DOGIT_CORE_URL
+              value: {{ printf "http://%s-app:8080" (include "dogit.fullname" .) | quote }}
+            - name: DOGIT_MODULE_ENDPOINT
+              value: {{ printf "http://%s:8093" $name | quote }}
+            - name: DOGIT_MODULE_NAME
+              value: telegram
+            - name: DOGIT_MODULE_LISTEN
+              value: ":8093"
+            - name: DOGIT_PUBLIC_HOST
+              value: {{ include "dogit.publicHost" . | quote }}
+            {{- if .Values.modules.telegram.botTokenSecret }}
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.modules.telegram.botTokenSecret | quote }}
+                  key: {{ .Values.modules.telegram.botTokenSecretKey | quote }}
+            {{- end }}
+            {{- if .Values.modules.telegram.chatId }}
+            - name: TELEGRAM_CHAT_ID
+              value: {{ .Values.modules.telegram.chatId | quote }}
+            {{- end }}
+            {{- if .Values.modules.telegram.threadId }}
+            - name: TELEGRAM_THREAD_ID
+              value: {{ .Values.modules.telegram.threadId | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8093
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /-/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.modules.telegram.resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/dogit-telegram
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ $name }}-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: module-notify-telegram
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dogit.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: module-notify-telegram
+  ports:
+    - name: http
+      port: 8093
+      targetPort: http
+{{- end }}

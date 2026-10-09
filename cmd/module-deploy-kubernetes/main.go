@@ -192,16 +192,12 @@ func manifest() map[string]any {
 		// undo it, and it can only decide that about scopes a module says it has.
 		"scopes": []string{"deploy:read", "deploy:write"},
 
-		// Its database is a setting, and an administrator fills it in.
+		// Its database is a setting, and an administrator may fill it in.
 		//
-		// Not something the core provisions: a module can have no database, can have two,
-		// or can keep everything in a file, and it can be somebody else's program on a host
-		// this instance cannot reach. The one thing the core can honestly do is refuse to let
-		// this module register until somebody has said where its data lives.
-		//
-		// Required for the reason the flag exists at all: without it this module still
-		// deploys, still answers, and records nothing, which from the outside is exactly a
-		// module that has never deployed anything. Secret because it is a password.
+		// This database holds deployment history, not the act of deploying. The module can
+		// still apply an image without it; history, image listings and revert records are the
+		// parts that are unavailable. Keeping this optional also lets the module register
+		// before an administrator has decided where its history should live.
 		//
 		// The value is the connection string, whole, rather than five fields: what a driver
 		// accepts is the driver's business, and a core that picked a shape would be picking
@@ -212,11 +208,8 @@ func manifest() map[string]any {
 			"type":     "text",
 			"label":    "Database",
 			"secret":   true,
-			"required": true,
-			"description": "Where this module keeps what it deployed. It deploys without one " +
-				"and records nothing, which looks exactly like a module that has never deployed " +
-				"anything — so it will not register until this is filled in. Any form the " +
-				"driver accepts.",
+			"description": "Optional history database. Without it, deployments still run, but their history " +
+				"cannot be listed or reverted. Any DSN accepted by the database driver.",
 		},
 
 			{
