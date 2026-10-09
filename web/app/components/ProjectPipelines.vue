@@ -442,7 +442,7 @@ watch(() => props.projectPath, () => load())
     </div>
 
     <div v-else class="pipeline-table-wrap" :aria-busy="loading">
-    <table class="pipeline-table">
+    <table class="admin-table pipeline-table">
       <thead>
         <tr>
           <th class="col-status">Status</th>
@@ -455,7 +455,7 @@ watch(() => props.projectPath, () => load())
         <tr v-for="run in pipelines" :key="run.iid">
           <td class="col-status">
             <NuxtLink :to="`/p/${projectPath}/-/pipelines/${run.iid}`" class="result-link">
-              <span class="result-state" :class="statusClass[run.status] ?? 'badge-neutral'">
+              <span class="badge badge-label result-state" :class="statusClass[run.status] ?? 'badge-neutral'">
                 <span class="result-symbol" aria-hidden="true">
                   {{ run.status === 'success' ? '✓' : run.status === 'failed' ? '!' : isLive(run) ? '◷' : '—' }}
                 </span>

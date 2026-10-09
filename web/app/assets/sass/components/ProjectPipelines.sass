@@ -60,10 +60,10 @@
   align-items: center
   gap: 7px
   min-height: 38px
-  padding: 9px 14px
-  border-radius: 8px
+  padding: 8px 13px
+  border-radius: 6px
   white-space: nowrap
-  box-shadow: 0 2px 7px rgba(0, 0, 0, .12)
+  box-shadow: none
 .new-plus
   font-size: 17px
   line-height: 12px
@@ -75,7 +75,7 @@
   padding: 15px 20px
   margin-bottom: 22px
   border: 1px solid var(--pipeline-line)
-  border-radius: 11px
+  border-radius: 6px
   background: var(--bg-elevated)
 .summary-item
   display: flex
@@ -561,3 +561,50 @@
     transition: none
   .refreshing-dot
     animation: none
+
+
+/* The shared table controls base spacing; pipeline-specific columns stay local. */
+.admin-table.pipeline-table
+  background: transparent
+  border: 0
+  border-radius: 0
+  overflow: visible
+
+.admin-table.pipeline-table thead
+  background: transparent
+
+.admin-table.pipeline-table th
+  padding: 8px 12px
+  background: transparent
+  font-size: 12px
+  font-weight: 600
+  white-space: nowrap
+
+.admin-table.pipeline-table td
+  padding: 9px 12px
+  vertical-align: middle
+  border-bottom: 1px solid var(--border)
+
+.admin-table.pipeline-table tbody tr:hover td
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.03))
+
+.admin-table.pipeline-table .result-state
+  display: inline-flex
+  align-items: center
+  gap: 0
+  padding: 2px 8px
+  border: 0
+  border-radius: 3px
+  font-size: 11px
+  font-weight: 600
+  line-height: 1.4
+
+.admin-table.pipeline-table .result-symbol
+  display: none
+
+.admin-table.pipeline-table .branch,
+.admin-table.pipeline-table .sha
+  padding: 2px 7px
+  border: 0
+  border-radius: 3px
+  background: var(--bg-inset)
