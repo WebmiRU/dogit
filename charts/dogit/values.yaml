@@ -146,6 +146,58 @@ modules:
       limits:
         memory: 256Mi
 
+
+  # Kubernetes BuildKit CI runner. Runs alongside BuildKit in one Pod; it does not
+  # install the Docker runner and never mounts a container-runtime socket.
+  runner:
+    enabled: false
+    image:
+      repository: yudole/runner
+      tag: dev
+      pullPolicy: Always
+    buildkit:
+      image:
+        repository: moby/buildkit
+        tag: rootless
+        pullPolicy: IfNotPresent
+      maxParallelism: 2
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+    # The registration credential is retained here so container restarts can safely
+    # create a fresh in-memory copy before the runner reads and removes it.
+    persistence:
+      size: 256Mi
+      storageClassName: ""
+    # EmptyDir cache/workspace avoid hostPath mounts. They are lost when the Pod is replaced.
+    cache:
+      sizeLimit: 8Gi
+    workspace:
+      sizeLimit: 8Gi
+    name: buildkit
+    # This field is registration metadata; the runner does not expose an inbound API today.
+    endpoint: "http://runner:8092"
+    # Empty means the Dogit app Service in this release/namespace.
+    coreURL: ""
+    concurrency: 1
+    jobTimeout: 1h
+    pollInterval: 3s
+    # Empty means Helm creates and reuses a dedicated mTLS Secret. A supplied Secret must
+    # contain ca.pem, tls.crt, tls.key, client.crt and client.key.
+    tls:
+      existingSecret: ""
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
 objectStorage:
   # Optional S3-compatible storage for shared artifacts/caches. If disabled, data lives on
   # the application's persistent volume, which is suitable for a small/single-node install.

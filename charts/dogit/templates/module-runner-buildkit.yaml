@@ -1,0 +1,336 @@
+{{- if .Values.modules.runner.enabled }}
+{{- $name := printf "%s-module-runner" (include "dogit.fullname" .) | trunc 54 | trimSuffix "-" -}}
+{{- $stateName := printf "%s-state" $name | trunc 63 | trimSuffix "-" -}}
+{{- $secretName := default (printf "%s-certs" $name) .Values.modules.runner.tls.existingSecret -}}
+{{- if not .Values.modules.runner.tls.existingSecret }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName }}
+{{- if $existing }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: module-runner-buildkit
+type: Opaque
+data:
+  ca.pem: {{ required (printf "Secret %s is missing key ca.pem" $secretName) (index $existing.data "ca.pem") | quote }}
+  tls.crt: {{ required (printf "Secret %s is missing key tls.crt" $secretName) (index $existing.data "tls.crt") | quote }}
+  tls.key: {{ required (printf "Secret %s is missing key tls.key" $secretName) (index $existing.data "tls.key") | quote }}
+  client.crt: {{ required (printf "Secret %s is missing key client.crt" $secretName) (index $existing.data "client.crt") | quote }}
+  client.key: {{ required (printf "Secret %s is missing key client.key" $secretName) (index $existing.data "client.key") | quote }}
+{{- else }}
+{{- $ca := genCA (printf "%s-ca" $name) 3650 }}
+{{- $server := genSignedCert "dogit-buildkit" (list "localhost") (list "127.0.0.1") 3650 $ca }}
+{{- $client := genSignedCert "dogit-runner" (list) (list) 3650 $ca }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: module-runner-buildkit
+type: Opaque
+data:
+  ca.pem: {{ $ca.Cert | b64enc | quote }}
+  tls.crt: {{ $server.Cert | b64enc | quote }}
+  tls.key: {{ $server.Key | b64enc | quote }}
+  client.crt: {{ $client.Cert | b64enc | quote }}
+  client.key: {{ $client.Key | b64enc | quote }}
+{{- end }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $stateName }}
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: module-runner-buildkit
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.modules.runner.persistence.size }}
+  {{- with .Values.modules.runner.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: module-runner-buildkit
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "dogit.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: module-runner-buildkit
+  template:
+    metadata:
+      labels:
+        {{- include "dogit.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: module-runner-buildkit
+    spec:
+      # Neither the runner nor BuildKit calls the Kubernetes API.
+      automountServiceAccountToken: false
+      initContainers:
+        - name: registration-token
+          image: {{ printf "%s:%s" .Values.image.app.repository .Values.image.app.tag | quote }}
+          imagePullPolicy: {{ .Values.image.app.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              state_dir=/var/lib/dogit-runner
+              token_file="$state_dir/.registration-token"
+              chmod 0700 "$state_dir"
+              if [ -s "$token_file" ]; then
+                chmod 0400 "$token_file"
+                exit 0
+              fi
+              umask 077
+              for attempt in $(seq 1 60); do
+                output="$(dogit module token create --name helm-runner-buildkit --description 'Helm-managed runner:buildkit module' 2>/dev/null || true)"
+                token="$(printf '%s\n' "$output" | sed -n 's/^[[:space:]]*token:[[:space:]]*//p' | head -n 1)"
+                if [ -n "$token" ]; then
+                  printf '%s' "$token" > "$token_file.tmp"
+                  chmod 0400 "$token_file.tmp"
+                  mv "$token_file.tmp" "$token_file"
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "Could not create Dogit registration token after 5 minutes" >&2
+              exit 1
+          env:
+            - name: DOGIT_ENV
+              value: {{ .Values.app.environment | quote }}
+            - name: DOGIT_LOG_LEVEL
+              value: {{ .Values.app.logLevel | quote }}
+            - name: DOGIT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dogit.appSecretName" . }}
+                  key: {{ .Values.app.secretKeyKey | quote }}
+            {{- include "dogit.databaseEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/dogit-runner
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+        - name: prepare-runner
+          image: alpine:3.21
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              chown 1000:1000 /buildkit-state
+              chmod 0700 /buildkit-state
+              chown 1000:100 /workspace
+              chmod 0700 /workspace
+              for name in ca.pem tls.crt tls.key; do
+                cp "/source-certs/$name" "/buildkit-certs/$name"
+                chown 1000:1000 "/buildkit-certs/$name"
+                chmod 0400 "/buildkit-certs/$name"
+              done
+          volumeMounts:
+            - name: buildkit-state
+              mountPath: /buildkit-state
+            - name: workspace
+              mountPath: /workspace
+            - name: buildkit-certs
+              mountPath: /buildkit-certs
+            - name: buildkit-cert-source
+              mountPath: /source-certs
+              readOnly: true
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      containers:
+        - name: buildkitd
+          image: {{ printf "%s:%s" .Values.modules.runner.buildkit.image.repository .Values.modules.runner.buildkit.image.tag | quote }}
+          imagePullPolicy: {{ .Values.modules.runner.buildkit.image.pullPolicy }}
+          args:
+            - --addr
+            - tcp://0.0.0.0:1234
+            - --oci-worker-no-process-sandbox
+            - --oci-max-parallelism={{ .Values.modules.runner.buildkit.maxParallelism }}
+            - --tlscacert
+            - /certs/ca.pem
+            - --tlscert
+            - /certs/tls.crt
+            - --tlskey
+            - /certs/tls.key
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: Unconfined
+          ports:
+            - name: grpc
+              containerPort: 1234
+          volumeMounts:
+            - name: buildkit-state
+              mountPath: /home/user/.local/share/buildkit
+            - name: buildkit-certs
+              mountPath: /certs
+              readOnly: true
+          resources:
+            {{- toYaml .Values.modules.runner.buildkit.resources | nindent 12 }}
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 3
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+        - name: runner
+          image: {{ printf "%s:%s" .Values.modules.runner.image.repository .Values.modules.runner.image.tag | quote }}
+          imagePullPolicy: {{ .Values.modules.runner.image.pullPolicy }}
+          # A short-lived root wrapper can read the root-owned source token and credentials,
+          # refresh a tmpfs copy on every container restart, then drops to uid 1000 before
+          # running untrusted job scripts. It has no privileged flag and only three capabilities.
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set -eu
+              umask 077
+              cp /var/lib/dogit-runner/.registration-token /run/live/registration.token
+              cp /run/runner-certs/ca.pem /run/live/ca.pem
+              cp /run/runner-certs/client.crt /run/live/client.crt
+              cp /run/runner-certs/client.key /run/live/client.key
+              chown 1000:100 /run/live/registration.token /run/live/ca.pem /run/live/client.crt /run/live/client.key
+              chmod 0400 /run/live/registration.token /run/live/ca.pem /run/live/client.crt /run/live/client.key
+              export HOME=/home/runner USER=runner LOGNAME=runner
+              exec /bin/busybox su -p -s /bin/sh -c 'exec /usr/local/bin/runner' runner
+          env:
+            - name: DOGIT_CORE_URL
+              value: {{ default (printf "http://%s-app:8080" (include "dogit.fullname" .)) .Values.modules.runner.coreURL | quote }}
+            - name: DOGIT_ENDPOINT
+              value: {{ .Values.modules.runner.endpoint | quote }}
+            - name: DOGIT_RUNNER_NAME
+              value: {{ .Values.modules.runner.name | quote }}
+            - name: DOGIT_RUNNER_CLAIM
+              value: "true"
+            - name: DOGIT_REGISTRATION_TOKEN_FILE
+              value: /run/live/registration.token
+            - name: DOGIT_RUNNER_WORKSPACE
+              value: /data/work
+            - name: DOGIT_RUNNER_CONCURRENCY
+              value: {{ .Values.modules.runner.concurrency | quote }}
+            - name: DOGIT_RUNNER_JOB_TIMEOUT
+              value: {{ .Values.modules.runner.jobTimeout | quote }}
+            - name: DOGIT_RUNNER_POLL
+              value: {{ .Values.modules.runner.pollInterval | quote }}
+            - name: DOGIT_BUILDKIT_ADDR
+              value: tcp://127.0.0.1:1234
+            - name: DOGIT_BUILDKIT_HOST
+              value: 127.0.0.1:1234
+            - name: DOGIT_BUILDKIT_CA
+              value: /run/live/ca.pem
+            - name: DOGIT_BUILDKIT_CERT
+              value: /run/live/client.crt
+            - name: DOGIT_BUILDKIT_KEY
+              value: /run/live/client.key
+            - name: HOME
+              value: /home/runner
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/dogit-runner
+              readOnly: true
+            - name: workspace
+              mountPath: /data/work
+            - name: live-credentials
+              mountPath: /run/live
+            - name: runner-cert-source
+              mountPath: /run/runner-certs
+              readOnly: true
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "SETUID", "SETGID"]
+          resources:
+            {{- toYaml .Values.modules.runner.resources | nindent 12 }}
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ $stateName }}
+        - name: workspace
+          emptyDir:
+            {{- with .Values.modules.runner.workspace.sizeLimit }}
+            sizeLimit: {{ . | quote }}
+            {{- end }}
+        - name: buildkit-state
+          emptyDir:
+            {{- with .Values.modules.runner.cache.sizeLimit }}
+            sizeLimit: {{ . | quote }}
+            {{- end }}
+        - name: buildkit-certs
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: live-credentials
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: buildkit-cert-source
+          secret:
+            secretName: {{ $secretName }}
+            defaultMode: 0400
+            items:
+              - key: ca.pem
+                path: ca.pem
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        - name: runner-cert-source
+          secret:
+            secretName: {{ $secretName }}
+            defaultMode: 0400
+            items:
+              - key: ca.pem
+                path: ca.pem
+              - key: client.crt
+                path: client.crt
+              - key: client.key
+                path: client.key
+{{- end }}

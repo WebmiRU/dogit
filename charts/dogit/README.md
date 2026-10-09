@@ -46,7 +46,7 @@ All optional modules are **off by default**. The Docker runner is not installed 
 Enable the Kubernetes deployment module and/or Telegram notifications with the installer flags:
 
 ```bash
-bash scripts/helm-install.sh --domain git.example.org --email admin@example.org --deploy-kubernetes --telegram
+bash scripts/helm-install.sh --domain git.example.org --email admin@example.org --deploy-kubernetes --telegram --runner
 ```
 
 You can enable the same modules directly in a values file or with Helm:
@@ -56,6 +56,8 @@ modules:
   deployKubernetes:
     enabled: true
   telegram:
+    enabled: true
+  runner:
     enabled: true
 ```
 
@@ -69,7 +71,21 @@ Or pass only the option you need: `--deploy-kubernetes` or `--telegram`. Their r
 
 `modules.telegram.enabled=true` installs `notify:telegram`. Configure the bot token and destination in the module's settings in Dogit. To seed the bot token from an existing Kubernetes Secret instead, set `modules.telegram.botTokenSecret` and (if needed) `modules.telegram.botTokenSecretKey`. Optional `modules.telegram.chatId` and `modules.telegram.threadId` seed an initial destination; the bot must already have received a message there.
 
-A separate Kubernetes CI build-runner is not present as an executable in this revision of the repository. This chart therefore does not install `runner:docker` as a substitute. It does not create a Docker-socket mount or a privileged runner.
+### Kubernetes BuildKit CI runner
+
+`modules.runner.enabled=true` installs the separate `runner:buildkit` project from `runner/` alongside `moby/buildkit:rootless` in one Pod. Use the installer flag:
+
+```bash
+bash scripts/helm-install.sh --domain git.example.org --email admin@example.org --runner
+```
+
+The chart generates an internal CA and matching BuildKit server/client certificates on first install, stores them in a Kubernetes Secret, and reuses that Secret on Helm upgrades. Protect access to Secrets in the Dogit namespace. To bring your own certificate material, set `modules.runner.tls.existingSecret`; that Secret must contain `ca.pem`, `tls.crt`, `tls.key`, `client.crt`, and `client.key`. BuildKit only receives the CA and server keypair; the runner only receives the CA and client keypair.
+
+The runner registration token is generated on first start and kept on a retained PVC. Before the runner starts, a small wrapper copies the token and client credentials into an in-memory volume; the runner reads and removes those files. This also lets the container restart without losing its registration credential. No Kubernetes API token is mounted, no Docker socket is used, no ServiceAccount permissions are granted, and neither container is privileged.
+
+BuildKit's worker is configured with `--oci-worker-no-process-sandbox`, which is required by the tested rootless setup on the target cluster. It has a security trade-off: a Dockerfile's `RUN` step shares the daemon's process namespace and may interfere with processes there. Also, the runner currently executes CI scripts as subprocesses in the runner container, not in isolated per-job Pods; CI code should therefore be treated as trusted. This module is not a hardened multi-tenant sandbox.
+
+The BuildKit cache and checkout workspace use `emptyDir` volumes, with configurable `modules.runner.cache.sizeLimit` and `modules.runner.workspace.sizeLimit`; they do not mount host paths and are lost when the Pod is replaced. CPU/memory requests, image tags, job timeout, polling interval and concurrency can be adjusted under `modules.runner`. The runner endpoint setting is registration metadata only; the current runner does not serve an inbound HTTP API there.
 
 ## External PostgreSQL
 
@@ -139,4 +155,4 @@ Replace the example credentials; don't keep a real password in shell history.
 
 Back up PostgreSQL, the application data volume, the generated `*-app-secret` (especially `secret-key`), and the PostgreSQL Secret. The application secret key is used to encrypt stored credentials; losing or rotating it can make existing encrypted credentials unreadable.
 
-The chart never installs `runner:docker` and never mounts the node's Docker socket. A separate Kubernetes CI build-runner is not present as an executable in this revision, so this chart does not try to substitute the Docker runner for it.
+The chart never installs `runner:docker` and never mounts the node's Docker socket. The optional BuildKit runner described above is a separate module.

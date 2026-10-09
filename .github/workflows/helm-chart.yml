@@ -32,13 +32,17 @@ jobs:
           helm template dogit charts/dogit --namespace dogit > /tmp/dogit-default.yaml
           ! grep -q 'component: module-deploy-kubernetes' /tmp/dogit-default.yaml
           ! grep -q 'component: module-notify-telegram' /tmp/dogit-default.yaml
+          ! grep -q 'component: module-runner-buildkit' /tmp/dogit-default.yaml
       - name: Render optional modules
         run: |
           helm template dogit charts/dogit --namespace dogit \
             --set modules.deployKubernetes.enabled=true \
-            --set modules.telegram.enabled=true > /tmp/dogit-modules.yaml
+            --set modules.telegram.enabled=true \\
+            --set modules.runner.enabled=true > /tmp/dogit-modules.yaml
           grep -q 'component: module-deploy-kubernetes' /tmp/dogit-modules.yaml
           grep -q 'component: module-notify-telegram' /tmp/dogit-modules.yaml
+          grep -q 'component: module-runner-buildkit' /tmp/dogit-modules.yaml
+          grep -q 'moby/buildkit:rootless' /tmp/dogit-modules.yaml
       - name: Render TLS with ingress-nginx
         run: >-
           helm template dogit charts/dogit --namespace dogit

@@ -18,6 +18,7 @@ ingress_class="nginx"
 database_secret=""
 install_deploy_kubernetes=false
 install_telegram=false
+install_runner=false
 no_tls=false
 skip_cert_manager_install=false
 staging=false
@@ -39,6 +40,7 @@ Options:
                                 and skip installing the in-cluster PostgreSQL
   --deploy-kubernetes            Enable the optional deploy:kubernetes module
   --telegram                     Enable the optional Telegram notification module
+  --runner                       Enable the optional Kubernetes BuildKit CI runner
   --no-tls                      Create an HTTP Ingress only; do not install/use cert-manager
   --staging                     Use the Let's Encrypt staging endpoint while testing
   --skip-cert-manager-install   Do not install cert-manager; fail if its CRDs are absent
@@ -83,6 +85,8 @@ while (($#)); do
       install_deploy_kubernetes=true; shift ;;
     --telegram)
       install_telegram=true; shift ;;
+    --runner)
+      install_runner=true; shift ;;
     --no-tls)
       no_tls=true; shift ;;
     --staging)
@@ -175,6 +179,9 @@ if [[ "$install_deploy_kubernetes" == true ]]; then
 fi
 if [[ "$install_telegram" == true ]]; then
   helm_args+=(--set modules.telegram.enabled=true)
+fi
+if [[ "$install_runner" == true ]]; then
+  helm_args+=(--set modules.runner.enabled=true)
 fi
 
 helm_args+=(--wait --timeout 10m)
