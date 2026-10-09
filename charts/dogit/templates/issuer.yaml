@@ -4,6 +4,13 @@
 {{- end }}
 {{- $issuerName := default (printf "%s-letsencrypt" (include "dogit.fullname" .)) .Values.certManager.issuerName }}
 {{- $http01Class := default .Values.ingress.className .Values.certManager.http01.ingressClassName }}
+{{- $solverAnnotations := dict -}}
+{{- if eq .Values.ingress.className "traefik" -}}
+{{- $_ := set $solverAnnotations "traefik.ingress.kubernetes.io/router.entrypoints" "web" -}}
+{{- end -}}
+{{- range $key, $value := .Values.certManager.http01.annotations -}}
+{{- $_ := set $solverAnnotations $key $value -}}
+{{- end -}}
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -24,5 +31,11 @@ spec:
             class: {{ .Values.certManager.http01.class | quote }}
             {{- else if $http01Class }}
             ingressClassName: {{ $http01Class | quote }}
+            {{- end }}
+            {{- if $solverAnnotations }}
+            ingressTemplate:
+              metadata:
+                annotations:
+                  {{- toYaml $solverAnnotations | nindent 18 }}
             {{- end }}
 {{- end }}
