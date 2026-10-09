@@ -8,6 +8,8 @@
  * short credential and the address the module published. The listing then comes
  * from the module itself, which is the only place that knows what it holds.
  */
+import { timeAgo } from '~/utils/format'
+
 interface RegistryAnswer {
   project: string
   registry: {
@@ -56,6 +58,162 @@ const loadingImages = ref(false)
 const error = ref('')
 const imageError = ref('')
 const busyTag = ref('')
+
+/**
+ * The view over the listing: what is being looked for, which way the tags are
+ * ordered, which repositories are folded shut and which show all their tags.
+ *
+ * The registry answers with everything it holds, once. It has no paging and
+ * giving it some is a contract change in someone else's code, so the reader's
+ * half of paging lives here: a repository draws its ten newest tags and offers
+ * the rest, because a repository of three hundred tags that grows to fit them
+ * is the same wall as before, only taller.
+ */
+const filter = ref('')
+const sort = ref<'newest' | 'oldest' | 'largest'>('newest')
+const folded = ref<Set<string>>(new Set())
+const opened = ref<Set<string>>(new Set())
+
+/** How many tags a repository draws before offering the rest. */
+const SHOWN = 10
+
+const needle = computed(() => filter.value.trim().toLowerCase())
+
+/** A tag answers the needle on its name or on its digest. */
+function tagMatches(tag: ImageTag): boolean {
+  if (!needle.value) return true
+  return (
+    tag.name.toLowerCase().includes(needle.value) ||
+    tag.digest.toLowerCase().includes(needle.value)
+  )
+}
+
+/**
+ * The repositories worth drawing, with the tags worth drawing under them.
+ *
+ * A repository stays when its own name answers, or when a tag under it does —
+ * an image is usually looked for by its name, and its repository is looked up
+ * second, so a search that only matches repositories finds nothing. Tags the
+ * registry will not date sort last rather than first: nobody orders images by
+ * a date that is not there.
+ */
+const shown = computed(() => {
+  const found = repositories.value
+    .map((repository) => ({
+      repository,
+      tags: repository.tags.filter(tagMatches),
+    }))
+    .filter(
+      (entry) =>
+        !needle.value ||
+        entry.repository.name.toLowerCase().includes(needle.value) ||
+        entry.tags.length > 0,
+    )
+
+  for (const entry of found) {
+    entry.tags.sort((a, b) => {
+      if (sort.value === 'largest') return b.size_bytes - a.size_bytes
+      const when = (tag: ImageTag) =>
+        tag.created_at ? Date.parse(tag.created_at) : Number.NaN
+      const left = when(a)
+      const right = when(b)
+      if (Number.isNaN(left) && Number.isNaN(right)) return 0
+      if (Number.isNaN(left)) return 1
+      if (Number.isNaN(right)) return -1
+      return sort.value === 'oldest' ? left - right : right - left
+    })
+  }
+  return found
+})
+
+/** What the subtitle counts when the needle is in. */
+const foundTags = computed(() =>
+  shown.value.reduce((total, entry) => total + entry.tags.length, 0),
+)
+
+/** The rows a repository draws: all of them when it is opened or being searched. */
+function visibleTags(name: string, tags: ImageTag[]): ImageTag[] {
+  if (needle.value || opened.value.has(name)) return tags
+  return tags.slice(0, SHOWN)
+}
+
+/** A folded repository opens anyway while it has something the needle matched. */
+function isFolded(name: string): boolean {
+  return folded.value.has(name) && !needle.value
+}
+
+function toggleFold(name: string) {
+  folded.value = toggleIn(folded.value, name)
+}
+
+function toggleOpened(name: string) {
+  opened.value = toggleIn(opened.value, name)
+}
+
+function toggleIn(set: Set<string>, name: string): Set<string> {
+  const next = new Set(set)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  return next
+}
+
+/**
+ * The one tag whose menu is open, and where its panel goes.
+ *
+ * The same arrangement as the tags page, for the same reason: the card clips
+ * its children, and a panel belonging to the last row of a long table would be
+ * cut in half by the card it belongs to. In the body nothing clips it, and
+ * because it cannot follow the row a scroll closes it — a menu hanging next to
+ * the wrong row is worse than no menu.
+ */
+const open = ref<{ repository: string; tag: string } | null>(null)
+const panel = ref({ top: 0, left: 0, up: false })
+
+const openedTag = computed(() => {
+  const current = open.value
+  if (!current) return null
+  const repository = repositories.value.find((one) => one.name === current.repository)
+  const tag = repository?.tags.find((one) => one.name === current.tag)
+  return repository && tag ? { repository: repository.name, tag } : null
+})
+
+function fullTag(repository: string, tag: string): string {
+  return `${repository}:${tag}`
+}
+
+function showMenu(repository: string, tag: string, event: MouseEvent) {
+  // The same ⋯ twice is a toggle: the second press is a look at the row again,
+  // not a second menu.
+  if (open.value && open.value.repository === repository && open.value.tag === tag) {
+    closeMenu()
+    return
+  }
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  panel.value = {
+    top: box.bottom + 6,
+    left: box.right - 190,
+    up: window.innerHeight - box.bottom < 150,
+  }
+  open.value = { repository, tag }
+}
+
+function closeMenu() {
+  open.value = null
+}
+
+// Three ways the open menu stops being the thing at hand: a pointer down
+// elsewhere, Escape, and the page moving under it. All three do nothing while
+// no menu is open, so they are three idle listeners for the life of the page.
+function onPointerAway(event: PointerEvent) {
+  if (!open.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.row-menu-panel') || target?.closest('.row-menu')) return
+  closeMenu()
+}
+
+function onKeyAway(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeMenu()
+}
 
 const settings = ref<Record<string, unknown>>({})
 
@@ -131,6 +289,10 @@ async function removeTag(repository: string, tag: string) {
   const registry = answer.value?.registry
   if (!registry || !answer.value?.token) return
 
+  // The menu goes before the confirm: a dialog and the panel it came out of
+  // are two things on top of each other, and only one of them is a question.
+  closeMenu()
+
   const full = `${repository}:${tag}`
   if (!confirm(`Delete ${full}? Anything that was built from this tag will need rebuilding.`)) return
 
@@ -165,6 +327,9 @@ let stopWatchingModule: (() => void) | undefined
 
 onMounted(() => {
   void load()
+  window.addEventListener('pointerdown', onPointerAway, true)
+  window.addEventListener('keydown', onKeyAway)
+  window.addEventListener('scroll', closeMenu, true)
   // Both directions. A push travels through the core and is announced by a job
   // finishing; a deletion goes from whichever page asked for it straight to the
   // module, and the module reports it afterwards — it holds its own token, so the
@@ -191,6 +356,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopWatching?.()
   stopWatchingModule?.()
+  window.removeEventListener('pointerdown', onPointerAway, true)
+  window.removeEventListener('keydown', onKeyAway)
+  window.removeEventListener('scroll', closeMenu, true)
 })
 watch(() => props.projectPath, load)
 
@@ -248,10 +416,21 @@ function shortDigest(digest: string) {
         <div class="title">
           <h2 class="section-title" style="margin: 0">Images</h2>
           <p class="page-subtitle">
-            <span v-if="tagCount">{{ tagCount }} tag{{ tagCount === 1 ? '' : 's' }} in
-              {{ formatBytes(totalBytes) }}</span>
+            <span v-if="tagCount">{{ needle ? `${foundTags} of ${tagCount}` : tagCount }} tag{{
+              (needle ? foundTags : tagCount) === 1 ? '' : 's'
+            }} in {{ formatBytes(totalBytes) }}</span>
             <span v-else>Nothing pushed yet.</span>
           </p>
+        </div>
+        <div class="field" style="max-width: 280px; margin: 0">
+          <input v-model="filter" type="search" placeholder="Filter tags and digests" />
+        </div>
+        <div class="field" style="max-width: 170px; margin: 0">
+          <select v-model="sort" aria-label="Order tags by">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="largest">Largest first</option>
+          </select>
         </div>
       </div>
 
@@ -276,42 +455,113 @@ function shortDigest(digest: string) {
         </div>
       </div>
 
-      <div v-for="repository in repositories" :key="repository.name" class="card">
-        <div class="card-header">
-          <span class="mono">{{ repository.name }}</span>
-          <span class="badge">{{ formatBytes(repository.size_bytes) }}</span>
+      <template v-else>
+        <div v-for="entry in shown" :key="entry.repository.name" class="card">
+          <div class="card-header repo-card-header">
+            <!-- The header folds the repository: a project with a hundred images
+                 is read one repository at a time, and a hundred tables in a
+                 column is a page nobody scrolls to the end of. -->
+            <button
+              class="fold"
+              type="button"
+              :aria-expanded="!isFolded(entry.repository.name)"
+              @click="toggleFold(entry.repository.name)"
+            >
+              <span class="chevron" :class="{ closed: isFolded(entry.repository.name) }">▾</span>
+              <span class="mono">{{ entry.repository.name }}</span>
+            </button>
+            <span class="muted small">
+              {{ entry.tags.length }} tag{{ entry.tags.length === 1 ? '' : 's' }}
+            </span>
+            <span class="badge">{{ formatBytes(entry.repository.size_bytes) }}</span>
+          </div>
+
+          <table v-if="!isFolded(entry.repository.name)" class="table">
+            <thead>
+              <tr>
+                <th>Tag</th>
+                <th>Digest</th>
+                <th>Built</th>
+                <th>Size</th>
+                <th v-if="answer.can_delete" class="right">
+                  <span class="visually-hidden">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="tag in visibleTags(entry.repository.name, entry.tags)" :key="tag.name">
+                <td class="mono">{{ tag.name }}</td>
+                <td class="mono muted small">{{ shortDigest(tag.digest) }}</td>
+                <!-- A relative date with the exact one behind it: this column is
+                     the one that is sorted, and a full date on every row was
+                     the widest thing on the page. -->
+                <td class="muted small">
+                  <span v-if="tag.created_at" :title="builtAt(tag)">{{ timeAgo(tag.created_at) }}</span>
+                  <span v-else>{{ builtAt(tag) }}</span>
+                </td>
+                <td class="small">{{ formatBytes(tag.size_bytes) }}</td>
+                <td v-if="answer.can_delete" class="right">
+                  <button
+                    class="row-menu"
+                    type="button"
+                    aria-haspopup="menu"
+                    :aria-expanded="open?.repository === entry.repository.name && open?.tag === tag.name"
+                    :aria-label="`Actions for ${fullTag(entry.repository.name, tag.name)}`"
+                    @click="showMenu(entry.repository.name, tag.name, $event)"
+                  >
+                    ⋯
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- The rest of the tags, as one decision rather than one scroll: a
+               repository of three hundred tags keeps its first ten until the
+               reader says otherwise, and the needle ignores the limit — a
+               filtered list is already an answer. -->
+          <div
+            v-if="!isFolded(entry.repository.name) && !needle && entry.tags.length > SHOWN"
+            class="more"
+          >
+            <button class="btn" type="button" @click="toggleOpened(entry.repository.name)">
+              {{
+                opened.has(entry.repository.name)
+                  ? `Show first ${SHOWN}`
+                  : `Show all ${entry.tags.length} tags`
+              }}
+            </button>
+          </div>
         </div>
 
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Tag</th>
-              <th>Digest</th>
-              <th>Built</th>
-              <th>Size</th>
-              <th v-if="answer.can_delete" />
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="tag in repository.tags" :key="tag.name">
-              <td class="mono">{{ tag.name }}</td>
-              <td class="mono muted small">{{ shortDigest(tag.digest) }}</td>
-              <td class="muted small">{{ builtAt(tag) }}</td>
-              <td class="small">{{ formatBytes(tag.size_bytes) }}</td>
-              <td v-if="answer.can_delete" class="right">
-                <button
-                  class="btn"
-                  type="button"
-                  :disabled="busyTag === `${repository.name}:${tag.name}`"
-                  @click="removeTag(repository.name, tag.name)"
-                >
-                  Delete
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+        <div v-if="shown.length === 0" class="card empty">
+          No image matches “{{ filter }}”.
+        </div>
+      </template>
+
+      <!-- The menu is in the body for the same reason as on the tags page: the
+           card clips whatever is inside it. -->
+      <Teleport to="#teleports">
+        <div
+          v-if="openedTag"
+          class="row-menu-panel"
+          :class="{ up: panel.up }"
+          :style="{ top: `${panel.top}px`, left: `${panel.left}px` }"
+        >
+          <button
+            class="row-menu-danger"
+            type="button"
+            :disabled="busyTag === fullTag(openedTag.repository, openedTag.tag.name)"
+            @click="removeTag(openedTag.repository, openedTag.tag.name)"
+          >
+            {{
+              busyTag === fullTag(openedTag.repository, openedTag.tag.name)
+                ? 'Deleting…'
+                : 'Delete'
+            }}
+          </button>
+        </div>
+      </Teleport>
     </template>
   </div>
 </template>
@@ -319,6 +569,97 @@ function shortDigest(digest: string) {
 <style scoped>
 .section-title {
   font-size: 18px;
+}
+
+/* The repository's name folds it. The whole header is the button because the
+   bookmark is for the row, not for the stepper at its left. */
+.repo-card-header {
+  gap: 10px;
+}
+
+.fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.fold .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.chevron.closed {
+  transform: rotate(-90deg);
+}
+
+/* The door to the menu: quiet until the row is the one being looked at, like
+   the tags page's. The panel it opens is the tags page's — same class, same
+   place in the body — so two doors that look different would be two things to
+   learn for no reason a reader can see. */
+.row-menu {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+tr:hover .row-menu,
+tr:focus-within .row-menu,
+.row-menu[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.row-menu:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+/* A touch screen has no hover to reveal anything, so there the door is simply
+   always open. */
+@media (hover: none) and (pointer: coarse) {
+  .row-menu {
+    opacity: 1;
+  }
+}
+
+.more {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* For the one header cell that has no words: a screen reader gets "Actions",
+   and everybody else gets the same empty cell as before. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .push-hint {
