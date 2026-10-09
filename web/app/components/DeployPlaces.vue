@@ -68,7 +68,7 @@ onMounted(async () => {
       is a pipeline that builds.
     </p>
 
-    <table v-else class="places-table">
+    <table v-else class="admin-table places-table">
       <thead>
         <tr>
           <th>Place</th>

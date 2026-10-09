@@ -3,28 +3,6 @@
 // The element attribute that made this scoped is gone with it: global styles are
 // selected by name, so a name used here has to mean one thing across the site.
 
-.targets-table
-  width: 100%
-  border-collapse: collapse
-  margin-bottom: 16px
-  background: var(--bg-card, #161b22)
-  border: 1px solid var(--border)
-  border-radius: 6px
-  overflow: hidden
-.targets-table th
-  text-align: left
-  padding: 8px 12px
-  font-size: 12px
-  font-weight: 600
-  color: var(--text-muted)
-  border-bottom: 1px solid var(--border)
-.targets-table td
-  height: 1px
-  padding: 10px 12px
-  vertical-align: middle
-  border-bottom: 1px solid var(--border)
-.targets-table tbody tr:last-child td
-  border-bottom: none
 .targets-actions
   display: flex
   gap: 6px
@@ -110,22 +88,3 @@
 
 .admin-table.targets-table
   margin-bottom: 16px
-  background: transparent
-  border: 0
-  border-radius: 0
-  overflow: visible
-
-.admin-table.targets-table th
-  padding: 8px 12px
-  background: transparent
-  font-size: 12px
-  font-weight: 600
-
-.admin-table.targets-table td
-  height: auto
-  padding: 9px 12px
-  vertical-align: middle
-  border-bottom: 1px solid var(--border)
-
-.admin-table.targets-table tbody tr:last-child td
-  border-bottom: 1px solid var(--border)

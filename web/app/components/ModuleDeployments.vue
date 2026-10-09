@@ -1493,7 +1493,7 @@ watch(() => props.module.id, load)
           </p>
 
           <div v-else class="table-scroll">
-            <table class="table deploy-admin-table">
+            <table class="admin-table deploy-admin-table">
             <thead>
               <tr>
                 <th>When</th>
@@ -1620,7 +1620,7 @@ watch(() => props.module.id, load)
                and the one question this tab exists to answer — which image is live, and
                which can be put back — is a glance down a single column. -->
           <div v-else class="table-scroll">
-            <table class="table images">
+            <table class="admin-table images">
               <thead>
                 <tr>
                   <th>Image</th>

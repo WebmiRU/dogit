@@ -125,7 +125,7 @@ function humanBytes(bytes: number): string {
         this instance and starts claiming jobs, from any machine that can reach it.
       </div>
 
-      <table v-else class="runners-table">
+      <table v-else class="admin-table runners-table">
         <thead>
           <tr>
             <th>Runner</th>

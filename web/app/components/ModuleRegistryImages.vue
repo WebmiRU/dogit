@@ -384,7 +384,7 @@ onBeforeUnmount(() => stopWatching?.())
             <span class="muted small mono">{{ size(project.size) }}</span>
           </div>
 
-          <table v-for="repo in project.repositories" :key="`${repo.registry}/${repo.repository}`" class="images">
+          <table v-for="repo in project.repositories" :key="`${repo.registry}/${repo.repository}`" class="admin-table images">
             <thead>
               <tr>
                 <th>Repository</th>

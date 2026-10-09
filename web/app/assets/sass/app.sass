@@ -1,12 +1,9 @@
 // Every page and component's styles live here as partials, and this file is the
 // only thing that has to know about all of them.
 //
-// The old hand-written stylesheet, kept while the last of the legacy rules are being
-// retired, comes first so that a rule below can rely on being later than it. It is a .scss
-// and not a .css because Sass inlines the former and merely points a CSS @import at the
-// latter: as two separate files their order was the browser's to decide, and in
-// development it decided the other way, so a component's own table padding lost to the
-// legacy .table td that was meant to sit underneath it.
+// The old hand-written stylesheet stays first while its non-table rules are retired.
+// It is a .scss and not a .css because Sass inlines the former and merely points a CSS
+// @import at the latter: as two separate files their order was the browser's to decide.
 @import '../css/main.scss'
 
 @import 'components/DeployLog'
@@ -42,7 +39,6 @@
 @import 'components/UserAvatar'
 @import 'pages/activity'
 @import 'pages/admin/index'
-@import 'pages/admin/tables'
 @import 'pages/admin/modules'
 @import 'pages/admin/modules/id'
 @import 'pages/admin/runners'
@@ -54,3 +50,6 @@
 @import 'pages/settings/ssh-keys'
 
 @import 'components/Tabs'
+
+// Table geometry is global: this must remain the final style import.
+@import 'pages/admin/tables'

@@ -1,10 +1,17 @@
-// Shared table presentation for admin list pages.
-// Start here when giving another admin table the same compact, quiet treatment.
+// Canonical table presentation for every data table in the interface.
+// Components may add column widths and content styling, never their own row rhythm.
 
 .admin-table
   width: 100%
   border-collapse: collapse
+  border: 0
+  border-radius: 0
+  border-spacing: 0
+  background: transparent
   font-size: 13px
+
+.admin-table thead
+  background: transparent
 
 .admin-table th
   text-align: left
@@ -13,10 +20,16 @@
   color: var(--text-muted)
   padding: 8px 12px
   border-bottom: 1px solid var(--border)
+  background: transparent
+  vertical-align: middle
 
 .admin-table td
   padding: 9px 12px
   border-bottom: 1px solid var(--border)
+  vertical-align: middle
 
 .admin-table tbody tr:hover td
   background: var(--bg-subtle, rgba(255, 255, 255, 0.03))
+
+.admin-table .numeric
+  text-align: right
