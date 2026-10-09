@@ -186,9 +186,20 @@ function reorder(answer: OperationsAnswer) {
       return operation
     }
     const progress = operation.progress
-    const active = Array.isArray(progress.active_phases)
-      ? progress.active_phases.some((phase) => typeof phase === 'string')
-      : typeof progress.phase === 'string' && progress.phase !== '' && progress.finished !== true
+    const activePhases = Array.isArray(progress.active_phases)
+      ? progress.active_phases.filter((phase) => typeof phase === 'string' && phase !== '')
+      : []
+    const history = Array.isArray(progress.phase_history)
+      ? progress.phase_history.filter((line): line is Record<string, unknown> =>
+        Boolean(line) && typeof line === 'object')
+      : []
+    // Older snapshots may have the phase history but no active_phases field. A phase's
+    // latest recorded line is authoritative: finished phases stay green; an unfinished one
+    // means the deployment is still doing work.
+    const historyHasActive = history.some((line) =>
+      typeof line.phase === 'string' && line.phase !== '' && line.finished !== true)
+    const active = activePhases.length > 0 || historyHasActive ||
+      (typeof progress.phase === 'string' && progress.phase !== '' && progress.finished !== true)
     if (!active) return operation
     return { ...operation, status: 'running', running: true, queued: false }
   }
@@ -428,7 +439,8 @@ function logLines(jobID: number): { phase: string; message: string; step: number
  * the only reason to have a list at all.
  */
 function openPhases(operation: DeployOperation): string[] {
-  if (!operation.running) return []
+  // A snapshot can carry an active phase even when the API's queued/running flags are stale.
+  // Use the same restored state as the badge and steps rather than suppressing its arrow.
   return knows(operation)?.phases ?? []
 }
 
