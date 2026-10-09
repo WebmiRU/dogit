@@ -132,6 +132,18 @@ docker compose exec app dogit key list --username alice
 docker compose exec postgres psql -U dogit -d dogit
 ```
 
+## Kubernetes / Helm
+
+The Helm chart installs the Dogit web/API/SSH services, persistent storage and an optional in-cluster PostgreSQL database. To deploy to a hostname with automatic Let's Encrypt TLS, use:
+
+```bash
+bash scripts/helm-install.sh --domain git.example.org --email admin@example.org --ingress-class nginx
+```
+
+Use `--ingress-class traefik` for Traefik. When TLS is requested, the installer reuses cert-manager if it is already installed, or installs it as a separate Helm release if it is absent; the certificate is then issued for the hostname supplied at installation. DNS must point to the Ingress and public ports 80/443 must be reachable.
+
+PostgreSQL is installed in the cluster by default. For an external PostgreSQL server, create a Kubernetes Secret containing the full DSN in key `url`, then pass `--database-secret SECRET_NAME`. The full chart options and backup guidance are in [charts/dogit/README.md](charts/dogit/README.md).
+
 ## Layout
 
 ```
