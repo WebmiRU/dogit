@@ -37,7 +37,7 @@ jobs:
         run: |
           helm template dogit charts/dogit --namespace dogit \
             --set modules.deployKubernetes.enabled=true \
-            --set modules.telegram.enabled=true \\
+            --set modules.telegram.enabled=true \
             --set modules.runner.enabled=true > /tmp/dogit-modules.yaml
           grep -q 'component: module-deploy-kubernetes' /tmp/dogit-modules.yaml
           grep -q 'component: module-notify-telegram' /tmp/dogit-modules.yaml
