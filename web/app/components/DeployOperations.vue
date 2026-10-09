@@ -402,7 +402,7 @@ function logLines(jobID: number): { phase: string; message: string; step: number
  */
 function openPhases(operation: DeployOperation): string[] {
   if (!operation.running) return []
-  return watched(operation.job_id)?.phases ?? []
+  return knows(operation)?.phases ?? []
 }
 
 /** When a line was said, to the second — enough to place it, short enough not to shout. */
@@ -549,7 +549,11 @@ const plans = ref<Record<string, { key: string; label: string }[]>>({})
 
 /** The steps for one operation, by what that operation is. A deployment unless it says otherwise. */
 function planOf(jobID: number): { key: string; label: string }[] {
-  const kind = watching.value[jobID]?.kind === 'revert' ? 'revert' : 'deploy'
+  const operation = operations.value.find((one) => one.job_id === jobID)
+  const savedKind = operation?.progress?.deployment as { kind?: unknown } | undefined
+  const kind = watching.value[jobID]?.kind === 'revert' || savedKind?.kind === 'revert'
+    ? 'revert'
+    : 'deploy'
   return plans.value[kind] ?? []
 }
 
@@ -619,18 +623,6 @@ function lateProgress(operation: DeployOperation): Watching | null {
     ? said.active_phases.filter((phase): phase is string => typeof phase === 'string')
     : (progress.phase && !progress.finished ? [progress.phase] : [])
   const saidAbout = said.deployment as { kind?: unknown } | undefined
-  if (typeof saidAbout?.kind === 'string' && saidAbout.kind) {
-    watching.value = {
-      ...watching.value,
-      [operation.job_id]: {
-        kind: saidAbout.kind,
-        progress,
-        seen,
-        phases: active,
-        since: 0,
-      },
-    }
-  }
   return {
     ...(typeof saidAbout?.kind === 'string' && saidAbout.kind ? { kind: saidAbout.kind } : {}),
     progress,
