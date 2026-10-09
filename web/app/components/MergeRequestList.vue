@@ -41,12 +41,7 @@ const historyOptions = [
   { value: '30d', label: 'Last 30 days' },
   { value: '1y', label: 'Last year' },
 ]
-const visibleRequests = computed(() => {
-  if (since.value === 'all') return requests.value
-  const span = since.value === '7d' ? 7 : since.value === '30d' ? 30 : 365
-  const cutoff = Date.now() - span * 24 * 60 * 60 * 1000
-  return requests.value.filter(mr => new Date(mr.updated_at).getTime() >= cutoff)
-})
+const visibleRequests = computed(() => requests.value)
 
 async function load() {
   loading.value = true
@@ -61,6 +56,7 @@ async function load() {
       query: query.value.trim(),
       sort: sort.value,
       direction: direction.value,
+      since: since.value,
       limit: pageSize.value,
       offset: offset.value,
     })
@@ -109,7 +105,7 @@ function copyListLink() {
   }
 }
 onMounted(load)
-watch([state, sort, direction, pageSize, offset], load)
+watch([state, sort, direction, since, pageSize, offset], load)
 watch(query, () => {
   offset.value = 0
   if (searchTimer) clearTimeout(searchTimer)
