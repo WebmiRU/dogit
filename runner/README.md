@@ -85,6 +85,26 @@ A setting the runner does not recognise is reported as `settings not applied` ra
 ignored. A setting that is silently ignored looks identical to one that works until the day
 it matters, and that day is the day somebody needed it.
 
+## RootlessKit and AppArmor
+
+If `buildkitd` exits immediately with:
+
+```text
+[rootlesskit:child] error: failed to share mount point: /: permission denied
+```
+
+check the AppArmor profile applied by the container runtime. This message is a known symptom of AppArmor blocking RootlessKit's mount operation; the absence of an AppArmor annotation does **not** mean the container is unconfined. Kubernetes 1.30+ supports the explicit per-container setting:
+
+```yaml
+securityContext:
+  seccompProfile:
+    type: Unconfined
+  appArmorProfile:
+    type: Unconfined
+```
+
+Apply it to `buildkitd` only. Do not add `privileged: true` or `SYS_ADMIN` as a substitute: those change the container's authority and are not needed to fix this specific AppArmor denial. Where policy does not allow an unconfined AppArmor profile, provide a reviewed Localhost profile that grants RootlessKit the required mount operations instead.
+
 ## The process sandbox could not be recovered here
 
 `--oci-worker-no-process-sandbox` is in the manifest because it is what makes an
