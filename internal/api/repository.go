@@ -520,7 +520,7 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	}
 	// Source commits that are not already in the target drive the creation preview.
 	// Both branch names have been resolved to commit IDs above, so the range is safe.
-	commits, err := s.git.Log(r.Context(), rc.RepoDir, fromSHA+".."+toSHA, 100, 0)
+	commits, err := s.git.Log(r.Context(), rc.RepoDir, fromSHA+".."+toSHA, 250, 0)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
