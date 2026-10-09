@@ -1920,3 +1920,6 @@ select:focus-visible {
  .project-index .table { min-width:900px; }
  .project-index .table th:first-child { min-width:220px; }
 }
+
+.places-row-menu[open] { position:relative; z-index:80; }
+.places-row-menu-popover { position:absolute; top:calc(100% + 4px); right:0; z-index:90; }

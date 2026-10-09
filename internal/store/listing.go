@@ -135,7 +135,17 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 			       p.group_id, NULL::int AS project_count, p.created_at,
 			       (SELECT c.timestamp FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1) AS last_commit_at,
 			       COALESCE((SELECT left(c.message, 120) FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1), '') AS last_commit_message,
-			       COALESCE((SELECT pl.status FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1), '') AS latest_pipeline_status,
+			       COALESCE((
+			       SELECT CASE
+			         WHEN pl.status = 'canceled' THEN 'canceled'
+			         WHEN EXISTS (SELECT 1 FROM jobs j WHERE j.pipeline_id = pl.id AND j.status = 'failed' AND NOT j.allow_failure) THEN 'failed'
+			         WHEN EXISTS (SELECT 1 FROM jobs j WHERE j.pipeline_id = pl.id AND j.status = 'interrupted') THEN 'interrupted'
+			         WHEN EXISTS (SELECT 1 FROM jobs j WHERE j.pipeline_id = pl.id AND j.status = 'running') THEN 'running'
+			         WHEN EXISTS (SELECT 1 FROM jobs j WHERE j.pipeline_id = pl.id AND j.status = 'pending') THEN 'pending'
+			         ELSE pl.status
+			       END
+			       FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1
+		       ), '') AS latest_pipeline_status,
 			       (SELECT pl.created_at FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1) AS latest_pipeline_at,
 			       (SELECT count(*)::int FROM merge_requests mr WHERE mr.project_id = p.id AND mr.state = 'opened') AS open_merge_requests,
 			       (SELECT count(*)::int FROM issues i WHERE i.project_id = p.id AND i.state = 'opened') AS open_issues

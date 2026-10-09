@@ -21,8 +21,6 @@ const props = withDefaults(
   defineProps<{
     /** Which kinds to show. Empty means both. */
     type?: '' | 'project' | 'group'
-    /** A page heading of its own. */
-    title?: string
     filterVisibility?: boolean
   }>(),
   { type: '', filterVisibility: true },
@@ -155,7 +153,7 @@ const visibilities = [
           <circle cx="10.8" cy="10.8" r="6.3" />
           <path d="m15.5 15.5 4.2 4.2" />
         </svg>
-        <input v-model="typing" class="search" type="search" :placeholder="type === 'group' ? 'Search groups' : 'Filter or search projects'" :aria-label="type === 'group' ? 'Search groups' : 'Search projects'">
+        <input v-model="typing" class="search" type="search" :placeholder="props.type === 'group' ? 'Search groups' : 'Filter or search projects'" :aria-label="props.type === 'group' ? 'Search groups' : 'Search projects'">
       </div>
 
       <label class="places-sort">
@@ -186,10 +184,10 @@ const visibilities = [
 
     <div v-else-if="places.length === 0" class="card empty">
       <template v-if="filters.search">
-        No {{ type === 'group' ? 'groups' : 'projects' }} match “{{ filters.search }}”.
+        No {{ props.type === 'group' ? 'groups' : 'projects' }} match “{{ filters.search }}”.
       </template>
       <template v-else>
-        No {{ type === 'group' ? 'groups' : 'projects' }} yet.
+        No {{ props.type === 'group' ? 'groups' : 'projects' }} yet.
       </template>
     </div>
 
@@ -197,7 +195,7 @@ const visibilities = [
       <table class="table">
         <thead>
           <tr>
-            <th>{{ type === 'group' ? 'Group' : 'Project' }}</th>
+            <th>{{ props.type === 'group' ? 'Group' : 'Project' }}</th>
             <th>Tags</th>
             <th>Pipeline</th>
             <th>Activity</th>
