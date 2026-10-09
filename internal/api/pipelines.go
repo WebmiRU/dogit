@@ -1103,40 +1103,27 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 			payload["deployment"] = record
 		}
 
-		// What this job's lines have said so far, and the same account a module's own lines
-		// carry: which phases are open, and the last line of each. A page reloaded during an
-		// image build reads the snapshot this writes, and a snapshot carrying a phase and
-		// nothing else is a page with an arrow it cannot account for.
-		memory := s.phasesOf(job.ID)
+		// Written down as well as published, and for a different reader: the event reaches
+		// pages that are open, and the note reaches the ones that arrive later.
+		s.rememberDeployProgress(r.Context(), operation, payload)
 
-		// The phase this one ends, and the closing said before the new line, so a page cannot
-		// have heard of the new phase and not the end of the one it replaced.
+		// The phase this one ends, said before the one that ends it.
 		//
-		// It goes through the same memory as everything else, which is the part that matters
-		// after a refresh: published on its own it changes what an open page sees and leaves
-		// the snapshot untouched, so the next reload restored the old phase as still open, with
-		// an arrow on a step whose work had finished.
-		var closing map[string]any
+		// Published and not written down: it is a fact about the moment the phase changed, and
+		// a note read an hour later must say what the job was doing at the end rather than
+		// which stage it was leaving behind. Kept before the new line so a page cannot have
+		// heard of the new phase and not the closing of the one it replaced.
 		if closed := s.phaseBefore(job.ID, phase); closed != "" && record != nil {
-			closing = map[string]any{
+			closing := map[string]any{
 				"job_id":     operation,
 				"phase":      closed,
 				"message":    "finished",
 				"finished":   true,
 				"deployment": record,
 			}
-			memory.note(closing, closed, true)
-		}
-
-		// The new phase last, so the snapshot it leaves behind is the one that says the old
-		// phase is closed. Written down as well as published, and for a different reader: the
-		// event reaches pages that are open, and the note reaches the ones that arrive later.
-		memory.note(payload, phase, false)
-		s.rememberDeployProgress(r.Context(), operation, payload)
-
-		if closing != nil {
 			s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, closing)
 		}
+
 		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, payload)
 	}
 
