@@ -1,0 +1,26 @@
+# Build output
+/bin/
+/dist/
+
+# Local configuration and state
+/deploy/.env
+.env
+/data/
+*.log
+
+# Frontend (Nuxt) build output and dependencies
+/web/node_modules/
+/web/.nuxt/
+/web/.output/
+/web/dist/
+/web/.env
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
+# Binaries built by "go build" at the repository root
+/module-runner
+/module-registry
+/module-deploy-kubernetes
