@@ -261,6 +261,7 @@ const tabs = computed(() => {
     // Images live outside the repository: a branch has nothing to do with an image,
     // and a tag that was never built has no page to show. So this one carries no ref.
     { label: 'Pipelines', to: `${base}/-/pipelines`, match: 'pipelines' },
+    { label: 'pipeline2', to: `${base}/-/pipeline2`, match: 'pipeline2' },
     { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
     // Deployments sit outside the repository for the same reason images do: a commit
     // is not what runs, and a branch has nothing to say about which cluster it went
@@ -451,6 +452,7 @@ async function copyCloneUrl() {
         />
         <!-- A run has its own page: watching the log is what people come for, and
              a list that also did that would do neither thing well. -->
+        <Pipeline2Preview v-else-if="view.name === 'pipeline2'" />
         <ProjectPipelineRun
           v-else-if="view.name === 'pipelines' && view.rest[0]"
           :project-id="projectId"
