@@ -264,7 +264,7 @@ function labelOf(reg: DockerRegistry): string {
 .table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--bg-card, #161b22);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -286,8 +286,12 @@ function labelOf(reg: DockerRegistry): string {
   border-bottom: 1px solid var(--border);
 }
 
-.table tbody tr:last-child td {
+ .table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.table tbody tr:hover td {
+  background: rgba(185, 185, 193, 0.045);
 }
 
 .table .name {
@@ -340,7 +344,7 @@ function labelOf(reg: DockerRegistry): string {
 
 .source-module {
   background: var(--accent-soft);
-  border-color: rgba(76, 141, 255, 0.35);
+  border-color: rgba(185, 185, 193, 0.3);
   color: var(--text);
 }
 
