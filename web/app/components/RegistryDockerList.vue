@@ -183,7 +183,7 @@ function labelOf(reg: DockerRegistry): string {
         for a public one.
       </div>
 
-      <table v-else class="images-table">
+      <table v-else class="admin-table images-table">
         <thead>
           <tr>
             <th>Registry</th>
