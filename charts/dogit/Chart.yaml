@@ -1,0 +1,14 @@
+apiVersion: v2
+name: dogit
+description: Self-hosted Git forge with web UI, SSH Git access, PostgreSQL and optional ACME TLS.
+type: application
+version: 0.1.0
+appVersion: "dev"
+home: https://github.com/WebmiRU/dogit
+sources:
+  - https://github.com/WebmiRU/dogit
+keywords:
+  - git
+  - forge
+  - ci
+  - gitops
