@@ -1,24 +1,26 @@
-# Nuxt dev/build outputs
-.output
-.data
-.nuxt
-.nitro
-.cache
-dist
+# Build output
+/bin/
+/dist/
 
-# Node dependencies
-node_modules
-
-# Logs
-logs
+# Local configuration and state
+/deploy/.env
+.env
+/data/
 *.log
 
-# Misc
-.DS_Store
-.fleet
-.idea
+# Frontend (Nuxt) build output and dependencies
+/web/node_modules/
+/web/.nuxt/
+/web/.output/
+/web/dist/
+/web/.env
 
-# Local env files
-.env
-.env.*
-!.env.example
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
+# Binaries built by "go build" at the repository root
+/module-runner
+/module-registry
+/module-deploy-kubernetes

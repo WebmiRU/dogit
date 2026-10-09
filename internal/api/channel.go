@@ -1,0 +1,494 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/google/uuid"
+
+	"github.com/ewolf/dogit/internal/models"
+	"github.com/ewolf/dogit/internal/modulechan"
+)
+
+// The channel a module keeps open to the core.
+//
+// One connection per module process, opened by the module, because an outgoing connection passes
+// NAT and a module behind a firewall cannot be reached the other way round. It carries commands
+// down and answers up, and it is the only channel commands travel on: two channels would mean two
+// places where the truth about what a module was told could differ.
+//
+// # A connection is not an identity
+//
+// The token arrives in every message and is checked in every message, so nothing about "which
+// module is this" is decided once at connect and kept. That is not a simplification — it is the
+// property that makes the channel recoverable. A connection can die at any moment and a new one
+// is complete, with nothing to resume and nothing that has to be restored. It also means the
+// date on a token is enforced on a channel that has been open for hours, which is exactly where
+// a connect-time check would have gone stale and let a module keep working on a credential that
+// ended.
+//
+// # More than one connection per module is allowed
+//
+// A token is a set of clients, not a single caller. A command goes to all of them and the core
+// does not choose which one acts and does not promise that exactly one will. That is the price of
+// not having an opinion about what a module is, and it is deliberate: a module may run a second
+// process that only gathers statistics, and whether that process acts on a deploy command is a
+// question for the author of the module rather than for the core.
+//
+// Two answers to the same command from one module's connections is therefore possible and is not
+// an error the core tries to resolve.
+
+// channelClient is one open connection.
+type channelClient struct {
+	moduleID uuid.UUID
+	name     string
+	// token is the plaintext credential this connection presented at upgrade. The store
+	// deliberately keeps only its hash, but the wire protocol requires every outbound
+	// message to carry the same token so the module can authenticate each frame.
+	token string
+
+	mu       sync.Mutex
+	conn     *websocket.Conn
+	openedAt time.Time
+	// gone is set once, so a write that fails does not each of them log their own opinion.
+	gone bool
+}
+
+func (c *channelClient) send(ctx context.Context, message modulechan.Message) error {
+	// Callers create facts and decisions without a credential. Add the connection's token
+	// at the last possible moment so cached commands remain token-free and each connection
+	// sends its own authenticated envelope.
+	message.Token = c.token
+	frame, err := message.Envelope()
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gone || c.conn == nil {
+		return modulechan.ErrNotConnected
+	}
+
+	if err := c.conn.Write(ctx, websocket.MessageText, frame); err != nil {
+		c.gone = true
+		return fmt.Errorf("send a %q message: %w", message.Kind, err)
+	}
+	return nil
+}
+
+func (c *channelClient) close(status websocket.StatusCode, reason string) {
+	c.mu.Lock()
+	c.gone = true
+	conn := c.conn
+	c.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close(status, reason)
+	}
+}
+
+// ModuleChannel is the core's half of the channel: who is connected, and how a message reaches
+// them.
+type ModuleChannel struct {
+	s *Server
+
+	mu      sync.Mutex
+	clients map[uuid.UUID]map[*channelClient]struct{}
+
+	// pending is the commands waiting to be delivered again, by module. Not by connection:
+	// a module that reconnects has a new connection and wants what it missed, and a command
+	// addressed to a socket that no longer exists is a command with nowhere to go.
+	pending map[uuid.UUID][]pendingCommand
+
+	// answers holds the callers waiting for an answer, by the id of the command they asked
+	// about. Its own lock rather than the channel's, because the module's read loop answers
+	// through it and that loop must not be held up behind a send walking the connection list.
+	answersMu sync.Mutex
+	answers   map[string]*answerWait
+}
+
+// moduleChannel returns the core's channel.
+//
+// One per server, held on it, because the clients are the point: a second channel would be a
+// second set of them, and a message sent down one of them would arrive at a module that another
+// set had already written off as gone.
+func (s *Server) moduleChannel() *ModuleChannel {
+	s.channelOnce.Do(func() {
+		s.channel = &ModuleChannel{
+			s:       s,
+			clients: map[uuid.UUID]map[*channelClient]struct{}{},
+			pending: map[uuid.UUID][]pendingCommand{},
+		}
+	})
+	return s.channel
+}
+
+// Connected is how many connections a module has open right now.
+//
+// Not a decision and not a lock: it is what the interface shows so that an operator looking at a
+// module which is not answering can tell the two apart — a module that is not connected and a
+// module that is connected and has nothing to say are different problems, and they look the same
+// from the outside.
+func (ch *ModuleChannel) Connected(moduleID uuid.UUID) int {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	return len(ch.clients[moduleID])
+}
+
+// Announce sends a fact to every connection of one module, and says how many took it.
+//
+// Not kept for redelivery, because a fact cannot be stale: a module that acts on one from four
+// minutes ago asks for the work and is told the queue is empty, which is the answer it would
+// have got anyway. See channel_cache.go for why a decision is a different call and not a flag on
+// this one.
+func (ch *ModuleChannel) Announce(ctx context.Context, moduleID uuid.UUID, fact Fact) (int, error) {
+	body, err := json.Marshal(fact.Payload)
+	if err != nil {
+		return 0, fmt.Errorf("encode a %q message: %w", fact.Kind, err)
+	}
+	return ch.send(ctx, moduleID, modulechan.Message{Kind: fact.Kind, Payload: body})
+}
+
+// send writes one message to every connection a module has, and says how many took it.
+//
+// Zero delivered is not a failure here: it is the case the command cache exists for, and the
+// caller decides what an undelivered command means. A message that could not be written to one
+// connection but reached another is logged and not returned — refusing the whole send because one
+// of several connections had gone would mean a module's second process going quietly silent
+// stops its first from being commanded.
+func (ch *ModuleChannel) send(ctx context.Context, moduleID uuid.UUID,
+	message modulechan.Message) (int, error) {
+
+	ch.mu.Lock()
+	targets := make([]*channelClient, 0, len(ch.clients[moduleID]))
+	for client := range ch.clients[moduleID] {
+		targets = append(targets, client)
+	}
+	ch.mu.Unlock()
+
+	delivered := 0
+	for _, client := range targets {
+		if err := client.send(ctx, message); err != nil {
+			ch.s.log.Warn("a module's channel would not take a message",
+				"module", client.name, "kind", message.Kind, "error", err)
+			continue
+		}
+		delivered++
+	}
+	return delivered, nil
+}
+
+// announceWork tells the runners that there is something to take.
+//
+// A fact, not a command, and that is what makes it free of the machinery the other messages
+// need: nothing is cached for it and nothing waits on it, because it cannot be stale. A runner
+// that hears this in four minutes calls claim and either takes the job or is told the queue is
+// empty, which is the answer it would have got by polling anyway.
+//
+// Which means a missed announcement costs a runner its usual polling interval and nothing else.
+// That is why this is a plain call after the commit rather than something hooked into the store
+// transaction: a failure to announce is a failure to be quick, and it must not be able to fail a
+// pipeline that has already been created.
+func (s *Server) announceWork(ctx context.Context) {
+	installed, err := s.store.Integrations().List(ctx)
+	if err != nil {
+		s.log.Warn("could not tell the runners that there is work", "error", err)
+		return
+	}
+
+	waiting := s.pendingJobCount(ctx)
+	for _, module := range installed {
+		if !module.Enabled || !strings.HasPrefix(module.Kind, "runner:") {
+			continue
+		}
+		delivered, err := s.moduleChannel().Announce(ctx, module.ID, Fact{
+			Kind:    modulechan.WorkAvailable,
+			Payload: map[string]any{"waiting": waiting},
+		})
+		if err != nil {
+			s.log.Warn("could not send work to a runner", "module", module.Name, "error", err)
+			continue
+		}
+		s.log.Debug("work announced", "module", module.Name, "waiting", waiting,
+			"connections", delivered)
+	}
+}
+
+// handleModuleChannel is the upgrade, and then nothing but a read loop.
+//
+// Every message is authenticated on its own. The upgrade carries a bearer header so that the
+// handshake itself is a real request rather than an anonymous one that becomes trusted a moment
+// later — and then the token in each message is checked anyway, because a connection is not an
+// identity and a header said once at the start of a connection that may live for days is not
+// enough.
+func (s *Server) handleModuleChannel(w http.ResponseWriter, r *http.Request) {
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		// Modules are services, not browsers: they do not send an Origin, and there is no
+		// cookie for this route to be refused by.
+		InsecureSkipVerify: true,
+		CompressionMode:    websocket.CompressionDisabled,
+	})
+	if err != nil {
+		s.log.Debug("a module channel was refused at the upgrade", "error", err)
+		return
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	// Detached from the request on purpose. A request context ends when the handler
+	// returns, and this handler does not return until the module goes away — which would
+	// close the connection the instant it opened.
+	ctx := context.WithoutCancel(r.Context())
+	ch := s.moduleChannel()
+
+	// Attached here rather than on the first message, and that is not a weakening of the rule
+	// below: the token in this header is checked in every message as well, and the connection
+	// attached here is replaced by nothing — a message naming another module still ends it.
+	//
+	// It has to be attached here because a module that only ever listens would otherwise never
+	// be attached at all. A runner is told about work and never says anything: it claims over
+	// HTTP, as it always did. So the core would hold no connection for it, find nobody to tell,
+	// and drop the announcement — which is the one thing the channel was opened for. Waiting for
+	// the module to speak first makes the module's silence the price of being reachable.
+	module, err := s.moduleFromToken(ctx, bearerOf(r))
+	if err != nil {
+		// Refused the same way a bad token in a message is refused, with the reason sent
+		// before the close rather than only inside it. A module cut off with no word
+		// reconnects, is refused again, and never learns anything — and its author has no way
+		// to tell that from a network fault.
+		s.log.Debug("a module channel was refused at the upgrade",
+			"reason", moduleRefusal(err).Reason)
+		s.refuseAndClose(ctx, conn, "", bearerOf(r), moduleRefusal(err))
+		return
+	}
+	client := ch.attach(ctx, conn, module, bearerOf(r))
+	s.log.Info("a module opened its channel", "module", client.name,
+		"kind", module.Kind, "endpoint", module.Endpoint)
+	defer ch.detach(client)
+
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			if !isQuietClose(err) {
+				s.log.Info("a module channel closed", "module", client.name,
+					"for", time.Since(client.since()).Round(time.Second), "error", err)
+			}
+			return
+		}
+
+		message, err := modulechan.Decode(data)
+		if err != nil {
+			s.refuseAndClose(ctx, conn, "", client.token, modulechan.Refusal{Reason: err.Error()})
+			return
+		}
+
+		// Checked on every message, including the first, so that a long-lived connection
+		// cannot outlive the token it was opened with.
+		module, err := s.moduleFromToken(ctx, message.Token)
+		if err != nil {
+			// The reason is sent before the connection goes. A module that is cut off
+			// with no word reconnects, is refused again, and never learns anything — and the
+			// author of the module has no way to tell that from a network fault.
+			s.refuseAndClose(ctx, conn, message.ID, message.Token, moduleRefusal(err))
+			return
+		}
+		// A connection that changes which module it is mid-stream is refused rather than
+		// reassigned. It means one token was presented as two, and the answer to that is
+		// neither of the modules involved.
+		if client.moduleID != module.ID {
+			s.refuseAndClose(ctx, conn, message.ID, message.Token, modulechan.Refusal{
+				Reason: "this connection presented one token and then another"})
+			return
+		}
+
+		s.deliverToModule(ctx, client, message)
+	}
+}
+
+// deliverToModule handles a message a connected module sent.
+//
+// Empty for now, and honest about being so: the first thing to travel down this channel is a
+// notification, and the first thing to travel up is an answer to a message the core sent. Until
+// something is asked of a module there is nothing to do with what it says, and inventing a reply
+// to keep the loop busy would be a protocol with a message in it that means nothing.
+func (s *Server) deliverToModule(ctx context.Context, client *channelClient, message modulechan.Message) {
+	// Answered only when the sender asked by putting an id on it.
+	//
+	// A message without one is a notification — "there is work", "I am still here" — and a
+	// notification that is answered turns a channel into a request-reply loop that both ends
+	// have to implement for no gain. The id is the request for an answer, and its absence is
+	// the request not to make one.
+	//
+	// Unknown kinds are somebody else's business on a version of the core that has heard of
+	// more than this one, so they are accepted rather than refused. What must not happen is
+	// silence: a module that sent something with an id and got nothing back cannot tell a core
+	// that ignored it from a core that is broken, and it will wait.
+	if message.ID == "" {
+		return
+	}
+
+	// An answer to something this core asked, rather than a module asking for one. Handed to
+	// the caller waiting on that id and to nobody else: an answer with no caller is a module
+	// answering a command whose caller gave up, which happens every time a page is closed
+	// mid-deploy, and is not worth a line.
+	if message.Kind == modulechan.Answer {
+		if ch := s.moduleChannel(); ch.answerTo(message.ID, message.Payload) {
+			return
+		}
+		s.log.Debug("an answer arrived for a command nobody was waiting on",
+			"module", client.name, "command", message.ID)
+		return
+	}
+
+	if err := client.send(ctx, modulechan.Message{
+		ID:      message.ID,
+		Kind:    modulechan.Answer,
+		Payload: mustMarshal(map[string]any{"accepted": true}),
+	}); err != nil {
+		s.log.Warn("a module's channel would not take an answer",
+			"module", client.name, "kind", message.Kind, "error", err)
+	}
+}
+
+// refusalEndedOn is the detail an expired token's refusal carries, and the field of the same name
+// on the wire.
+const refusalEndedOn = "ended_on"
+
+// moduleRefusal turns a refusal into something a module can be told.
+//
+// Both halves of an apiError are used: the sentence is the reason, and the detail is the date a
+// sentence cannot be parsed for. Anything that is not an apiError has no reason the core wrote
+// down, so its own text is used — better a clumsy sentence than a refusal that names nothing.
+func moduleRefusal(err error) modulechan.Refusal {
+	var known *apiError
+	if !errors.As(err, &known) {
+		return modulechan.Refusal{Reason: err.Error()}
+	}
+
+	refusal := modulechan.Refusal{Reason: known.message}
+	if refusal.Reason == "" {
+		refusal.Reason = modulechan.ReasonUnknownToken
+	}
+	refusal.EndedOn = known.details[refusalEndedOn]
+	return refusal
+}
+
+// refuseAndClose says why, then ends the connection.
+//
+// Saying it is best-effort: a connection that has already gone cannot be told anything, and that
+// is not a second failure worth logging on top of the first. The reason is sent before the close
+// rather than in the close frame's text because a close reason is limited to a hundred and twenty
+// three bytes and these sentences are longer than that.
+func (s *Server) refuseAndClose(ctx context.Context, conn *websocket.Conn,
+	id, token string, refusal modulechan.Refusal) {
+
+	payload, err := json.Marshal(refusal)
+	if err != nil {
+		payload = []byte(`{"reason":"the core could not say why"}`)
+	}
+	frame, err := modulechan.Message{ID: id, Kind: modulechan.Refused, Token: token, Payload: payload}.Envelope()
+	if err == nil {
+		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = conn.Write(writeCtx, websocket.MessageText, frame)
+		cancel()
+	}
+	_ = conn.Close(websocket.StatusPolicyViolation, refusal.Reason)
+}
+
+// attach registers a connection under its module and returns the client that stands for it.
+func (ch *ModuleChannel) attach(ctx context.Context, conn *websocket.Conn,
+	module *models.Integration, token string) *channelClient {
+
+	client := &channelClient{
+		moduleID: module.ID,
+		name:     module.Kind + "/" + module.Name,
+		token:    token,
+		conn:     conn,
+		openedAt: time.Now(),
+	}
+
+	ch.mu.Lock()
+	if ch.clients[module.ID] == nil {
+		ch.clients[module.ID] = map[*channelClient]struct{}{}
+	}
+	ch.clients[module.ID][client] = struct{}{}
+	ch.mu.Unlock()
+
+	// What this module was told and has not been given yet, now that somebody is there to
+	// take it. Read outside the lock, since it takes the same one.
+	ch.redeliver(ctx, client)
+	return client
+}
+
+// redeliver gives a module back the commands it was sent while it was not there.
+//
+// In the order they were made, because a deploy module that is handed two commands at once has
+// to be able to see that one came before the other. Failures are logged and the rest are sent:
+// one command the module cannot take is not a reason to withhold the ones after it.
+func (ch *ModuleChannel) redeliver(ctx context.Context, client *channelClient) {
+	waiting := ch.takePending(client.moduleID)
+	for _, command := range waiting {
+		if err := client.send(ctx, command.message); err != nil {
+			ch.s.log.Warn("a module's channel would not take a command it had already been sent",
+				"module", client.name, "kind", command.message.Kind,
+				"command", command.message.ID, "error", err)
+		}
+	}
+	if len(waiting) > 0 {
+		ch.s.log.Info("a module was given the commands it had missed", "module", client.name,
+			"commands", len(waiting))
+	}
+}
+
+func (ch *ModuleChannel) detach(client *channelClient) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	open, ok := ch.clients[client.moduleID]
+	if !ok {
+		return
+	}
+	delete(open, client)
+	if len(open) == 0 {
+		delete(ch.clients, client.moduleID)
+	}
+}
+
+func (c *channelClient) since() time.Time { return c.openedAt }
+
+// isQuietClose says whether an error is a close that was meant.
+//
+// A socket closed with 1000 or 1001 is one end deciding, and a decision with no reason given is
+// the hardest kind of fault to argue with later. Anything else is worth a line.
+func isQuietClose(err error) bool {
+	status := websocket.CloseStatus(err)
+	return status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway
+}
+
+func mustMarshal(value any) json.RawMessage {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return json.RawMessage(`null`)
+	}
+	return encoded
+}
+
+// bearerOf is the token in the upgrade's authorization header.
+//
+// Read from the header rather than from anything the connection remembers, because that is the
+// whole point: nothing about "which module is this" may be decided once and kept. This read only
+// decides who to attach the connection to so that messages can be sent down it — every message is
+// checked again, and a message naming a different module ends the connection anyway.
+func bearerOf(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(header) > len(prefix) && strings.EqualFold(header[:len(prefix)], prefix) {
+		return header[len(prefix):]
+	}
+	return ""
+}
