@@ -1107,6 +1107,23 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 		// pages that are open, and the note reaches the ones that arrive later.
 		s.rememberDeployProgress(r.Context(), operation, payload)
 
+		// The phase this one ends, said before the one that ends it.
+		//
+		// Published and not written down: it is a fact about the moment the phase changed, and
+		// a note read an hour later must say what the job was doing at the end rather than
+		// which stage it was leaving behind. Kept before the new line so a page cannot have
+		// heard of the new phase and not the closing of the one it replaced.
+		if closed := s.phaseBefore(job.ID, phase); closed != "" && record != nil {
+			closing := map[string]any{
+				"job_id":     operation,
+				"phase":      closed,
+				"message":    "finished",
+				"finished":   true,
+				"deployment": record,
+			}
+			s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, closing)
+		}
+
 		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, payload)
 	}
 
@@ -1225,6 +1242,11 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	// running, is worse than no notification at all.
 	job.Status = status
 	job.DurationMS = duration.Milliseconds()
+
+	// What this job was in the middle of goes with it too. A map keyed by job id that is
+	// never emptied is a map of everything this instance has ever run, and the only reason
+	// it exists is to answer a question about a job that is still going.
+	s.forgetPhases(jobID)
 
 	// The key goes with the job. A credential that outlived the build it was made
 	// for would be a credential nobody is watching.

@@ -48,6 +48,52 @@ type Server struct {
 	// is most of them — does not have to know about a thing it never opens.
 	channel     *ModuleChannel
 	channelOnce sync.Once
+
+	// lastPhase is the phase each job last reported itself to be in, so that a new phase can
+	// close the one before it.
+	//
+	// The rule is not invented here. A job's phases are its own stages and it moves through
+	// them in order, so one beginning is the end of the one before — which is what the deploy
+	// module already applies to its own phases. What was missing was that this endpoint never
+	// said so: it had no `finished` at all, so a page keeping track of what is happening now
+	// kept every phase a job ever named open. Seen as arrows on "Build the image" and "Push the
+	// image" on a card whose third step was already finished and fourth already running.
+	//
+	// A map rather than nothing because a page decides what is current from the lines it has
+	// been sent, and without a closing line there is no line to decide from. Keyed by the job
+	// that reported, since a pipeline runs several at once and their phases are unrelated.
+	lastPhaseMu sync.Mutex
+	lastPhase   map[int64]string
+}
+
+// phaseBefore says which phase a new one ends, and forgets it afterwards.
+//
+// Only for phases a job reports about itself, which move forward and do not overlap: a
+// deployment is the exception and is not routed through here, because a rollout and the retiring
+// that goes with it really do happen at once.
+func (s *Server) phaseBefore(jobID int64, phase string) string {
+	if phase == "" {
+		return ""
+	}
+	s.lastPhaseMu.Lock()
+	defer s.lastPhaseMu.Unlock()
+	if s.lastPhase == nil {
+		s.lastPhase = map[int64]string{}
+	}
+	previous := s.lastPhase[jobID]
+	s.lastPhase[jobID] = phase
+	if previous == "" || previous == phase {
+		return ""
+	}
+	return previous
+}
+
+// forgetPhases drops what a finished job was doing, so a job id that is never reused and a
+// server that is long-lived do not grow a map of everything that has ever run.
+func (s *Server) forgetPhases(jobID int64) {
+	s.lastPhaseMu.Lock()
+	defer s.lastPhaseMu.Unlock()
+	delete(s.lastPhase, jobID)
 }
 
 // New creates the API server.
