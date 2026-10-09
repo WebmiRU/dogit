@@ -1,0 +1,32 @@
+// All navigation tabs meet the baseline squarely. A rounded button border
+// makes the active underline curve upward at both ends — the "smile" that
+// should not be present in a tab strip. Keep each tab's existing spacing,
+// colors, and active state; normalize only the geometry.
+
+.tabs,
+.repo-tabs,
+.project-index-tabs,
+.auth-tabs,
+.mr-list-tabs,
+.pmr-list-tabs,
+.mr-preview-tabs,
+.p2-content-tabs,
+.mr-state-tabs
+  border-radius: 0
+
+.tabs > button,
+.mod-tab,
+.deploy-tab,
+.group-tab,
+.repo-tabs > a,
+.repo-tabs > button,
+.project-index-tabs > a,
+.auth-tabs > button,
+.mr-list-tabs > button,
+.mr-list-tabs > a,
+.pmr-list-tabs > button,
+.pmr-list-tabs > a,
+.mr-preview-tabs > button,
+.p2-content-tabs > button,
+.mr-state-tab
+  border-radius: 0 !important
