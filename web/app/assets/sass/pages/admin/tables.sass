@@ -1,0 +1,22 @@
+// Shared table presentation for admin list pages.
+// Start here when giving another admin table the same compact, quiet treatment.
+
+.admin-table
+  width: 100%
+  border-collapse: collapse
+  font-size: 13px
+
+.admin-table th
+  text-align: left
+  font-weight: 600
+  font-size: 12px
+  color: var(--text-muted)
+  padding: 8px 12px
+  border-bottom: 1px solid var(--border)
+
+.admin-table td
+  padding: 9px 12px
+  border-bottom: 1px solid var(--border)
+
+.admin-table tbody tr:hover td
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.03))

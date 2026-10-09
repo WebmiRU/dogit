@@ -94,7 +94,7 @@ const admins = computed(() => users.value.filter((one) => one.is_admin).length)
 
       <div v-else-if="users.length === 0" class="card empty">Nobody matches that.</div>
 
-      <table v-else class="users-table">
+      <table v-else class="admin-table users-table">
         <thead>
           <tr>
             <th>User</th>

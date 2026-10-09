@@ -88,8 +88,7 @@ const statusClass: Record<string, string> = {
       <code class="mono">curl -X POST /api/v1/modules/register</code> with it.
     </div>
 
-    <div v-else class="card">
-      <table class="modules-table">
+    <table v-else class="admin-table modules-table">
         <thead>
           <tr>
             <th>Module</th>
@@ -144,8 +143,7 @@ const statusClass: Record<string, string> = {
             <td class="small">{{ module.last_seen_at ? timeAgo(module.last_seen_at) : 'never' }}</td>
           </tr>
         </tbody>
-      </table>
-    </div>
+    </table>
   </div>
 </template>
 
