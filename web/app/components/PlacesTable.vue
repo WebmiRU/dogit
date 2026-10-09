@@ -42,7 +42,7 @@ const error = ref('')
 /** The word being typed, kept apart from what has been searched for yet. */
 const typing = ref('')
 const sortBy = ref('name')
-const sortedPlaces = computed(() => [...places.value].sort((a, b) => sortBy.value === 'path' ? a.path.localeCompare(b.path) : sortBy.value === 'visibility' ? (a.visibility ?? '').localeCompare(b.visibility ?? '') : (a.name || a.path).localeCompare(b.name || b.path)))
+const sortedPlaces = computed(() => places.value)
 
 /** What is asked of the server, read out of the address bar. */
 const filters = computed<Required<PlaceFilters>>(() => ({
@@ -129,13 +129,13 @@ const visibilities = [
 <template>
   <div>
     <div class="toolbar">
-      <input
-        v-model="typing"
-        class="search"
-        type="search"
-        placeholder="Search by name, path or description"
-        aria-label="Search projects and groups"
-      >
+      <div class="places-search">
+        <svg class="places-search-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="10.8" cy="10.8" r="6.3" />
+          <path d="m15.5 15.5 4.2 4.2" />
+        </svg>
+        <input v-model="typing" class="search" type="search" placeholder="Filter or search projects" aria-label="Search projects and groups">
+      </div>
 
       <select
         v-if="filterKind"
@@ -146,11 +146,15 @@ const visibilities = [
         <option v-for="one in kinds" :key="one.value" :value="one.value">{{ one.label }}</option>
       </select>
 
-      <select v-model="sortBy" aria-label="Sort projects">
-        <option value="name">Sort: name</option>
-        <option value="path">Sort: path</option>
-        <option value="visibility">Sort: visibility</option>
-      </select>
+      <label class="places-sort">
+        <span class="sr-only">Sort projects</span>
+        <select v-model="sortBy" aria-label="Sort projects">
+          <option value="name">Name</option>
+          <option value="path">Path</option>
+          <option value="visibility">Visibility</option>
+        </select>
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 4h10M3 8h7M3 12h4M11 7l2 2 2-2" /></svg>
+      </label>
 
       <select
         :value="filters.visibility"
@@ -202,7 +206,6 @@ const visibilities = [
               <div class="places-tags">
                 <span class="badge badge-neutral">{{ place.kind }}</span>
                 <span v-if="place.kind === 'project' && place.visibility" class="badge" :class="'badge-' + place.visibility">{{ place.visibility }}</span>
-                <span v-if="place.access_name" class="badge badge-neutral">{{ place.access_name }}</span>
                 <span v-if="place.kind === 'group' && place.project_count !== undefined" class="muted small">{{ place.project_count }} projects</span>
               </div>
             </td>

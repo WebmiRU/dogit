@@ -55,10 +55,7 @@ async function createProject() {
     <div class="repo-head project-index-head">
       <div class="title">
         <h1 class="page-title">Projects and groups</h1>
-        <p class="page-subtitle">
-          Everything here you have access to. A group is a namespace: it holds projects
-          and its members can reach them.
-        </p>
+        
       </div>
       <button class="btn project-create-button" type="button" @click="showForm = !showForm">
         <span class="project-create-icon" aria-hidden="true">{{ showForm ? '−' : '+' }}</span>
