@@ -9,14 +9,20 @@
  */
 import type { FileChange } from '~/types/repository'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   change: FileChange
-  /** Shows a button to fold the file away. Files start expanded: a diff is the
-      reason a person opened the page, and folding it by default hides that. */
+  /** Shows a button to fold the file away. Files start expanded by default. */
   collapsible?: boolean
   /** Shown above the patch, usually a link to the file. */
   title?: string
-}>()
+  /** Choose side-by-side or unified diff rendering. */
+  viewMode?: 'unified' | 'split'
+  /** Wrap long lines rather than requiring horizontal scrolling. */
+  wrapLines?: boolean
+}>(), {
+  viewMode: 'unified',
+  wrapLines: false,
+})
 
 type DiffLine = {
   kind: 'add' | 'del' | 'hunk' | 'context'
@@ -145,7 +151,23 @@ const rendered = computed(() => {
     </div>
 
     <div v-if="change.binary" class="empty">Binary file, no textual changes.</div>
-    <div v-else-if="open" class="diff-body">
+    <div v-else-if="open && props.viewMode === 'split'" class="diff-body split-body" :class="{ 'wrap-lines': props.wrapLines }">
+      <template v-for="(line, index) in rendered" :key="index">
+        <div v-if="line.kind === 'hunk'" class="split-hunk">{{ line.text }}</div>
+        <div v-else-if="line.kind === 'skip'" class="split-skip">⋯ {{ line.count }} unchanged lines</div>
+        <div v-else class="diff-split-row">
+          <div class="diff-side diff-left" :class="line.kind === 'del' ? 'k-del' : line.kind === 'context' ? 'k-context' : ''">
+            <span class="ln">{{ line.kind === 'add' ? '' : line.oldNo || '' }}</span>
+            <span class="lc">{{ line.kind === 'add' ? '' : (line.kind === 'del' ? '−' : ' ') + line.text }}</span>
+          </div>
+          <div class="diff-side diff-right" :class="line.kind === 'add' ? 'k-add' : line.kind === 'context' ? 'k-context' : ''">
+            <span class="ln">{{ line.kind === 'del' ? '' : line.newNo || '' }}</span>
+            <span class="lc">{{ line.kind === 'del' ? '' : (line.kind === 'add' ? '+' : ' ') + line.text }}</span>
+          </div>
+        </div>
+      </template>
+    </div>
+    <div v-else-if="open" class="diff-body" :class="{ 'wrap-lines': props.wrapLines }">
       <div v-for="(line, index) in rendered" :key="index" class="diff-line" :class="`k-${line.kind}`">
         <template v-if="line.kind === 'skip'">
           <span class="ln" /><span class="ln" />
@@ -246,4 +268,20 @@ const rendered = computed(() => {
 .del {
   color: #f85149;
 }
+</style>
+<style scoped>
+/* Options used by the MR changes preview. */
+.wrap-lines .diff-line { white-space: pre-wrap; min-width:0; }
+.wrap-lines .lc { white-space:pre-wrap; overflow-wrap:anywhere; word-break:normal; }
+.split-body { overflow-x:auto; }
+.diff-split-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); min-width:720px; border-bottom:1px solid rgba(110,118,129,.08); }
+.diff-side { display:flex; min-width:0; white-space:pre; }
+.diff-side + .diff-side { border-left:1px solid #30343b; }
+.diff-side .ln { flex:0 0 42px; padding-right:8px; }
+.diff-side .lc { flex:1; min-width:0; padding:0 8px; }
+.diff-side .lc:empty { min-height:1.6em; }
+.split-hunk { padding:3px 10px; background:rgba(110,118,129,.15); color:#8b949e; }
+.split-skip { padding:3px 10px; text-align:center; background:rgba(110,118,129,.07); color:#6e7681; font-style:italic; }
+.wrap-lines .diff-split-row { min-width:0; }
+.wrap-lines .diff-side { white-space:pre-wrap; overflow-wrap:anywhere; }
 </style>
