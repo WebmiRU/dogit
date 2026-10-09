@@ -455,10 +455,7 @@ watch(() => props.projectPath, () => load())
         <tr v-for="run in pipelines" :key="run.iid">
           <td class="col-status">
             <NuxtLink :to="`/p/${projectPath}/-/pipelines/${run.iid}`" class="result-link">
-              <span class="badge badge-label result-state" :class="statusClass[run.status] ?? 'badge-neutral'">
-                <span class="result-symbol" aria-hidden="true">
-                  {{ run.status === 'success' ? '✓' : run.status === 'failed' ? '!' : isLive(run) ? '◷' : '—' }}
-                </span>
+              <span class="badge badge-label" :class="statusClass[run.status] ?? 'badge-neutral'">
                 {{ statusText[run.status] }}
               </span>
               <span class="cell-line mono duration">
