@@ -8,6 +8,17 @@
   --text-muted: #a0a0a8;
   --accent: #b9b9c1;
   --accent-soft: rgba(185, 185, 193, 0.12);
+  /* Primary actions use a quiet slate blue on dark surfaces, not a light accent
+     behind white text. Keeping the palette here makes every Compare/Create
+     action use the same readable contrast. */
+  --button-primary-bg: #394b61;
+  --button-primary-hover: #455a73;
+  --button-primary-border: #526780;
+  --button-primary-text: #f2f5fa;
+  --button-primary-disabled-bg: #2a313b;
+  --button-primary-disabled-border: #3c4653;
+  --button-primary-disabled-text: #aeb7c4;
+  --button-primary-focus: rgba(113, 144, 181, 0.28);
   /* A light, transparent yellow marks a row somebody explicitly asked to see. */
   --yellow-soft: rgba(210, 153, 34, 0.16);
   --green: #3fb950;
@@ -183,14 +194,30 @@ pre,
 }
 
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--button-primary-bg);
+  border-color: var(--button-primary-border);
+  color: var(--button-primary-text);
+  font-weight: 600;
 }
 
 .btn-primary:hover:not(:disabled) {
-  color: #fff;
-  filter: brightness(1.1);
+  background: var(--button-primary-hover);
+  border-color: var(--button-primary-hover);
+  color: var(--button-primary-text);
+  filter: none;
+}
+
+.btn-primary:disabled {
+  opacity: 1;
+  background: var(--button-primary-disabled-bg);
+  border-color: var(--button-primary-disabled-border);
+  color: var(--button-primary-disabled-text);
+  cursor: not-allowed;
+}
+
+.btn-primary:focus-visible {
+  outline: 2px solid var(--button-primary-border);
+  outline-offset: 2px;
 }
 
 input,

@@ -339,7 +339,7 @@ async function submit() {
   display:grid; place-items:center; flex:0 0 16px; width:16px; height:16px; margin-top:2px;
   border:1px solid var(--border-strong); border-radius:3px; background:var(--bg-inset);
 }
-.mr-squash input:checked + .mr-check-custom { border-color:#4389eb; background:#4389eb; }
+.mr-squash input:checked + .mr-check-custom { border-color:var(--button-primary-hover); background:var(--button-primary-hover); }
 .mr-squash input:checked + .mr-check-custom::after { content:'✓'; color:#fff; font-size:11px; font-weight:800; }
 .mr-squash input:focus-visible + .mr-check-custom { outline:2px solid var(--accent); outline-offset:2px; }
 .mr-squash-copy { display:flex; flex-direction:column; gap:5px; min-width:0; }
@@ -354,9 +354,9 @@ async function submit() {
 .mr-action-buttons { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
 .mr-action-buttons .btn { min-height:36px; padding:7px 13px; border-radius:5px; font-size:13px; }
 .mr-action-buttons .mr-submit {
-  gap:8px; border-color:#3678d7; background:#3678d7; color:#fff; font-weight:600;
+  gap:8px; border-color:var(--button-primary-border); background:var(--button-primary-bg); color:var(--button-primary-text); font-weight:600;
 }
-.mr-action-buttons .mr-submit:hover:not(:disabled) { border-color:#4889e8; background:#4889e8; color:#fff; }
+.mr-action-buttons .mr-submit:hover:not(:disabled) { border-color:var(--button-primary-hover); background:var(--button-primary-hover); color:var(--button-primary-text); }
 .mr-submit-arrow { font-size:15px; }
 .mr-error {
   display:flex; align-items:flex-start; gap:10px; margin:16px 0 0;
