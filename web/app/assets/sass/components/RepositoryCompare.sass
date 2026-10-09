@@ -1,10 +1,17 @@
 // Compare form and diff files.
 .compare-form
   display: grid
-  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) auto
+  grid-template-columns: minmax(0, 1fr) auto
   align-items: end
   gap: 12px
   width: 100%
+
+.compare-ref-pair
+  display: grid
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr)
+  align-items: end
+  gap: 12px
+  min-width: 0
 
 .compare-form .field
   display: flex
@@ -26,9 +33,12 @@
   white-space: nowrap
 
 .compare-form .arrow
-  padding-bottom: 9px
+  display: flex
+  align-items: center
+  justify-content: center
+  height: 38px
   color: var(--text-muted)
-  line-height: 38px
+  line-height: 1
   text-align: center
 
 .diff-file + .diff-file
@@ -53,6 +63,10 @@
 
 @media (max-width: 700px)
   .compare-form
+    grid-template-columns: minmax(0, 1fr)
+    gap: 10px
+
+  .compare-ref-pair
     grid-template-columns: minmax(0, 1fr)
     gap: 10px
 

@@ -91,22 +91,32 @@ function icon(entry: TreeEntry) {
     <div v-else-if="isEmpty" class="empty">
       This directory is empty.
     </div>
-    <ul v-else class="tree-list">
-      <li v-if="path" class="is-dir">
-        <span class="icon">↰</span>
-        <NuxtLink class="name" :to="treeUrl(path.split('/').slice(0, -1).join('/'), refName)">
-          ..
-        </NuxtLink>
-      </li>
-      <li
-        v-for="entry in entries"
-        :key="entry.path"
-        :class="{ 'is-dir': entry.type === 'tree' }"
-      >
-        <span class="icon">{{ icon(entry) }}</span>
-        <NuxtLink class="name" :to="entryLink(entry)">{{ entry.path }}</NuxtLink>
-        <span class="meta">{{ entry.type === 'tree' ? '' : formatBytes(entry.size) }}</span>
-      </li>
-    </ul>
+    <div v-else class="repository-table-wrap">
+      <table class="admin-table repository-data-table repository-tree-table">
+        <thead>
+          <tr><th>Name</th><th class="numeric">Size</th></tr>
+        </thead>
+        <tbody>
+          <tr v-if="path">
+            <td>
+              <div class="cell-name">
+                <span class="tree-entry-icon" aria-hidden="true">↰</span>
+                <NuxtLink class="name" :to="treeUrl(path.split('/').slice(0, -1).join('/'), refName)">..</NuxtLink>
+              </div>
+            </td>
+            <td class="numeric muted small">—</td>
+          </tr>
+          <tr v-for="entry in entries" :key="entry.path">
+            <td>
+              <div class="cell-name">
+                <span class="tree-entry-icon" aria-hidden="true">{{ icon(entry) }}</span>
+                <NuxtLink class="name" :to="entryLink(entry)">{{ entry.path }}</NuxtLink>
+              </div>
+            </td>
+            <td class="numeric muted small">{{ entry.type === 'tree' ? '—' : formatBytes(entry.size) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
