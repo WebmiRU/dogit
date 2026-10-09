@@ -58,10 +58,6 @@ try {
   // it never reaches and every check of it times out rather than reporting a page that is fine.
   // Waiting for the document and then giving it a moment is what actually means "drawn".
   await page.goto(base + path, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  // Long enough to see whether something is still arriving, because the difference between "slow"
-  // and "never" is only visible in a second screenshot.
-  const wait = Number(process.env.LOOK_WAIT ?? 2500);
-  await new Promise((r) => setTimeout(r, wait));
 
   // A click before the read, for a page whose interesting part is behind a disclosure. Without it
   // this reports the collapsed page and calls it the page, which is how a working feature reads as a
@@ -98,12 +94,19 @@ try {
       hits[0].click();
       return hits.length;
     }, clickIn);
-    // Long enough to see whether something is still arriving, because the difference between "slow"
-  // and "never" is only visible in a second screenshot.
-  const wait = Number(process.env.LOOK_WAIT ?? 2500);
-  await new Promise((r) => setTimeout(r, wait));
     console.log(`opened the disclosure containing "${clickIn}" (${opened} matched)`);
   }
+
+  // Long enough to see whether something is still arriving, because the difference between "slow"
+  // and "never" is only visible in a second screenshot.
+  //
+  // And long enough for something to happen to the page that the reader was watching, because a
+  // check run afterwards re-opens the page and gets a page that saw nothing: a card is only the
+  // reader's if that page saw it happen. Clicking a control on a page opened afterwards tests a
+  // page where the control is not there, and proves nothing — which is how the cross on a card was
+  // once reported as working.
+  const wait = Number(process.env.LOOK_WAIT ?? 2500);
+  await new Promise((r) => setTimeout(r, wait));
 
   const clickText = process.argv.includes('--click-text')
     ? process.argv[process.argv.indexOf('--click-text') + 1]
@@ -158,6 +161,38 @@ try {
   if (shot) {
     await page.screenshot({ path: shot, fullPage: true });
     console.log('screenshot:', shot);
+  }
+
+  // A click made after the wait, on the page as the reader left it, and a second screenshot of
+  // what the click did. Both halves matter: a click before the wait measures a page nobody was
+  // looking at, and a screenshot without the click cannot tell a control that works from one that
+  // was never pressed.
+  const clickAfter = process.argv.includes('--click-after')
+    ? process.argv[process.argv.indexOf('--click-after') + 1]
+    : null;
+  if (clickAfter) {
+    const before = (await page.$$('*')).length;
+    const clicked = await page.evaluate((text) => {
+      const wanted = text;
+      const all = [...document.querySelectorAll('button, summary, a, [role="button"]')]
+      const hits = all.filter((el) => (el.innerText || el.textContent || '').trim() === wanted);
+      const el = hits[0];
+      if (!el) return 0;
+      el.click();
+      return hits.length;
+    }, clickAfter);
+    console.log(`clicked after the wait: ${clickAfter} (${clicked} matched, ${before} elements)`);
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const shotAfter = process.argv.includes('--shot-after')
+      ? process.argv[process.argv.indexOf('--shot-after') + 1]
+      : null;
+    if (shotAfter) {
+      await page.screenshot({ path: shotAfter, fullPage: true });
+      console.log('screenshot after the click:', shotAfter);
+    }
+    console.log('--- on the page after the click ---');
+    console.log((await page.evaluate(() => document.body.innerText)).trim().split('\n').slice(0, 25).join('\n'));
   }
 } finally {
   await browser.close();
