@@ -337,6 +337,16 @@ func (s *Server) handleGetMergeRequest(w http.ResponseWriter, r *http.Request) {
 		"notes":         notes,
 		"diff_url":      diffURL,
 	}
+	if mr.PipelineRequired {
+		var status string
+		if err := s.store.Pool().QueryRow(r.Context(),
+			`SELECT status FROM pipelines WHERE project_id = $1 AND ref = $2 ORDER BY id DESC LIMIT 1`,
+			rc.Project.ID, mr.SourceBranch).Scan(&status); err == nil {
+			response["source_pipeline_status"] = status
+		} else {
+			response["source_pipeline_status"] = ""
+		}
+	}
 	if !branchesExist {
 		response["branches_gone"] = true
 	}

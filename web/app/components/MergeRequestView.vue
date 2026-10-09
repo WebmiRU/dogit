@@ -63,8 +63,12 @@ async function load() {
       notes?: MergeRequestNote[]
       diff_url?: string
       branches_gone?: boolean
+      source_pipeline_status?: string
     }>(`/projects/${details.project.id}/merge_requests/${iid.value}`)
-    mr.value = response.merge_request
+    mr.value = {
+      ...response.merge_request,
+      source_pipeline_status: response.source_pipeline_status,
+    }
     notes.value = response.notes ?? []
 
     // The diff comes from the same compare endpoint the compare page uses, so a
@@ -112,6 +116,16 @@ const mergeState = computed(() => {
   }
   if (request.is_draft) {
     return { label: 'Draft', enabled: false, reason: 'Mark this merge request ready before merging.' }
+  }
+  if (request.pipeline_required && request.source_pipeline_status !== 'success') {
+    const failed = request.source_pipeline_status === 'failed'
+    return {
+      label: failed ? 'Pipeline failed' : 'Waiting for pipeline',
+      enabled: false,
+      reason: failed
+        ? 'The latest pipeline on the source branch failed. A successful pipeline is required before merging.'
+        : 'A successful pipeline on the source branch is required before merging.',
+    }
   }
   if (request.has_conflicts) {
     // The button stays disabled because the conflict has to be answered first;
@@ -362,6 +376,16 @@ const patch = computed(() => {
               </dd>
               <dt>Status</dt>
               <dd>{{ statusText }}</dd>
+              <dt v-if="mr.pipeline_required">Pipeline</dt>
+              <dd v-if="mr.pipeline_required">{{ mr.source_pipeline_status || 'No pipeline run yet' }}</dd>
+              <dt v-if="mr.assignee_id">Assignee</dt>
+              <dd v-if="mr.assignee_id">{{ mr.assignee_id }}</dd>
+              <dt v-if="mr.reviewer_id">Reviewer</dt>
+              <dd v-if="mr.reviewer_id">{{ mr.reviewer_id }}</dd>
+              <dt v-if="mr.milestone">Milestone</dt>
+              <dd v-if="mr.milestone">{{ mr.milestone }}</dd>
+              <dt v-if="mr.labels?.length">Labels</dt>
+              <dd v-if="mr.labels?.length">{{ mr.labels.join(', ') }}</dd>
               <dt v-if="mr.diff_stats">Changes</dt>
               <dd v-if="mr.diff_stats">
                 {{ mr.diff_stats.files_changed }} files,
