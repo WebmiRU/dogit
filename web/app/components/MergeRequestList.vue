@@ -118,14 +118,6 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="mr-list-page">
-    <nav class="mr-list-breadcrumb" aria-label="Breadcrumb">
-      <NuxtLink to="/projects">Projects</NuxtLink>
-      <span aria-hidden="true">/</span>
-      <span>{{ projectPath.split('/').join(' / ') }}</span>
-      <span aria-hidden="true">/</span>
-      <strong>Merge requests</strong>
-    </nav>
-
     <div class="mr-list-topline">
       <nav class="mr-list-tabs" aria-label="Filter merge requests">
         <button v-for="option in states" :key="option.value" type="button"
@@ -211,16 +203,18 @@ onBeforeUnmount(() => {
 
             </div>
           </div>
-          <span class="mr-row-status" :class="'status-' + mr.state" :title="stateLabel(mr)" :aria-label="stateLabel(mr)">
-            <svg v-if="mr.state !== 'closed'" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m7.5 12.2 3 3 6-6.3" /></svg>
-            <svg v-else viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m9 9 6 6m0-6-6 6" /></svg>
-          </span>
+          <div class="mr-result-status">
+            <span class="mr-row-status" :class="'status-' + mr.state" :title="stateLabel(mr)" :aria-label="stateLabel(mr)">
+              <svg v-if="mr.state !== 'closed'" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m7.5 12.2 3 3 6-6.3" /></svg>
+              <svg v-else viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m9 9 6 6m0-6-6 6" /></svg>
+            </span>
+            <span class="mr-row-updated">updated {{ timeAgo(mr.updated_at) }}</span>
+          </div>
         </li>
       </ul>
     </div>
 
     <footer class="mr-list-footer">
-      <span class="mr-total">{{ total }} merge request{{ total === 1 ? '' : 's' }}</span>
       <label class="mr-page-size">Show
         <select :value="pageSize" aria-label="Number of items to show" @change="selectPageSize">
           <option :value="20">20 items</option><option :value="50">50 items</option><option :value="100">100 items</option>
@@ -286,4 +280,74 @@ onBeforeUnmount(() => {
 .mr-list-footer { display:flex; align-items:center; justify-content:flex-end; gap:12px; min-height:60px; padding:11px 0; }.mr-total { margin-right:auto; color:var(--text-muted); font-size:11px; }.mr-page-size { display:flex; align-items:center; gap:8px; margin:0; color:var(--text-muted); font-size:12px; }.mr-page-size select { width:auto; min-width:124px; height:37px; margin:0; padding:5px 27px 5px 10px; border:1px solid var(--border-strong); border-radius:6px; background:#34353b; color:var(--text); font:inherit; font-size:12px; }
 @media(max-width:850px) { .mr-list-topline { align-items:flex-start; flex-direction:column; }.mr-list-actions { width:100%; justify-content:flex-end; }.mr-list-toolbar { flex-wrap:wrap; gap:8px; }.mr-history-filter summary { border-radius:6px; }.mr-searchbox { flex-basis:calc(100% - 66px); }.mr-sort-control { margin-left:0; }.mr-sort-control select { border-radius:6px 0 0 6px; }.mr-list-actions { padding-bottom:9px; } }
 @media(max-width:520px) { .mr-list-breadcrumb { gap:6px; }.mr-list-actions { flex-wrap:wrap; }.mr-primary-button { flex:1 1 auto; }.mr-sort-control { flex:1 1 auto; }.mr-sort-control select { flex:1 1 auto; min-width:0; }.mr-row-status { flex-basis:24px; width:24px; }.mr-row-status svg { width:23px; height:23px; }.mr-result-row { padding:11px 7px; } }
+
+/* Match the proportions of the GitLab MR list shown in the reference. */
+.mr-list-topline { min-height:74px; gap:0; }
+.mr-list-tabs button { gap:7px; padding:14px 20px 12px; font-size:16px; }
+.mr-list-tabs button.active { border-bottom-color:#579ce6; }
+.mr-count { min-width:32px; height:32px; padding:0 8px; border-radius:16px; font-size:14px; }
+.mr-list-actions { gap:10px; padding:0; }
+.mr-secondary-button,.mr-primary-button { min-height:50px; padding:10px 20px; border-radius:12px; font-size:16px; font-weight:500; }
+.mr-primary-button { background:#619fe2; border-color:#619fe2; color:#111827; }
+.mr-primary-button:hover { background:#75afea; border-color:#75afea; color:#111827; }
+.mr-more-menu summary { width:40px; height:50px; border-radius:8px; font-size:29px; }
+.mr-list-toolbar { margin:0; padding:26px 25px; }
+.mr-history-filter summary { width:90px; height:50px; gap:7px; border-radius:12px 0 0 12px; }
+.mr-history-filter summary svg:first-child { width:25px; height:25px; }
+.mr-history-filter .mr-chevron { width:15px; height:15px; }
+.mr-searchbox { height:50px; }
+.mr-searchbox input { height:50px; padding:8px 16px; font-size:20px; }
+.mr-searchbox button { flex-basis:50px; width:50px; height:50px; }
+.mr-searchbox button svg { width:23px; height:23px; }
+.mr-sort-control { height:50px; margin-left:12px; }
+.mr-sort-control select { min-width:200px; height:50px; padding:0 34px 0 18px; border-radius:12px 0 0 12px; font-size:16px; }
+.mr-sort-direction { width:50px; height:50px; border-radius:0 12px 12px 0; }
+.mr-sort-direction svg { width:22px; height:22px; }
+.mr-result-row { align-items:flex-start; gap:16px; padding:14px 25px 18px; }
+.mr-result-title { margin-bottom:5px; font-size:22px; font-weight:650; line-height:1.4; }
+.mr-result-meta { gap:7px; font-size:16px; line-height:1.5; }
+.mr-result-status { display:flex; flex:0 0 220px; min-width:170px; flex-direction:column; align-items:flex-end; gap:4px; }
+.mr-row-status { flex:0 0 38px; width:38px; height:38px; }
+.mr-row-status svg { width:38px; height:38px; }
+.mr-row-updated { color:var(--text-muted); font-size:16px; line-height:1.4; white-space:nowrap; }
+.mr-list-footer { justify-content:flex-end; min-height:100px; padding:38px 0 0; }
+.mr-page-size { justify-content:space-between; gap:8px; width:220px; min-width:220px; height:50px; padding:0 12px 0 20px; border:1px solid var(--border-strong); border-radius:12px; background:#34353b; color:var(--text); font-size:16px; }
+.mr-page-size select { flex:1 1 auto; width:100%; min-width:0; height:48px; margin:0; padding:5px 24px 5px 0; border:0; border-radius:0; background:transparent; color:var(--text); font-size:16px; }
+@media(max-width:850px) {
+  .mr-list-topline { align-items:flex-start; flex-direction:column; gap:8px; }
+  .mr-list-tabs button { padding:12px 14px 10px; font-size:15px; }
+  .mr-list-actions { width:100%; justify-content:flex-end; }
+  .mr-list-toolbar { flex-wrap:wrap; gap:8px; padding:16px; }
+  .mr-history-filter summary { border-radius:8px; }
+  .mr-searchbox { flex-basis:calc(100% - 98px); }
+  .mr-sort-control { margin-left:0; }
+  .mr-sort-control select { min-width:150px; border-radius:8px 0 0 8px; }
+  .mr-result-status { flex-basis:150px; min-width:125px; }
+  .mr-result-title { font-size:18px; }
+  .mr-result-meta,.mr-row-updated { font-size:13px; }
+  .mr-list-footer { padding-top:28px; }
+}
+@media(max-width:520px) {
+  .mr-list-topline { min-height:0; }
+  .mr-list-tabs { width:100%; overflow-x:auto; }
+  .mr-list-tabs button { padding:12px 10px 10px; font-size:13px; }
+  .mr-count { min-width:23px; height:23px; font-size:11px; }
+  .mr-list-actions { flex-wrap:wrap; }
+  .mr-secondary-button,.mr-primary-button { min-height:42px; padding:8px 12px; font-size:13px; }
+  .mr-list-toolbar { padding:12px; }
+  .mr-searchbox { flex:1 1 calc(100% - 98px); min-width:0; }
+  .mr-searchbox input { font-size:14px; }
+  .mr-sort-control { flex:1 1 auto; min-width:0; }
+  .mr-sort-control select { flex:1 1 auto; min-width:0; }
+  .mr-result-row { padding:12px 8px; }
+  .mr-result-title { font-size:16px; }
+  .mr-result-meta { font-size:12px; }
+  .mr-result-status { flex-basis:auto; min-width:0; }
+  .mr-row-status,.mr-row-status svg { width:28px; height:28px; }
+  .mr-row-status { flex-basis:28px; }
+  .mr-row-updated { font-size:10px; }
+  .mr-page-size { width:190px; min-width:190px; height:44px; font-size:13px; }
+  .mr-page-size select { height:42px; font-size:13px; }
+}
+
 </style>
