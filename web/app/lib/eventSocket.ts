@@ -234,20 +234,19 @@ export function openEventSocket() {
   })
 
   opened.addEventListener('close', (event) => {
-    const wasOpen = attempts === 0 && event.wasClean === false
     opening = false
     if (socket === opened) socket = null
 
+    const delay = retryAfter()
     console.warn(
       `[dogit] event socket closed (code ${event.code}${event.reason ? `, ${event.reason}` : ''}) ` +
-        `at ${new Date().toLocaleTimeString()}; opening another in ${retryAfter()}ms`,
+        `at ${new Date().toLocaleTimeString()}; opening another in ${delay}ms`,
     )
 
-    // Whoever is listening was blind for as long as that was, and a page showing a live
-    // process has to know: the deployment carried on without it.
+    // A close is a gap whether it was clean or not. In particular, code 1006 is the
+    // browser reporting that the connection disappeared without a close frame; treating
+    // that as a reason not to reconnect leaves every page permanently stale.
     wakeAll()
-
-    if (wasOpen) return
     scheduleReopen()
   })
 
@@ -258,11 +257,12 @@ export function openEventSocket() {
   function scheduleReopen() {
     if (retrying) return
     retrying = true
+    const delay = retryAfter()
     attempts += 1
     setTimeout(() => {
       retrying = false
       openEventSocket()
-    }, retryAfter())
+    }, delay)
   }
 }
 
