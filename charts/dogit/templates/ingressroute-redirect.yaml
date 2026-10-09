@@ -1,0 +1,66 @@
+{{- if and .Values.ingress.enabled .Values.ingress.tls.enabled .Values.ingress.host (eq .Values.ingress.className "traefik") }}
+{{- /*
+  HTTP -> HTTPS redirect, scoped to this release's hosts only.
+
+  The application marks its session cookie Secure unconditionally, independently of
+  the scheme the login arrived on. A browser therefore stores nothing when the login
+  happened over plain HTTP, and every subsequent request reaches the backend without
+  a session: the login appears to succeed and then each page answers "authentication
+  is required". The Ingress next door is therefore bound to websecure alone and this
+  route owns :80 to send visitors there.
+
+  A namespaced IngressRoute plus Middleware is used rather than an entrypoint
+  redirection in Traefik's static config, on purpose: that Traefik is shared, and an
+  entrypoint redirection would silently apply to every other host on the cluster.
+  Nothing outside this release is touched.
+
+  permanent is left unset, so the response is a 302. A 301 would be cached by browsers
+  for its full max-age and would keep pointing at HTTPS even if this host later goes
+  back to plain HTTP.
+*/}}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "dogit.fullname" . }}-redirect-https
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+spec:
+  redirectScheme:
+    {{- /*
+      Only fields the installed CRD actually declares. The chart shipped by k3s here
+      is older than the running Traefik (3.6.13) and its Middleware schema declares
+      just permanent/port/scheme — "from"/"to" are rejected outright with
+      "field not declared in schema", and server-side apply treats that as a hard
+      failure rather than pruning the field. "scheme" is the modern spelling and is
+      enough for our case: the route only ever matches plain HTTP on :80, so every
+      request reaching this middleware needs to end up on :443.
+    */}}
+    scheme: https
+    permanent: false
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ include "dogit.fullname" . }}-http-redirect
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - web
+  routes:
+    {{- $rule := printf "Host(`%s`)" .Values.ingress.host -}}
+    {{- range .Values.ingress.additionalHosts -}}
+    {{- $rule = printf "%s || Host(`%s`)" $rule . -}}
+    {{- end }}
+    - kind: Rule
+      match: {{ $rule }}
+      middlewares:
+        - name: {{ include "dogit.fullname" . }}-redirect-https
+      services:
+        {{- /*
+          The redirect answers before this is ever dialled, but a route rule needs a
+          service to be valid, so point it at the same backend the Ingress uses.
+        */}}
+        - name: {{ include "dogit.fullname" . }}-web
+          port: 80
+{{- end }}
