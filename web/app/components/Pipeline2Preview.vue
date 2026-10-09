@@ -347,7 +347,7 @@ const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
 /* Controls that inherit their font through a shorthand need an explicit size too. */
 .p2-global-search kbd, .p2-top-counter small { font-size: 14px; }
 .p2-content-tabs > button { font-size: 14px; }
-.p2-content-tabs b { font-size: 14px; }
+.p2-content-tabs b { font-size: 12px; }
 
 /* Typography follows the supplied reference: 14px across the page with the explicit badge/title exceptions. */
 .p2-preview { font-size: 14px; }
