@@ -134,7 +134,7 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 			       COALESCE(p.description, '') AS description, p.visibility,
 			       p.group_id, NULL::int AS project_count, p.created_at,
 			       (SELECT c.timestamp FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1) AS last_commit_at,
-			       COALESCE((SELECT left(split_part(c.message, E'\\n', 1), 120) FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1), '') AS last_commit_message,
+			       COALESCE((SELECT left(split_part(c.message, E'\n', 1), 120) FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1), '') AS last_commit_message,
 			       COALESCE((
 			       SELECT CASE
 			         WHEN pl.status = 'canceled' THEN 'canceled'
