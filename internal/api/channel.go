@@ -49,6 +49,10 @@ import (
 type channelClient struct {
 	moduleID uuid.UUID
 	name     string
+	// token is the plaintext credential this connection presented at upgrade. The store
+	// deliberately keeps only its hash, but the wire protocol requires every outbound
+	// message to carry the same token so the module can authenticate each frame.
+	token string
 
 	mu       sync.Mutex
 	conn     *websocket.Conn
@@ -58,6 +62,10 @@ type channelClient struct {
 }
 
 func (c *channelClient) send(ctx context.Context, message modulechan.Message) error {
+	// Callers create facts and decisions without a credential. Add the connection's token
+	// at the last possible moment so cached commands remain token-free and each connection
+	// sends its own authenticated envelope.
+	message.Token = c.token
 	frame, err := message.Envelope()
 	if err != nil {
 		return err
@@ -256,10 +264,10 @@ func (s *Server) handleModuleChannel(w http.ResponseWriter, r *http.Request) {
 		// to tell that from a network fault.
 		s.log.Debug("a module channel was refused at the upgrade",
 			"reason", moduleRefusal(err).Reason)
-		s.refuseAndClose(ctx, conn, "", moduleRefusal(err))
+		s.refuseAndClose(ctx, conn, "", bearerOf(r), moduleRefusal(err))
 		return
 	}
-	client := ch.attach(ctx, conn, module)
+	client := ch.attach(ctx, conn, module, bearerOf(r))
 	s.log.Info("a module opened its channel", "module", client.name,
 		"kind", module.Kind, "endpoint", module.Endpoint)
 	defer ch.detach(client)
@@ -276,7 +284,7 @@ func (s *Server) handleModuleChannel(w http.ResponseWriter, r *http.Request) {
 
 		message, err := modulechan.Decode(data)
 		if err != nil {
-			s.refuseAndClose(ctx, conn, "", modulechan.Refusal{Reason: err.Error()})
+			s.refuseAndClose(ctx, conn, "", client.token, modulechan.Refusal{Reason: err.Error()})
 			return
 		}
 
@@ -287,14 +295,14 @@ func (s *Server) handleModuleChannel(w http.ResponseWriter, r *http.Request) {
 			// The reason is sent before the connection goes. A module that is cut off
 			// with no word reconnects, is refused again, and never learns anything — and the
 			// author of the module has no way to tell that from a network fault.
-			s.refuseAndClose(ctx, conn, message.ID, moduleRefusal(err))
+			s.refuseAndClose(ctx, conn, message.ID, message.Token, moduleRefusal(err))
 			return
 		}
 		// A connection that changes which module it is mid-stream is refused rather than
 		// reassigned. It means one token was presented as two, and the answer to that is
 		// neither of the modules involved.
 		if client.moduleID != module.ID {
-			s.refuseAndClose(ctx, conn, message.ID, modulechan.Refusal{
+			s.refuseAndClose(ctx, conn, message.ID, message.Token, modulechan.Refusal{
 				Reason: "this connection presented one token and then another"})
 			return
 		}
@@ -378,13 +386,13 @@ func moduleRefusal(err error) modulechan.Refusal {
 // rather than in the close frame's text because a close reason is limited to a hundred and twenty
 // three bytes and these sentences are longer than that.
 func (s *Server) refuseAndClose(ctx context.Context, conn *websocket.Conn,
-	id string, refusal modulechan.Refusal) {
+	id, token string, refusal modulechan.Refusal) {
 
 	payload, err := json.Marshal(refusal)
 	if err != nil {
 		payload = []byte(`{"reason":"the core could not say why"}`)
 	}
-	frame, err := modulechan.Message{ID: id, Kind: modulechan.Refused, Payload: payload}.Envelope()
+	frame, err := modulechan.Message{ID: id, Kind: modulechan.Refused, Token: token, Payload: payload}.Envelope()
 	if err == nil {
 		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		_ = conn.Write(writeCtx, websocket.MessageText, frame)
@@ -395,11 +403,12 @@ func (s *Server) refuseAndClose(ctx context.Context, conn *websocket.Conn,
 
 // attach registers a connection under its module and returns the client that stands for it.
 func (ch *ModuleChannel) attach(ctx context.Context, conn *websocket.Conn,
-	module *models.Integration) *channelClient {
+	module *models.Integration, token string) *channelClient {
 
 	client := &channelClient{
 		moduleID: module.ID,
 		name:     module.Kind + "/" + module.Name,
+		token:    token,
 		conn:     conn,
 		openedAt: time.Now(),
 	}

@@ -153,6 +153,7 @@ export function openEventSocket() {
   const url = socketURL()
   const opened = new WebSocket(url)
   socket = opened
+  let reconnected = false
 
   opened.addEventListener('open', () => {
     opening = false
@@ -164,10 +165,10 @@ export function openEventSocket() {
     // A reopened connection is given everything since the cursor, and all of it is
     // history by definition: it happened while this page was not watching.
     catchingUp = true
-    const first = attempts === 0
+    reconnected = attempts > 0
     attempts = 0
     console.info(
-      `[dogit] event socket ${first ? 'connected' : 'reconnected'} at ${new Date().toLocaleTimeString()}`,
+      `[dogit] event socket ${reconnected ? 'reconnected' : 'connected'} at ${new Date().toLocaleTimeString()}`,
     )
     // A reopened socket catches up again, and everything it is about to send is history.
   })
@@ -198,9 +199,14 @@ export function openEventSocket() {
     // the present tense.
     if (event.kind === 'sync') {
       catchingUp = false
-      // The backlog is not news, so it is not kept either: a listener arriving after
-      // the sync must be given what happens next, not what has already been seen.
+      // The backlog is deliberately not replayed as live progress. Re-read durable state
+      // only after catch-up finishes, otherwise a request made at close time can fail or
+      // return an older snapshot and the page stays stale after the socket is healthy again.
       recent.length = 0
+      if (reconnected) {
+        reconnected = false
+        wakeAll()
+      }
       return
     }
 
@@ -234,20 +240,18 @@ export function openEventSocket() {
   })
 
   opened.addEventListener('close', (event) => {
-    const wasOpen = attempts === 0 && event.wasClean === false
     opening = false
     if (socket === opened) socket = null
 
+    const delay = retryAfter()
     console.warn(
       `[dogit] event socket closed (code ${event.code}${event.reason ? `, ${event.reason}` : ''}) ` +
-        `at ${new Date().toLocaleTimeString()}; opening another in ${retryAfter()}ms`,
+        `at ${new Date().toLocaleTimeString()}; opening another in ${delay}ms`,
     )
 
-    // Whoever is listening was blind for as long as that was, and a page showing a live
-    // process has to know: the deployment carried on without it.
-    wakeAll()
-
-    if (wasOpen) return
+    // A close is a gap whether it was clean or not. In particular, code 1006 is the
+    // browser reporting that the connection disappeared without a close frame. Reconnect
+    // even then; listeners are refreshed after the new connection has caught up.
     scheduleReopen()
   })
 
@@ -258,11 +262,12 @@ export function openEventSocket() {
   function scheduleReopen() {
     if (retrying) return
     retrying = true
+    const delay = retryAfter()
     attempts += 1
     setTimeout(() => {
       retrying = false
       openEventSocket()
-    }, retryAfter())
+    }, delay)
   }
 }
 

@@ -177,7 +177,19 @@ const history = computed(() => cards.value)
 
 /** Everything the core sends in one answer is both halves; the sort is by what was begun. */
 function reorder(answer: OperationsAnswer) {
-  operations.value = [...(answer.active ?? []), ...(answer.finished ?? [])]
+  const next = [...(answer.active ?? []), ...(answer.finished ?? [])]
+  operations.value = next
+
+  // A reconnect is a fresh snapshot, not merely a request to redraw the list. Replace
+  // local progress for active operations with the core's durable snapshot; otherwise
+  // the card remains "caught" and keeps stale phases from before the socket dropped.
+  const restored = { ...watching.value }
+  for (const operation of next) {
+    if (!operation.running || !operation.progress) continue
+    const snapshot = lateProgress(operation)
+    if (snapshot) restored[operation.job_id] = snapshot
+  }
+  watching.value = restored
 }
 
 async function load() {
@@ -402,7 +414,7 @@ function logLines(jobID: number): { phase: string; message: string; step: number
  */
 function openPhases(operation: DeployOperation): string[] {
   if (!operation.running) return []
-  return watched(operation.job_id)?.phases ?? []
+  return knows(operation)?.phases ?? []
 }
 
 /** When a line was said, to the second — enough to place it, short enough not to shout. */
@@ -549,7 +561,11 @@ const plans = ref<Record<string, { key: string; label: string }[]>>({})
 
 /** The steps for one operation, by what that operation is. A deployment unless it says otherwise. */
 function planOf(jobID: number): { key: string; label: string }[] {
-  const kind = watching.value[jobID]?.kind === 'revert' ? 'revert' : 'deploy'
+  const operation = operations.value.find((one) => one.job_id === jobID)
+  const savedKind = operation?.progress?.deployment as { kind?: unknown } | undefined
+  const kind = watching.value[jobID]?.kind === 'revert' || savedKind?.kind === 'revert'
+    ? 'revert'
+    : 'deploy'
   return plans.value[kind] ?? []
 }
 
@@ -587,26 +603,45 @@ function lateProgress(operation: DeployOperation): Watching | null {
   // "is it running", and that is true of every card under way — so the note the core kept
   // would be thrown away on exactly the cards it was kept for, and a page opened during a
   // rollout would be back to seven steps with nothing marked.
-  if (caught.value[operation.job_id] || operation.queued) return null
+  if (operation.queued) return null
   const said = operation.progress
   if (!said || typeof said !== 'object') return null
 
-  const progress: DeployProgress = {
-    phase: String(said.phase ?? ''),
-    message: String(said.message ?? ''),
-    ready: Number(said.ready ?? 0),
-    desired: Number(said.desired ?? 0),
-    step: Number(said.step ?? 0),
-    of: Number(said.of ?? 0),
-    finished: said.finished === true,
-    failed: said.failed === true,
+  const toProgress = (line: Record<string, unknown>): DeployProgress => ({
+    phase: String(line.phase ?? ''),
+    message: String(line.message ?? ''),
+    ready: Number(line.ready ?? 0),
+    desired: Number(line.desired ?? 0),
+    step: Number(line.step ?? 0),
+    of: Number(line.of ?? 0),
+    previous: typeof line.previous === 'string' && line.previous ? line.previous : undefined,
+    retiring: typeof line.retiring === 'number' ? line.retiring : undefined,
+    finished: line.finished === true,
+    failed: line.failed === true,
+  })
+  const progress = toProgress(said)
+  // The core keeps the latest line for each phase and the set of phases still open.
+  // Use both: the last line alone cannot restore earlier green ticks or simultaneous
+  // rollout/retire arrows after a refresh.
+  const history = Array.isArray(said.phase_history)
+    ? said.phase_history.filter((line): line is Record<string, unknown> =>
+      Boolean(line) && typeof line === 'object')
+    : []
+  const seen = history.map(toProgress)
+  if (progress.phase && !seen.some((line) => line.phase === progress.phase)) {
+    seen.push(progress)
   }
+  const active = Array.isArray(said.active_phases)
+    ? said.active_phases.filter((phase): phase is string => typeof phase === 'string')
+    : (progress.phase && !progress.finished ? [progress.phase] : [])
+  const saidAbout = said.deployment as { kind?: unknown } | undefined
   return {
+    ...(typeof saidAbout?.kind === 'string' && saidAbout.kind ? { kind: saidAbout.kind } : {}),
     progress,
-    // No lines and no clock: this card was not watched, and inventing a start time for it would
-    // put a duration on the page that nothing observed.
-    seen: [],
-    phases: progress.phase ? [progress.phase] : [],
+    // No clock: this card was not watched, and inventing a start time would put a duration
+    // on the page that nobody observed.
+    seen,
+    phases: active,
     since: 0,
   }
 }

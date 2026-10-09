@@ -153,7 +153,6 @@ func (r *IntegrationRepo) Register(ctx context.Context, kind, name, endpoint str
 			capabilities   = EXCLUDED.capabilities,
 			settings_schema = EXCLUDED.settings_schema,
 			status         = 'online',
-			enabled        = TRUE,
 			last_seen_at   = now(),
 			registered_at  = now(),
 			updated_at     = now()

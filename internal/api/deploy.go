@@ -349,6 +349,13 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		// another is about the same record, so the core says which.
 		lastRecord map[string]any
 	)
+	// Persist the set of phases still in progress alongside the last line. The latest
+	// line alone cannot tell a page opened mid-rollout that both rollout and retire
+	// may be active, or that a phase was explicitly closed.
+	activePhases := []string{}
+	// Keep the latest line for every phase as well. This lets a page opened mid-run
+	// restore the completed ticks without pretending it watched the earlier events.
+	phaseHistory := map[string]map[string]any{}
 	reader := bufio.NewReader(response.Body)
 	// Пауза между строками от модуля, для разработки и демонстраций.
 	//
@@ -394,6 +401,60 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// field every time a module learns to say something. What belongs here
 				// is routing, not editing: who is allowed to hear it, and where it goes.
 				relayed := relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy")
+				if progress.Phase != "" {
+					if progress.Finished {
+						kept := activePhases[:0]
+						for _, phase := range activePhases {
+							if phase != progress.Phase {
+								kept = append(kept, phase)
+							}
+						}
+						activePhases = kept
+					} else {
+						found := false
+						for _, phase := range activePhases {
+							if phase == progress.Phase {
+								found = true
+								break
+							}
+						}
+						if !found {
+							activePhases = append(activePhases, progress.Phase)
+						}
+					}
+				}
+				relayed["active_phases"] = append([]string(nil), activePhases...)
+				if progress.Phase != "" {
+					// Copy before adding phase_history below; retaining relayed itself would
+					// create a map cycle and make JSON encoding fail.
+					snapshot := make(map[string]any, len(relayed))
+					for key, value := range relayed {
+						snapshot[key] = value
+					}
+					delete(snapshot, "phase_history")
+					phaseHistory[progress.Phase] = snapshot
+				}
+				history := make([]map[string]any, 0, len(phaseHistory))
+				for _, phase := range []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"} {
+					if line, ok := phaseHistory[phase]; ok {
+						history = append(history, line)
+					}
+				}
+				// Keep unknown module-specific phases too, in their insertion-independent
+				// map order only after the standard phases.
+				for phase, line := range phaseHistory {
+					known := false
+					for _, key := range []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"} {
+						if phase == key {
+							known = true
+							break
+						}
+					}
+					if !known {
+						history = append(history, line)
+					}
+				}
+				relayed["phase_history"] = history
 				s.rememberDeployProgress(ctx, job.ID, relayed)
 				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, relayed)
 
