@@ -87,10 +87,28 @@ try {
     ? process.argv[process.argv.indexOf('--click-in') + 1]
     : null;
   if (clickIn) {
+    // Wait for the label rather than asking once.
+    //
+    // The page has drawn its shell by the time `domcontentloaded` returns, and the thing being
+    // opened arrives after it — a place list is a request. Asking once meant a run either opened
+    // the place or silently did not, and the screenshot of a place that stayed shut looks exactly
+    // like a page with nothing to show: a check that reports success by saying nothing.
+    try {
+      await page.waitForFunction(
+        (wanted) =>
+          [...document.querySelectorAll('summary')].some((el) =>
+            (el.textContent ?? '').includes(wanted),
+          ),
+        { timeout: 20000 },
+        clickIn,
+      );
+    } catch {
+      throw new Error(`nothing on the page carries "${clickIn}" to open`);
+    }
+
     const opened = await page.evaluate((wanted) => {
-      const hits = [...document.querySelectorAll('summary')]
-        .filter((el) => (el.textContent ?? '').includes(wanted));
-      if (!hits.length) return -1;
+      const hits = [...document.querySelectorAll('summary')].filter((el) =>
+        (el.textContent ?? '').includes(wanted));
       hits[0].click();
       return hits.length;
     }, clickIn);
@@ -171,17 +189,18 @@ try {
     ? process.argv[process.argv.indexOf('--click-after') + 1]
     : null;
   if (clickAfter) {
-    const before = (await page.$$('*')).length;
     const clicked = await page.evaluate((text) => {
-      const wanted = text;
       const all = [...document.querySelectorAll('button, summary, a, [role="button"]')]
-      const hits = all.filter((el) => (el.innerText || el.textContent || '').trim() === wanted);
+      const hits = all.filter((el) => (el.innerText || el.textContent || '').trim() === text);
       const el = hits[0];
       if (!el) return 0;
       el.click();
       return hits.length;
     }, clickAfter);
-    console.log(`clicked after the wait: ${clickAfter} (${clicked} matched, ${before} elements)`);
+    // No target, no result: a check that finds nothing and carries on has checked nothing, and
+    // the screenshot after it is the screenshot before it.
+    if (!clicked) throw new Error(`nothing on the page is a "${clickAfter}" to click`);
+    console.log(`clicked after the wait: ${clickAfter} (${clicked} matched)`);
     await new Promise((r) => setTimeout(r, 1500));
 
     const shotAfter = process.argv.includes('--shot-after')
