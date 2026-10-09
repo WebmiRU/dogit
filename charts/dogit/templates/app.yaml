@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dogit.fullname" . }}-app
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  replicas: 1
+  strategy:
+    # The bare repositories and SSH host keys live on the data volume; keep one writer.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "dogit.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
+  template:
+    metadata:
+      labels:
+        {{- include "dogit.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: app
+    spec:
+      containers:
+        - name: app
+          image: {{ printf "%s:%s" .Values.image.app.repository .Values.image.app.tag | quote }}
+          imagePullPolicy: {{ .Values.image.app.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: ssh
+              containerPort: 22
+          env:
+            - name: DOGIT_ENV
+              value: {{ .Values.app.environment | quote }}
+            - name: DOGIT_LOG_LEVEL
+              value: {{ .Values.app.logLevel | quote }}
+            - name: DOGIT_HOOK_LOG_LEVEL
+              value: {{ .Values.app.hookLogLevel | quote }}
+            - name: DOGIT_HTTP_ADDR
+              value: ":8080"
+            - name: DOGIT_DATA_DIR
+              value: /data
+            - name: DOGIT_REPO_DIR
+              value: /data/repos
+            - name: DOGIT_ARTIFACT_DIR
+              value: /data/artifacts
+            - name: DOGIT_HOOK_BINARY
+              value: /usr/local/bin/dogit-hook
+            - name: DOGIT_GIT_BINARY
+              value: /usr/bin/git
+            - name: DOGIT_PUBLIC_HOST
+              value: {{ include "dogit.publicHost" . | quote }}
+            - name: DOGIT_SSH_HOST
+              value: {{ default (include "dogit.publicHost" .) .Values.app.sshHost | quote }}
+            - name: DOGIT_SSH_PORT
+              value: {{ .Values.ssh.service.port | quote }}
+            - name: DOGIT_ALLOWED_ORIGINS
+              value: {{ include "dogit.allowedOrigins" . | quote }}
+            - name: DOGIT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dogit.appSecretName" . }}
+                  key: {{ .Values.app.secretKeyKey | quote }}
+            {{- include "dogit.databaseEnv" . | nindent 12 }}
+            {{- include "dogit.objectStorageEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /-/health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          {{- if .Values.app.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "dogit.fullname" . }}-app-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dogit.fullname" . }}-app
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dogit.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: ssh
+      port: 22
+      targetPort: ssh
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dogit.fullname" . }}-ssh
+  labels:
+    {{- include "dogit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+  {{- with .Values.ssh.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.ssh.service.type }}
+  {{- if .Values.ssh.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.ssh.service.loadBalancerIP | quote }}
+  {{- end }}
+  {{- if .Values.ssh.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.ssh.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  externalTrafficPolicy: {{ .Values.ssh.service.externalTrafficPolicy }}
+  selector:
+    {{- include "dogit.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+  ports:
+    - name: ssh
+      port: {{ .Values.ssh.service.port }}
+      targetPort: ssh
+      protocol: TCP
+      {{- if and (eq .Values.ssh.service.type "NodePort") .Values.ssh.service.nodePort }}
+      nodePort: {{ .Values.ssh.service.nodePort }}
+      {{- end }}
