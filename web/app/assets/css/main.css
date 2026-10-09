@@ -8,16 +8,12 @@
   --text-muted: #a0a0a8;
   --accent: #b9b9c1;
   --accent-soft: rgba(185, 185, 193, 0.12);
-  /* A light, transparent yellow: for marking a row somebody asked to see. Blue is
-     wrong for it here because the rows are already on a blue-tinted surface, and a
-     highlight that is a shade of the background highlights nothing. */
+  /* A light, transparent yellow marks a row somebody explicitly asked to see. */
   --yellow-soft: rgba(210, 153, 34, 0.16);
   --green: #3fb950;
   --red: #f85149;
   --yellow: #d29922;
-  /* The blue a badge uses for "Available", and the blue an informational notice is
-     drawn in, so that a thing which is merely the case and a thing that is settled both
-     read as calm rather than as two different accents. */
+  /* Informational states use the same quiet neutral accent as links and controls. */
   --info: #c2c2c9;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
