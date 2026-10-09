@@ -1,0 +1,54 @@
+name: Helm chart
+
+on:
+  push:
+    paths:
+      - "charts/dogit/**"
+      - "scripts/helm-install.sh"
+      - ".github/workflows/helm-chart.yml"
+  pull_request:
+    paths:
+      - "charts/dogit/**"
+      - "scripts/helm-install.sh"
+      - ".github/workflows/helm-chart.yml"
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Check installer syntax
+        run: bash -n scripts/helm-install.sh
+      - name: Lint chart
+        run: helm lint charts/dogit
+      - name: Render default install
+        run: helm template dogit charts/dogit --namespace dogit
+      - name: Render TLS with ingress-nginx
+        run: >-
+          helm template dogit charts/dogit --namespace dogit
+          --set ingress.enabled=true
+          --set ingress.className=nginx
+          --set-string ingress.host=git.example.org
+          --set ingress.tls.enabled=true
+          --set certManager.enabled=true
+          --set-string certManager.email=admin@example.org
+      - name: Render TLS with Traefik
+        run: >-
+          helm template dogit charts/dogit --namespace dogit
+          --set ingress.enabled=true
+          --set ingress.className=traefik
+          --set-string ingress.host=git.example.org
+          --set ingress.tls.enabled=true
+          --set certManager.enabled=true
+          --set-string certManager.email=admin@example.org
+      - name: Render external database mode
+        run: >-
+          helm template dogit charts/dogit --namespace dogit
+          --set postgresql.enabled=false
+          --set-string database.existingSecret=external-postgresql
