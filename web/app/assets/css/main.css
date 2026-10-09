@@ -1843,3 +1843,18 @@ select:focus-visible {
 .project-page-head { margin:10px 8px 0; padding:22px 20px 24px; border:1px solid var(--border); border-radius:10px 10px 0 0; background:linear-gradient(180deg,#1b1c20,#151619); }
 .project-page-head + .repo-tabs { margin:0 8px 18px; padding:0 8px; border:1px solid var(--border); border-top:0; border-radius:0 0 9px 9px; background:#17181b; }
 @media(max-width:700px){.project-index-head{padding:18px 16px}.project-index-tabs{padding:0 10px}.page-wide{padding-left:12px;padding-right:12px}.project-page-head{margin-left:0;margin-right:0;padding:16px}.project-page-head + .repo-tabs{margin-left:0;margin-right:0}}
+
+
+/* Project table metadata and row actions. */
+.project-index .table th:last-child,.project-index .table td:last-child { width:48px; text-align:right; }
+.places-tags { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.places-tags .badge { border-radius:3px; padding:3px 8px; font-size:11px; }
+.places-access-cell { white-space:nowrap; color:var(--text-muted); font-size:12px; }
+.places-access-value { display:inline-block; padding:4px 8px; border:1px solid var(--border); border-radius:3px; background:#141518; }
+.places-actions-cell { position:relative; }
+.places-row-menu { position:relative; display:inline-block; }
+.places-row-menu summary { list-style:none; display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border:1px solid transparent; border-radius:5px; color:var(--text-muted); cursor:pointer; font-size:19px; }
+.places-row-menu summary::-webkit-details-marker { display:none; }
+.places-row-menu summary:hover,.places-row-menu[open] summary { border-color:var(--border-strong); background:#222328; color:var(--text); }
+.places-row-menu-popover { position:absolute; z-index:15; top:calc(100% + 4px); right:0; min-width:160px; padding:5px; border:1px solid var(--border-strong); border-radius:7px; background:var(--bg-elevated); box-shadow:0 10px 28px rgba(0,0,0,.35); }
+.places-row-menu-popover .menu-item { white-space:nowrap; }

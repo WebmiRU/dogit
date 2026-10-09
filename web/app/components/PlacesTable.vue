@@ -41,6 +41,8 @@ const error = ref('')
 
 /** The word being typed, kept apart from what has been searched for yet. */
 const typing = ref('')
+const sortBy = ref('name')
+const sortedPlaces = computed(() => [...places.value].sort((a, b) => sortBy.value === 'path' ? a.path.localeCompare(b.path) : sortBy.value === 'visibility' ? (a.visibility ?? '').localeCompare(b.visibility ?? '') : (a.name || a.path).localeCompare(b.name || b.path)))
 
 /** What is asked of the server, read out of the address bar. */
 const filters = computed<Required<PlaceFilters>>(() => ({
@@ -144,6 +146,12 @@ const visibilities = [
         <option v-for="one in kinds" :key="one.value" :value="one.value">{{ one.label }}</option>
       </select>
 
+      <select v-model="sortBy" aria-label="Sort projects">
+        <option value="name">Sort: name</option>
+        <option value="path">Sort: path</option>
+        <option value="visibility">Sort: visibility</option>
+      </select>
+
       <select
         :value="filters.visibility"
         aria-label="Visibility"
@@ -170,14 +178,14 @@ const visibilities = [
       <table class="table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Kind</th>
-            <th>Visibility</th>
-            <th>Your access</th>
+            <th>Project</th>
+            <th>Tags</th>
+            <th>Access</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="place in places" :key="place.id">
+          <tr v-for="place in sortedPlaces" :key="place.id">
             <td>
               <div class="place-name-line">
                 <span class="place-avatar" :class="place.kind === 'group' ? 'is-group' : 'is-project'">
@@ -191,20 +199,24 @@ const visibilities = [
               </div>
             </td>
             <td>
-              <span class="badge" :class="place.kind === 'group' ? 'badge-blue' : 'badge-neutral'">
-                {{ place.kind }}
-              </span>
-              <div v-if="place.kind === 'group' && place.project_count !== undefined" class="muted small">
-                {{ place.project_count }} {{ place.project_count === 1 ? 'project' : 'projects' }}
+              <div class="places-tags">
+                <span class="badge badge-neutral">{{ place.kind }}</span>
+                <span v-if="place.kind === 'project' && place.visibility" class="badge" :class="'badge-' + place.visibility">{{ place.visibility }}</span>
+                <span v-if="place.access_name" class="badge badge-neutral">{{ place.access_name }}</span>
+                <span v-if="place.kind === 'group' && place.project_count !== undefined" class="muted small">{{ place.project_count }} projects</span>
               </div>
             </td>
-            <td>
-              <span v-if="place.kind === 'project'" class="badge" :class="`badge-${place.visibility}`">
-                {{ place.visibility }}
-              </span>
-              <span v-else class="muted small">inherited by its projects</span>
+            <td class="places-access-cell"><span class="places-access-value">{{ place.access_name || '—' }}</span></td>
+            <td class="places-actions-cell">
+              <details class="places-row-menu">
+                <summary aria-label="Row actions">···</summary>
+                <div class="places-row-menu-popover">
+                  <NuxtLink :to="placeHref(place)" class="menu-item">Open {{ place.kind }}</NuxtLink>
+                  <NuxtLink v-if="place.kind === 'project'" :to="'/p/' + place.path + '/-/settings'" class="menu-item">Settings</NuxtLink>
+                  <NuxtLink v-else :to="'/groups/' + place.id" class="menu-item">Group details</NuxtLink>
+                </div>
+              </details>
             </td>
-            <td class="muted small">{{ place.access_name }}</td>
           </tr>
         </tbody>
       </table>
