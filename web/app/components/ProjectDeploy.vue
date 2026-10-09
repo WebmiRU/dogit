@@ -172,7 +172,7 @@ onMounted(async () => {
 
         </div>
 
-      <table class="table deploy-page-table">
+      <table class="admin-table deploy-page-table">
         <thead>
           <tr>
             <th>Module</th>

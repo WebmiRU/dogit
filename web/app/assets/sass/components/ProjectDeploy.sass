@@ -6,23 +6,11 @@
 // The element attribute that made this scoped is gone with it: global styles are
 // selected by name, so a name used here has to mean one thing across the site.
 
-.table
-  width: 100%
-  border-collapse: collapse
-.deploy-page-table th
-  text-align: left
-  padding: 10px 12px
-  border-bottom: 1px solid var(--border)
-  vertical-align: top
+// Use the shared admin-table spacing and typography. Only the cell alignment is
+// specific to this module list; don't reintroduce a second table style here.
+.deploy-page-table th,
 .deploy-page-table td
-  text-align: left
-  padding: 10px 12px
-  border-bottom: 1px solid var(--border)
-  vertical-align: top
-.deploy-page-table th
-  font-size: 12px
-  font-weight: 600
-  color: var(--text-muted)
+  vertical-align: middle
 .module-name
   font-weight: 600
 .deploy-page-actions-col
