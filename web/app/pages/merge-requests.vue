@@ -97,7 +97,7 @@ watch(query, () => {
     void load()
   }, 250)
 })
-watch(() => route.query.state, () => void load())
+
 onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer) })
 </script>
 
@@ -169,7 +169,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer) })
               <span v-if="mr.is_draft" class="mr-draft-tag">Draft</span>{{ mr.title }}
             </NuxtLink>
             <div class="mr-result-meta"><span>!{{ mr.iid }}</span><span aria-hidden="true">·</span><span>created {{ timeAgo(mr.created_at) }} by {{ mr.author_name || mr.author_username }}</span><span aria-hidden="true">·</span><code>{{ mr.project?.path }}</code></div>
-            <div class="mr-result-meta"><span class="mr-branch-pair"><code>{{ mr.source_branch }}</code><span>→</span><code>{{ mr.target_branch }}</code></span></div>
+
           </div>
           <span class="mr-row-status" :class="'status-' + mr.state" :title="stateLabel(mr)" :aria-label="stateLabel(mr)">
             <svg v-if="mr.state !== 'closed'" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m7.5 12.2 3 3 6-6.3" /></svg>

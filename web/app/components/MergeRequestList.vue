@@ -208,10 +208,7 @@ onBeforeUnmount(() => {
             <div class="mr-result-meta">
               <span>!{{ mr.iid }}</span><span aria-hidden="true">·</span>
               <span>created {{ timeAgo(mr.created_at) }} by {{ mr.author_name || mr.author_username }}</span>
-              <template v-if="mr.source_branch && mr.target_branch">
-                <span aria-hidden="true">·</span>
-                <span class="mr-branch-pair"><code>{{ mr.source_branch }}</code><span>→</span><code>{{ mr.target_branch }}</code></span>
-              </template>
+
             </div>
           </div>
           <span class="mr-row-status" :class="'status-' + mr.state" :title="stateLabel(mr)" :aria-label="stateLabel(mr)">
