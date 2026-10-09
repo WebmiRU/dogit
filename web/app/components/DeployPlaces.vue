@@ -54,7 +54,7 @@ onMounted(async () => {
 
 <template>
   <section class="places">
-    <div class="block-head">
+    <div class="places-block-head">
       <h3 class="block-title">Where this deploys</h3>
       <span class="muted small">
         written in {{ props.branch }}'s .dogit-ci.yml, shown here to be read
@@ -100,71 +100,3 @@ onMounted(async () => {
   </section>
 </template>
 
-<style scoped>
-/* Inset like the brake above it and the module table below it, because all three are
-   inside one card and only this one was touching the card's edge — the heading and
-   its sentence sat a few pixels from the border while everything around them sat a
-   comfortable line inside. */
-.places {
-  margin-top: 1rem;
-  padding: 12px;
-}
-
-/* Its own heading rules.
- *
- * `.block-head` is written out again here rather than shared. The other copy of it is
- * scoped to the component that owns it, and a scoped rule reaches nothing outside that
- * component — so this heading was borrowing a name it did not have a definition for,
- * and with no definition at all the line of explanation ran on as one long sentence and
- * sat against the title instead of under it.
- */
-.block-head {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border, #e2e2e6);
-}
-
-.block-title {
-  margin: 0;
-  font-size: 13px;
-}
-
-/* On its own line under the title rather than beside it, because it is a sentence and
- * a sentence beside a heading reads as part of the heading. */
-.block-head .small {
-  flex: 1 1 100%;
-  line-height: 1.4;
-}
-
-.places-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th,
-td {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-th {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.place-name {
-  font-weight: 600;
-  margin-right: 6px;
-}
-
-.small {
-  font-size: 12px;
-}
-</style>

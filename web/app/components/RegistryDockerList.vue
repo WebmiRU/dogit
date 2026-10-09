@@ -183,7 +183,7 @@ function labelOf(reg: DockerRegistry): string {
         for a public one.
       </div>
 
-      <table v-else class="table">
+      <table v-else class="images-table">
         <thead>
           <tr>
             <th>Registry</th>
@@ -210,7 +210,7 @@ function labelOf(reg: DockerRegistry): string {
               <NuxtLink v-else class="name" :to="`/registry/docker/${reg.id}`">
                 {{ labelOf(reg) }}
               </NuxtLink>
-              <span v-if="reg.note" class="note" :title="reg.note">{{ reg.note }}</span>
+              <span v-if="reg.note" class="images-note" :title="reg.note">{{ reg.note }}</span>
             </td>
             <td>
               <span
@@ -245,7 +245,7 @@ function labelOf(reg: DockerRegistry): string {
         </tbody>
       </table>
 
-      <div class="pager">
+      <div class="images-pager">
         <span class="muted small">{{ range }}</span>
         <div class="spacer" />
         <button class="btn btn-small" type="button" :disabled="page <= 1" @click="go(page - 1)">
@@ -260,119 +260,3 @@ function labelOf(reg: DockerRegistry): string {
   </div>
 </template>
 
-<style scoped>
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.table th {
-  text-align: left;
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
-}
-
-.table td {
-  height: 1px;
-  padding: 10px 12px;
-  vertical-align: middle;
-  border-bottom: 1px solid var(--border);
-}
-
- .table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.table tbody tr:hover td {
-  background: rgba(185, 185, 193, 0.045);
-}
-
-.table .name {
-  font-weight: 600;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.table .name:hover {
-  text-decoration: underline;
-}
-
-/* The note goes under the name rather than into a column of its own: it is free text for
-   the administrator, so it is as long or as short as it happens to be, and a column sized
-   to the longest one would be sized by whoever typed the longest. */
-.note {
-  display: block;
-  max-width: 320px;
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.chip {
-  display: inline-block;
-  margin-right: 4px;
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg);
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-/* Where the row came from. A module's registry is filled rather than outlined, because it
-   is the one kind a reader cannot change here — the badge has to say so at a glance and in
-   the same column, not only when the mouse is over it. */
-.source {
-  display: inline-block;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.source-module {
-  background: var(--accent-soft);
-  border-color: rgba(185, 185, 193, 0.3);
-  color: var(--text);
-}
-
-.source-written {
-  color: var(--text-muted);
-}
-
-.row-actions {
-  text-align: right;
-  white-space: nowrap;
-}
-
-.muted {
-  color: var(--text-muted);
-}
-
-.small {
-  font-size: 12px;
-}
-
-.pager {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.pager .spacer {
-  flex: 1;
-}
-</style>

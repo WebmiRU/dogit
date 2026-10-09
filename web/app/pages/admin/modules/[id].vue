@@ -170,7 +170,7 @@ const storageFraction = computed(() => {
         <button
           v-for="name in tabNames"
           :key="name"
-          class="tab"
+          class="mod-tab"
           :class="{ active: tab === name }"
           type="button"
           @click="setTab(name)"
@@ -243,7 +243,7 @@ const storageFraction = computed(() => {
           </dd>
         </dl>
 
-        <h2 class="section-title">Reported</h2>
+        <h2 class="mod-section-title">Reported</h2>
         <ModuleStats :stats="stats" :series="series" />
       </section>
 
@@ -327,54 +327,3 @@ const storageFraction = computed(() => {
   </div>
 </template>
 
-<style scoped>
-.tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--border);
-  margin: 18px 0;
-}
-
-.tab {
-  background: none;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  color: var(--text-muted);
-  padding: 8px 14px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
-
-.facts {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 8px 16px;
-  margin: 0 0 8px;
-  font-size: 13px;
-}
-
-.facts dt {
-  color: var(--text-muted);
-}
-
-.facts dd {
-  margin: 0;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.section-title {
-  margin: 22px 0 10px;
-}
-
-.small {
-  font-size: 12px;
-}
-</style>

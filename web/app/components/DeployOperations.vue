@@ -759,14 +759,14 @@ watchEvents({
       :class="edgeOf(operation)"
     >
       <div class="card-body">
-        <div class="block-head">
+        <div class="deploy-block-head">
           <span class="badge" :class="tone[operation.status] ?? 'badge-neutral'">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
-          <span class="spacer" />
+          <span class="deploy-spacer" />
 
           <span v-if="when(operation)" class="muted small">{{ when(operation) }}</span>
           <span v-if="took(operation)" class="muted small mono">took {{ took(operation) }}</span>
@@ -823,14 +823,14 @@ watchEvents({
       :class="edgeOf(operation)"
     >
       <div class="card-body">
-        <div class="block-head">
+        <div class="deploy-block-head">
           <span class="badge" :class="tone[operation.status] ?? 'badge-neutral'">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
-          <span class="spacer" />
+          <span class="deploy-spacer" />
 
           <span v-if="when(operation)" class="muted small">{{ when(operation) }}</span>
           <span v-if="took(operation)" class="muted small mono">took {{ took(operation) }}</span>
@@ -854,154 +854,3 @@ watchEvents({
   </div>
 </template>
 
-<style scoped>
-/* The gap that pushes everything after it to the right end of a card's head.
- *
- * It was the one class in this row that did not exist: the head is a flex row, but with nothing
- * in it that grows, the row is exactly as wide as its contents — so the cross, which belongs in
- * the corner, sat pressed against the place chip instead. A missing class is invisible in a
- * screenshot and obvious the moment a control ends up in the wrong place. */
-.spacer {
-  flex: 1 1 auto;
-}
-
-.operations {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* Its own copy, because a scoped rule reaches nothing outside the component that writes it.
- * Borrowing the name from the card this one replaces got the line of badges and names to run
- * together with no gap at all — "deploylocal-k3s/dogit-dev" — which is what a heading with no
- * definition looks like. */
-.block-head {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border, #e2e2e6);
-}
-
-/* The log of an operation that is over, in the same shape the deploy log is drawn in elsewhere:
-   one line each, errors in the error colour. A time beside each, because that is what makes a gap
-   visible to whoever is reading rather than only to whoever wrote the page. */
-.operation-log {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.operation-log li {
-  display: flex;
-  gap: 10px;
-  padding: 1px 0;
-  word-break: break-word;
-}
-
-.operation-log li.err {
-  color: var(--danger, #d9534f);
-}
-
-.operation-log .mono {
-  flex: 0 0 auto;
-  opacity: 0.65;
-}
-
-/* The place, as a chip rather than as text among text. It repeats on every card of a project with
-   one place, so it is not news — but on a page whose cards are the unit, the place is the question
-   a reader answers first, and a line that mixes it in with the step name makes it the second. */
-/* The reader's own way out of a card. Small, quiet, and in the corner: it is a control for
-   tidying the page, not a statement about the deployment, so it wears no colour of its own and
-   does not take the eye before the badge has been read. */
-.put-away {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid var(--border-strong, var(--border));
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--text-muted);
-  font-size: 17px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0.85;
-}
-
-.put-away:hover,
-.put-away:focus-visible {
-  opacity: 1;
-  color: var(--text);
-  background: var(--bg-inset);
-  border-color: var(--text-muted);
-}
-
-/* Why a deployment did not go well, above the log rather than under it. Not an alert: an alert
-   is a fault, and a refusal is somebody declining to do a thing — the place was busy, the
-   deployment was switched off. It reads as a verdict with the reason attached. */
-.why {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-left: 3px solid var(--border-strong, var(--border));
-  border-radius: 0 3px 3px 0;
-  background: var(--bg-inset);
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.why.bad {
-  border-left-color: var(--red);
-}
-
-.operation-log-wrap {
-  margin-top: 4px;
-}
-
-.place-chip {
-  font-size: 12px;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg);
-}
-
-/* The card of a deployment under way, marked by a line down its edge.
-   Yellow, and one rule for everything that says so — the edge and the badge and the word beside
-   them. They are three renderings of one fact, and a page where the edge is one colour and the
-   badge another gives a reader two answers to "is it going well" and leaves them to pick.
-
-   Yellow rather than green, and this is not a preference. On this page green means a deployment
-   ended well, and a rollout that is still going has not ended at all: an edge wearing success
-   for the two minutes everybody is waiting claims the answer before there is one. Not red
-   either — nothing has failed, and a red edge is a thing to go and look at.
-
-   The accent colour it used to wear said nothing in particular. It read as "this is the selected
-   one" or "this is the current page", neither of which is a thing anybody asked about. */
-.operation.live {
-  border-left: 3px solid var(--yellow);
-}
-
-/* Waiting. The accent blue, which is the colour the steps already use for a step not yet
-   reached, and deliberately not grey: "has not come to it yet" is a known state and not an
-   absence, and grey reads as this page having not been told. */
-.operation.queued {
-  border-left: 3px solid var(--accent);
-}
-
-/* Declined or skipped. No edge of its own — nothing happened, and there is nothing here to
-   draw attention to. What is on the card is the sentence the module wrote. */
-.operation.dismissed {
-  border-left: 3px solid var(--border-strong, var(--border));
-}
-
-.operation.live .badge {
-  font-weight: 600;
-}
-</style>

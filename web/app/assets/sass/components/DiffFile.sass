@@ -1,0 +1,54 @@
+// components/DiffFile, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.diff-file + .diff-file
+  margin-top: 16px
+  border-top: 1px solid var(--border)
+  padding-top: 12px
+.diff-body
+  margin-top: 8px
+  border: 1px solid var(--border)
+  border-radius: 6px
+  background: var(--bg-code, #0d1117)
+  overflow-x: auto
+  font: 12px/1.6 var(--mono)
+.diff-line
+  display: flex
+  white-space: pre
+  min-width: max-content
+.ln
+  flex: 0 0 48px
+  text-align: right
+  padding-right: 10px
+  color: #6e7681
+  user-select: none
+.lc
+  flex: 1
+  padding-right: 12px
+.k-add
+  background: rgba(63, 185, 80, 0.14)
+.k-add .lc
+  color: #aff5b4
+.k-del
+  background: rgba(248, 81, 73, 0.12)
+.k-del .lc
+  color: #ffdcd7
+.k-hunk
+  background: rgba(110, 118, 129, 0.15)
+.k-hunk .lc
+  color: #8b949e
+.k-context .lc
+  color: #c9d1d9
+.skip
+  color: #6e7681
+  font-style: italic
+.btn-ghost
+  border: 0
+  background: transparent
+  padding: 0 4px
+.add
+  color: #3fb950
+.del
+  color: #f85149

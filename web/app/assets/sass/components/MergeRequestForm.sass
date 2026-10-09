@@ -1,0 +1,418 @@
+// components/MergeRequestForm, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.mr-create
+  margin: 0 0 20px
+.mr-open
+  display: inline-flex
+  align-items: center
+  gap: 8px
+  min-height: 36px
+  padding: 7px 12px
+  border-radius: 5px
+  font-size: 13px
+  font-weight: 600
+.mr-open-icon
+  font-size: 17px
+  line-height: 1
+  font-weight: 400
+.mr-panel
+  width: 100%
+  max-width: 1240px
+  margin-top: 14px
+  overflow: visible
+  border: 0
+  border-radius: 0
+  background: transparent
+  box-shadow: none
+.mr-heading
+  padding: 7px 0 20px
+  border-bottom: 1px solid var(--border)
+  background: transparent
+.mr-breadcrumb
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 8px
+  margin-bottom: 15px
+  color: var(--text-muted)
+  font-size: 12px
+.mr-breadcrumb a
+  color: var(--text-muted)
+.mr-breadcrumb a:hover
+  color: var(--text)
+.mr-breadcrumb > span:last-child
+  color: var(--text)
+.mr-heading-main
+  display: flex
+  align-items: center
+  gap: 13px
+.mr-heading-icon
+  display: grid
+  place-items: center
+  flex: 0 0 42px
+  width: 42px
+  height: 42px
+  border: 1px solid var(--border-strong)
+  border-radius: 7px
+  background: #22242a
+  color: #d5d9e2
+  font-size: 23px
+.mr-heading h2
+  margin: 0 0 4px
+  color: var(--text)
+  font-size: 24px
+  font-weight: 650
+  letter-spacing: -.45px
+  line-height: 1.25
+.mr-heading p
+  margin: 0
+  color: var(--text-muted)
+  font-size: 13px
+  line-height: 1.5
+.mr-section-title p
+  margin: 0
+  color: var(--text-muted)
+  font-size: 13px
+  line-height: 1.5
+.mr-form
+  padding: 20px 0 0
+.mr-branch-grid
+  display: grid
+  grid-template-columns: minmax(0,1fr) 32px minmax(0,1fr)
+  align-items: stretch
+  gap: 10px
+.mr-branch-card
+  min-width: 0
+  padding: 16px 17px 13px
+  border: 1px solid var(--border)
+  border-radius: 6px
+  background: var(--bg-elevated)
+.target-card
+  background: var(--bg-elevated)
+.mr-branch-heading
+  display: flex
+  align-items: center
+  gap: 10px
+  margin-bottom: 15px
+.mr-branch-symbol
+  display: grid
+  place-items: center
+  flex: 0 0 30px
+  width: 30px
+  height: 30px
+  border: 1px solid var(--border)
+  border-radius: 6px
+  background: #282a30
+  color: #d4d6dc
+  font-size: 16px
+  font-weight: 600
+.mr-branch-heading h3
+  margin: 0 0 3px
+  color: var(--text)
+  font-size: 13px
+  font-weight: 650
+.mr-branch-heading p
+  margin: 0
+  color: var(--text-muted)
+  font-size: 12px
+  line-height: 1.4
+.mr-branch-card label
+  display: block
+  margin-bottom: 6px
+  color: var(--text-muted)
+  font-size: 12px
+  font-weight: 600
+.mr-branch-card select
+  display: block
+  width: 100%
+  min-height: 39px
+  padding: 8px 32px 8px 10px
+  border: 1px solid var(--border-strong)
+  border-radius: 5px
+  background: var(--bg-inset)
+  color: var(--text)
+  font-family: var(--mono)
+  font-size: 12px
+.mr-branch-card select:focus-visible
+  outline: 2px solid var(--accent)
+  outline-offset: 1px
+.mr-details input:focus-visible
+  outline: 2px solid var(--accent)
+  outline-offset: 1px
+.mr-details textarea:focus-visible
+  outline: 2px solid var(--accent)
+  outline-offset: 1px
+.mr-branch-foot
+  display: flex
+  align-items: center
+  gap: 7px
+  min-height: 18px
+  margin-top: 10px
+  overflow: hidden
+  color: var(--text-muted)
+  font-family: var(--mono)
+  font-size: 11px
+.mr-branch-foot > span:nth-child(2)
+  overflow: hidden
+  text-overflow: ellipsis
+  white-space: nowrap
+.mr-dot
+  flex: 0 0 7px
+  width: 7px
+  height: 7px
+  border-radius: 50%
+.source-dot
+  background: #78a8e8
+.target-dot
+  background: #8b919d
+.mr-default
+  margin-left: auto
+  padding: 2px 6px
+  border: 1px solid var(--border-strong)
+  border-radius: 4px
+  color: var(--text-muted)
+  font-family: inherit
+  font-size: 10px
+.mr-direction
+  display: grid
+  place-items: center
+  color: var(--text-muted)
+  font-size: 22px
+.mr-notice
+  margin-top: 12px
+  padding: 11px 13px
+  border: 1px solid var(--border)
+  border-radius: 5px
+  background: var(--bg-elevated)
+  color: var(--text-muted)
+  font-size: 13px
+.mr-divider
+  height: 1px
+  margin: 22px 0 21px
+  background: var(--border)
+.mr-details-layout
+  display: grid
+  grid-template-columns: minmax(0,2fr) minmax(220px,.85fr)
+  align-items: start
+  gap: 26px
+.mr-details
+  min-width: 0
+.mr-options
+  min-width: 0
+.mr-section-title
+  margin-bottom: 17px
+.mr-section-title h3
+  margin: 0 0 4px
+  color: var(--text)
+  font-size: 16px
+  font-weight: 650
+.mr-details .field
+  margin-bottom: 19px
+.mr-details label
+  display: block
+  margin-bottom: 7px
+  color: var(--text)
+  font-size: 13px
+  font-weight: 600
+.mr-details input:not([type='checkbox'])
+  display: block
+  width: 100%
+  box-sizing: border-box
+  border: 1px solid var(--border-strong)
+  border-radius: 5px
+  background: var(--bg-inset)
+  color: var(--text)
+  font: inherit
+  font-size: 13px
+.mr-details textarea
+  display: block
+  width: 100%
+  box-sizing: border-box
+  border: 1px solid var(--border-strong)
+  border-radius: 5px
+  background: var(--bg-inset)
+  color: var(--text)
+  font: inherit
+  font-size: 13px
+.mr-details input:not([type='checkbox'])
+  min-height: 39px
+  padding: 8px 10px
+.mr-details textarea
+  min-height: 190px
+  padding: 10px
+  resize: vertical
+  line-height: 1.55
+.mr-details input::placeholder
+  color: var(--text-muted)
+  opacity: .85
+.mr-details textarea::placeholder
+  color: var(--text-muted)
+  opacity: .85
+.required
+  color: #f28b82
+.optional
+  margin-left: 5px
+  color: var(--text-muted)
+  font-size: 11px
+  font-weight: 400
+.mr-hint
+  margin: 6px 0 0
+  color: var(--text-muted)
+  font-size: 11px
+.mr-options
+  padding: 16px
+  border: 1px solid var(--border)
+  border-radius: 6px
+  background: var(--bg-elevated)
+.mr-options .mr-section-title
+  margin-bottom: 17px
+.mr-squash
+  display: flex
+  align-items: flex-start
+  gap: 10px
+  margin: 0
+  cursor: pointer
+.mr-squash input
+  position: absolute
+  width: 1px
+  height: 1px
+  margin: 0
+  opacity: 0
+.mr-check-custom
+  display: grid
+  place-items: center
+  flex: 0 0 16px
+  width: 16px
+  height: 16px
+  margin-top: 2px
+  border: 1px solid var(--border-strong)
+  border-radius: 3px
+  background: var(--bg-inset)
+.mr-squash input:checked + .mr-check-custom
+  border-color: var(--button-primary-hover)
+  background: var(--button-primary-hover)
+.mr-squash input:checked + .mr-check-custom::after
+  content: '✓'
+  color: #fff
+  font-size: 11px
+  font-weight: 800
+.mr-squash input:focus-visible + .mr-check-custom
+  outline: 2px solid var(--accent)
+  outline-offset: 2px
+.mr-squash-copy
+  display: flex
+  flex-direction: column
+  gap: 5px
+  min-width: 0
+.mr-squash-copy strong
+  color: var(--text)
+  font-size: 13px
+  font-weight: 600
+.mr-squash-copy small
+  color: var(--text-muted)
+  font-size: 12px
+  font-weight: 400
+  line-height: 1.5
+.mr-actions
+  display: flex
+  align-items: center
+  justify-content: space-between
+  gap: 16px
+  margin: 22px 0 0
+  padding: 16px 0
+  border-top: 1px solid var(--border)
+  background: transparent
+.mr-action-note
+  display: flex
+  align-items: center
+  gap: 8px
+  color: var(--text-muted)
+  font-size: 12px
+  line-height: 1.4
+.mr-action-lock
+  color: var(--text-muted)
+  font-size: 16px
+.mr-action-buttons
+  display: flex
+  align-items: center
+  justify-content: flex-end
+  gap: 8px
+.mr-action-buttons .btn
+  min-height: 36px
+  padding: 7px 13px
+  border-radius: 5px
+  font-size: 13px
+.mr-action-buttons .mr-submit
+  gap: 8px
+  border-color: var(--button-primary-border)
+  background: var(--button-primary-bg)
+  color: var(--button-primary-text)
+  font-weight: 600
+.mr-action-buttons .mr-submit:hover:not(:disabled)
+  border-color: var(--button-primary-hover)
+  background: var(--button-primary-hover)
+  color: var(--button-primary-text)
+.mr-submit-arrow
+  font-size: 15px
+.mr-error
+  display: flex
+  align-items: flex-start
+  gap: 10px
+  margin: 16px 0 0
+  padding: 12px 14px
+  border-radius: 5px
+.mr-error-icon
+  display: grid
+  place-items: center
+  flex: 0 0 20px
+  width: 20px
+  height: 20px
+  border: 1px solid currentColor
+  border-radius: 50%
+  font-size: 12px
+  font-weight: 800
+.mr-error strong
+  display: block
+  margin-bottom: 2px
+.mr-error p
+  margin: 0
+@media(max-width:850px)
+  .mr-details-layout
+    grid-template-columns: minmax(0,1fr)
+    gap: 16px
+  .mr-options
+    grid-row: auto
+@media(max-width:700px)
+  .mr-heading h2
+    font-size: 21px
+  .mr-branch-grid
+    grid-template-columns: minmax(0,1fr)
+    gap: 8px
+  .mr-direction
+    height: 20px
+    transform: rotate(90deg)
+  .mr-branch-card
+    padding: 14px
+  .mr-details textarea
+    min-height: 155px
+  .mr-actions
+    align-items: stretch
+    flex-direction: column
+  .mr-action-buttons
+    width: 100%
+  .mr-action-buttons .btn
+    flex: 1
+    justify-content: center
+@media(prefers-reduced-motion:no-preference)
+  .mr-panel
+    animation: mr-enter 150ms ease-out
+  @keyframes mr-enter
+    from
+      opacity: 0
+      transform: translateY(-3px)
+    to
+      opacity: 1
+      transform: translateY(0)

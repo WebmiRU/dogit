@@ -89,7 +89,7 @@ watch([groupId, tab], load)
         <button
           v-for="one in tabs"
           :key="one.match"
-          class="tab"
+          class="group-tab"
           :class="{ active: tab === one.match }"
           type="button"
           @click="setTab(one.match)"
@@ -131,19 +131,3 @@ watch([groupId, tab], load)
   </div>
 </template>
 
-<style scoped>
-.tab {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font: inherit;
-  padding: 10px 14px;
-}
-
-.tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
-</style>

@@ -374,7 +374,7 @@ watch(() => props.projectPath, () => load())
         <span class="search-icon" aria-hidden="true">⌕</span>
         <input
         v-model="typing"
-        class="filter"
+        class="pipelines-filter"
         type="search"
         placeholder="Search runs, branches and commits"
         aria-label="Search runs"
@@ -569,7 +569,7 @@ watch(() => props.projectPath, () => load())
     </div>
     </div>
 
-    <div v-if="total > 0" class="pager">
+    <div v-if="total > 0" class="pipelines-pager">
       <span class="muted small">{{ range }}</span>
       <div class="spacer" />
       <button

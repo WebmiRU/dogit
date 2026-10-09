@@ -1,3 +1,53 @@
-// Temporary compatibility import while component styles are migrated.
-@import '../css/main.css'
-@import 'merge-requests'
+// Every page and component's styles live here as partials, and this file is the
+// only thing that has to know about all of them.
+//
+// The old hand-written stylesheet, kept while the last of the legacy rules are being
+// retired, comes first so that a rule below can rely on being later than it. It is a .scss
+// and not a .css because Sass inlines the former and merely points a CSS @import at the
+// latter: as two separate files their order was the browser's to decide, and in
+// development it decided the other way, so a component's own table padding lost to the
+// legacy .table td that was meant to sit underneath it.
+@import '../css/main.scss'
+
+@import 'components/DeployLog'
+@import 'components/DeployOperations'
+@import 'components/DeployPlaces'
+@import 'components/DeploySteps'
+@import 'components/DiffFile'
+@import 'components/MergeConflictResolver'
+@import 'components/MergeRequestCreatePage'
+@import 'components/MergeRequestForm'
+@import 'components/MergeRequestList'
+@import 'components/MergeRequestView'
+@import 'components/ModuleDeployments'
+@import 'components/ModuleDeploymentsByModule'
+@import 'components/ModuleRegistryImages'
+@import 'components/ModuleSettingsForm'
+@import 'components/ModuleStats'
+@import 'components/ModuleTargets'
+@import 'components/ModuleUninstall'
+@import 'components/Notify'
+@import 'components/NotifyPool'
+@import 'components/Pipeline2Preview'
+@import 'components/ProjectDeploy'
+@import 'components/ProjectPackages'
+@import 'components/ProjectPipelineRun'
+@import 'components/ProjectPipelines'
+@import 'components/ProjectPlaces'
+@import 'components/RegistryDockerForm'
+@import 'components/RegistryDockerList'
+@import 'components/RepositoryCompare'
+@import 'components/RepositoryEditor'
+@import 'components/RepositorySettings'
+@import 'components/UserAvatar'
+@import 'pages/activity'
+@import 'pages/admin/index'
+@import 'pages/admin/modules'
+@import 'pages/admin/modules/id'
+@import 'pages/admin/runners'
+@import 'pages/admin/users'
+@import 'pages/groups/id'
+@import 'pages/index'
+@import 'pages/merge-requests'
+@import 'pages/projects'
+@import 'pages/settings/ssh-keys'

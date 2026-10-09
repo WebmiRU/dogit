@@ -37,7 +37,7 @@ onBeforeUnmount(() => clearInterval(timer))
       <div v-else-if="error" class="alert alert-error" style="margin: 16px">{{ error }}</div>
       <div v-else-if="entries.length === 0" class="feed-empty">Nothing has happened yet.</div>
       <div v-else class="feed">
-        <div v-for="entry in entries" :key="entry.id" class="feed-row">
+        <div v-for="entry in entries" :key="entry.id" class="activity-feed-row">
           <UserAvatar :name="entry.actor_name" :size="28" />
           <div class="feed-text">
             <div>{{ entry.actor_name }} {{ entry.summary }} in {{ entry.project_path }}</div>
@@ -55,29 +55,3 @@ onBeforeUnmount(() => clearInterval(timer))
   </div>
 </template>
 
-<style scoped>
-.feed-row {
-  display: flex;
-  gap: 10px;
-  padding: 11px 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.feed-row:last-child {
-  border-bottom: none;
-}
-
-.feed-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.feed-meta {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.feed-when {
-  opacity: 0.7;
-}
-</style>

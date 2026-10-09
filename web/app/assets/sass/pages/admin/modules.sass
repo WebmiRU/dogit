@@ -1,0 +1,24 @@
+// pages/admin/modules, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.modules-table
+  width: 100%
+  border-collapse: collapse
+  font-size: 13px
+.modules-table th
+  text-align: left
+  padding: 10px 14px
+  border-bottom: 1px solid var(--border)
+  color: var(--text-muted)
+  font-weight: 500
+  font-size: 12px
+.modules-table td
+  padding: 12px 14px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.modules-table tbody tr:last-child td
+  border-bottom: none
+.small
+  font-size: 12px

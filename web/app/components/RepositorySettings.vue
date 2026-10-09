@@ -187,7 +187,7 @@ async function save() {
 
       <hr class="divider" />
 
-      <h3 class="section-title">Move to a group</h3>
+      <h3 class="settings-section-title">Move to a group</h3>
       <p class="muted section-note">
         A project inside a group is reached at
         <span class="mono">{{ currentGroup }}/{{ project.path.split('/').pop() }}</span
@@ -229,28 +229,3 @@ async function save() {
   </div>
 </template>
 
-<style scoped>
-
-.move-note {
-  margin: 10px 0 0;
-  font-size: 12px;
-  max-width: 62ch;
-}
-
-.divider {
-  border: 0;
-  border-top: 1px solid var(--border);
-  margin: 24px 0 16px;
-}
-
-.section-title {
-  margin: 0 0 4px;
-  font-size: 14px;
-}
-
-.section-note {
-  margin: 0 0 16px;
-  font-size: 13px;
-  max-width: 62ch;
-}
-</style>

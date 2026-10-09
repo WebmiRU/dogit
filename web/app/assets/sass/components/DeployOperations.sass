@@ -1,0 +1,86 @@
+// components/DeployOperations, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.deploy-spacer
+  flex: 1 1 auto
+.operations
+  display: flex
+  flex-direction: column
+  gap: 16px
+.deploy-block-head
+  display: flex
+  align-items: baseline
+  flex-wrap: wrap
+  gap: 6px 10px
+  margin-bottom: 8px
+  padding-bottom: 6px
+  border-bottom: 1px solid var(--border, #e2e2e6)
+.operation-log
+  list-style: none
+  margin: 8px 0 0
+  padding: 0
+  font-family: var(--font-mono, ui-monospace, monospace)
+  font-size: 12px
+  line-height: 1.6
+.operation-log li
+  display: flex
+  gap: 10px
+  padding: 1px 0
+  word-break: break-word
+.operation-log li.err
+  color: var(--danger, #d9534f)
+.operation-log .mono
+  flex: 0 0 auto
+  opacity: 0.65
+.put-away
+  flex: 0 0 auto
+  width: 24px
+  height: 24px
+  padding: 0
+  border: 1px solid var(--border-strong, var(--border))
+  border-radius: 4px
+  background: var(--bg)
+  color: var(--text-muted)
+  font-size: 17px
+  line-height: 1
+  cursor: pointer
+  opacity: 0.85
+.put-away:hover
+  opacity: 1
+  color: var(--text)
+  background: var(--bg-inset)
+  border-color: var(--text-muted)
+.put-away:focus-visible
+  opacity: 1
+  color: var(--text)
+  background: var(--bg-inset)
+  border-color: var(--text-muted)
+.why
+  margin: 10px 0 0
+  padding: 8px 10px
+  border-left: 3px solid var(--border-strong, var(--border))
+  border-radius: 0 3px 3px 0
+  background: var(--bg-inset)
+  color: var(--text-muted)
+  font-size: 13px
+  line-height: 1.45
+.why.bad
+  border-left-color: var(--red)
+.operation-log-wrap
+  margin-top: 4px
+.place-chip
+  font-size: 12px
+  padding: 1px 7px
+  border: 1px solid var(--border)
+  border-radius: 3px
+  background: var(--bg)
+.operation.live
+  border-left: 3px solid var(--yellow)
+.operation.queued
+  border-left: 3px solid var(--accent)
+.operation.dismissed
+  border-left: 3px solid var(--border-strong, var(--border))
+.operation.live .badge
+  font-weight: 600

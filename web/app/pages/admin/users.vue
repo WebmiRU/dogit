@@ -76,7 +76,7 @@ const admins = computed(() => users.value.filter((one) => one.is_admin).length)
       <div class="toolbar">
         <input
           v-model="filter"
-          class="filter"
+          class="users-filter"
           type="search"
           placeholder="Filter by name or username"
           aria-label="Filter users"
@@ -85,7 +85,7 @@ const admins = computed(() => users.value.filter((one) => one.is_admin).length)
         <button class="btn" type="button" @click="load">Search</button>
       </div>
 
-      <div class="summary">
+      <div class="users-summary">
         <span>{{ total }} {{ total === 1 ? 'account' : 'accounts' }}</span>
         <span>{{ admins }} {{ admins === 1 ? 'administrator' : 'administrators' }}</span>
       </div>
@@ -94,7 +94,7 @@ const admins = computed(() => users.value.filter((one) => one.is_admin).length)
 
       <div v-else-if="users.length === 0" class="card empty">Nobody matches that.</div>
 
-      <table v-else class="table">
+      <table v-else class="users-table">
         <thead>
           <tr>
             <th>User</th>
@@ -133,78 +133,3 @@ const admins = computed(() => users.value.filter((one) => one.is_admin).length)
   </div>
 </template>
 
-<style scoped>
-.toolbar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.filter {
-  flex: 1;
-  max-width: 420px;
-  padding: 7px 10px;
-  font: inherit;
-  font-size: 13px;
-  color: inherit;
-  background: var(--bg, transparent);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.summary {
-  display: flex;
-  gap: 16px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.table th {
-  text-align: left;
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text-muted);
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.table td {
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.table tbody tr:hover td {
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.03));
-}
-
-.who {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.who-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 500;
-}
-
-.numeric {
-  text-align: right;
-}
-
-.small {
-  font-size: 12px;
-}
-</style>

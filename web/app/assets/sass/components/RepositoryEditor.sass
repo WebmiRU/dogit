@@ -1,0 +1,67 @@
+// components/RepositoryEditor, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.editor-body
+  padding: 16px
+.editor-area
+  display: flex
+  border: 1px solid var(--border)
+  border-radius: 6px
+  overflow: hidden
+  background: var(--bg-code, #0d1117)
+.gutter
+  display: flex
+  flex-direction: column
+  padding: 12px 8px
+  text-align: right
+  font: 13px/1.5 var(--mono)
+  color: #6e7681
+  user-select: none
+  overflow: hidden
+.editor-input
+  flex: 1
+  min-height: 420px
+  padding: 12px
+  border: 0
+  background: transparent
+  color: inherit
+  font: 13px/1.5 var(--mono)
+  resize: vertical
+.preview
+  margin-top: 12px
+  border: 1px solid var(--border)
+  border-radius: 6px
+  padding: 8px 12px
+.editor-summary
+  cursor: pointer
+  font-size: 13px
+  color: var(--muted)
+.delta-add
+  color: #3fb950
+  margin-left: 8px
+.delta-del
+  color: #f85149
+  margin-left: 8px
+.diff
+  margin-top: 8px
+  max-height: 320px
+  overflow: auto
+  font: 12px/1.5 var(--mono)
+  white-space: pre-wrap
+.diff-line
+  padding: 0 6px
+.diff-add
+  background: rgba(63, 185, 80, 0.15)
+.diff-del
+  background: rgba(248, 81, 73, 0.15)
+.diff-ctx
+  color: var(--muted)
+.commit-box
+  margin-top: 16px
+  display: grid
+  gap: 12px
+  max-width: 520px
+.conflict-actions
+  margin-top: 8px

@@ -1,0 +1,1331 @@
+// components/MergeRequestList, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.pmr-list-page
+  width: 100%
+  min-width: 0
+  color: var(--text)
+.pmr-list-breadcrumb
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 9px
+  min-height: 37px
+  margin: 0 0 12px
+  padding: 0 0 12px
+  border-bottom: 1px solid var(--border)
+  color: var(--text-muted)
+  font-size: 12px
+.pmr-list-breadcrumb a
+  color: var(--text-muted)
+.pmr-list-breadcrumb a:hover
+  color: var(--text)
+.pmr-list-breadcrumb strong
+  color: var(--text)
+  font-weight: 600
+.pmr-list-topline
+  display: flex
+  align-items: stretch
+  justify-content: space-between
+  flex-wrap: wrap
+  gap: 12px
+  min-height: 48px
+  border-bottom: 1px solid var(--border)
+.pmr-list-tabs
+  display: flex
+  align-items: stretch
+  flex-wrap: wrap
+  gap: 0
+  min-width: 0
+.pmr-list-tabs button
+  display: flex
+  align-items: center
+  gap: 5px
+  padding: 10px 13px 9px
+  border: 0
+  border-bottom: 2px solid transparent
+  background: transparent
+  color: var(--text-muted)
+  font: inherit
+  font-size: 13px
+  cursor: pointer
+  white-space: nowrap
+.pmr-list-tabs button:hover
+  color: var(--text)
+.pmr-list-tabs button.active
+  border-bottom-color: #8d9cb4
+  color: var(--text)
+  font-weight: 650
+.pmr-count
+  display: inline-flex
+  justify-content: center
+  align-items: center
+  min-width: 22px
+  height: 21px
+  padding: 0 6px
+  border-radius: 12px
+  background: #37383f
+  color: #d8d9df
+  font-size: 11px
+  font-weight: 500
+.pmr-list-actions
+  display: flex
+  align-items: center
+  gap: 8px
+  padding-bottom: 6px
+.pmr-secondary-button
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  gap: 7px
+  min-height: 34px
+  padding: 6px 12px
+  border: 1px solid var(--border-strong)
+  border-radius: 5px
+  font: inherit
+  font-size: 12px
+  white-space: nowrap
+  cursor: pointer
+  text-decoration: none
+.pmr-primary-button
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  gap: 7px
+  min-height: 34px
+  padding: 6px 12px
+  border: 1px solid var(--border-strong)
+  border-radius: 5px
+  font: inherit
+  font-size: 12px
+  white-space: nowrap
+  cursor: pointer
+  text-decoration: none
+.pmr-secondary-button
+  background: #34353b
+  color: var(--text)
+.pmr-secondary-button:hover
+  background: #42434a
+  color: #fff
+  text-decoration: none
+.pmr-secondary-button.selected
+  background: #42434a
+  color: #fff
+  text-decoration: none
+.pmr-primary-button
+  background: var(--button-primary-bg)
+  border-color: var(--button-primary-border)
+  color: var(--button-primary-text)
+  font-weight: 600
+.pmr-primary-button:hover
+  background: var(--button-primary-hover)
+  border-color: var(--button-primary-hover)
+  color: var(--button-primary-text)
+  text-decoration: none
+.pmr-more-menu
+  position: relative
+.pmr-more-menu summary
+  display: grid
+  place-items: center
+  width: 31px
+  height: 34px
+  border: 1px solid transparent
+  border-radius: 5px
+  color: var(--text-muted)
+  cursor: pointer
+  font-size: 21px
+  line-height: 1
+  list-style: none
+.pmr-more-menu summary::-webkit-details-marker
+  display: none
+.pmr-more-menu summary:hover
+  background: var(--bg-elevated)
+  border-color: var(--border)
+  color: var(--text)
+.pmr-more-menu[open] summary
+  background: var(--bg-elevated)
+  border-color: var(--border)
+  color: var(--text)
+.pmr-more-popover
+  position: absolute
+  z-index: 35
+  top: calc(100% + 5px)
+  right: 0
+  min-width: 190px
+  padding: 5px
+  border: 1px solid var(--border-strong)
+  border-radius: 7px
+  background: var(--bg-elevated)
+  box-shadow: 0 10px 25px rgba(0,0,0,.38)
+.pmr-history-popover
+  position: absolute
+  z-index: 35
+  top: calc(100% + 5px)
+  right: 0
+  min-width: 190px
+  padding: 5px
+  border: 1px solid var(--border-strong)
+  border-radius: 7px
+  background: var(--bg-elevated)
+  box-shadow: 0 10px 25px rgba(0,0,0,.38)
+.pmr-more-popover button
+  display: block
+  width: 100%
+  padding: 8px 10px
+  border: 0
+  border-radius: 4px
+  background: transparent
+  color: var(--text)
+  text-align: left
+  font: inherit
+  font-size: 12px
+  cursor: pointer
+.pmr-history-popover button
+  display: block
+  width: 100%
+  padding: 8px 10px
+  border: 0
+  border-radius: 4px
+  background: transparent
+  color: var(--text)
+  text-align: left
+  font: inherit
+  font-size: 12px
+  cursor: pointer
+.pmr-more-popover button:hover:not(:disabled)
+  background: var(--bg-inset)
+.pmr-history-popover button:hover
+  background: var(--bg-inset)
+.pmr-more-popover button:disabled
+  color: var(--text-muted)
+  cursor: not-allowed
+.pmr-more-popover p
+  margin: 4px 8px
+  color: var(--text-muted)
+  font-size: 11px
+.pmr-list-toolbar
+  display: flex
+  align-items: center
+  gap: 0
+  width: 100%
+  margin: 0 0 0
+  padding: 10px
+  border: 1px solid var(--border)
+  border-top: 0
+  background: #222328
+.pmr-history-filter
+  position: relative
+  flex: 0 0 auto
+.pmr-history-filter summary
+  display: flex
+  align-items: center
+  justify-content: center
+  gap: 5px
+  width: 58px
+  height: 38px
+  border: 1px solid var(--border-strong)
+  border-radius: 6px 0 0 6px
+  background: #18191d
+  color: var(--text-muted)
+  cursor: pointer
+  list-style: none
+.pmr-history-filter summary::-webkit-details-marker
+  display: none
+.pmr-history-filter summary svg:first-child
+  width: 19px
+  height: 19px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.65
+  stroke-linecap: round
+  stroke-linejoin: round
+.pmr-history-filter .pmr-chevron
+  width: 11px
+  height: 11px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.5
+.pmr-history-popover
+  left: 0
+  right: auto
+.pmr-history-popover button.active
+  background: #303136
+  color: var(--text)
+.pmr-searchbox
+  display: flex
+  flex: 1 1 250px
+  min-width: 120px
+  height: 38px
+.pmr-searchbox input
+  min-width: 0
+  width: 100%
+  height: 38px
+  padding: 8px 12px
+  border: 1px solid var(--border-strong)
+  border-left: 0
+  border-radius: 0
+  outline: none
+  background: #18191d
+  color: var(--text)
+  font: inherit
+  font-size: 13px
+.pmr-searchbox input:focus
+  border-color: #626773
+  box-shadow: inset 0 0 0 1px #626773
+.pmr-searchbox button
+  display: grid
+  place-items: center
+  flex: 0 0 40px
+  width: 40px
+  height: 38px
+  border: 1px solid var(--border-strong)
+  border-left: 0
+  border-radius: 0 6px 6px 0
+  background: #18191d
+  color: var(--text)
+  cursor: pointer
+.pmr-searchbox button:hover
+  background: #303136
+.pmr-searchbox button svg
+  width: 18px
+  height: 18px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.7
+  stroke-linecap: round
+.pmr-sort-control
+  display: flex
+  flex: 0 0 auto
+  height: 38px
+  margin-left: 10px
+.pmr-sort-control select
+  width: auto
+  min-width: 143px
+  height: 38px
+  margin: 0
+  padding: 0 28px 0 11px
+  border: 1px solid var(--border-strong)
+  border-radius: 6px 0 0 6px
+  background: #34353b
+  color: var(--text)
+  font: inherit
+  font-size: 12px
+.pmr-sort-direction
+  display: grid
+  place-items: center
+  width: 38px
+  height: 38px
+  padding: 0
+  border: 1px solid var(--border-strong)
+  border-left: 0
+  border-radius: 0 6px 6px 0
+  background: #34353b
+  color: var(--text)
+  cursor: pointer
+.pmr-sort-direction:hover
+  background: #46474e
+.pmr-sort-direction svg
+  width: 17px
+  height: 17px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.5
+  stroke-linecap: round
+  stroke-linejoin: round
+.pmr-sort-direction svg.ascending
+  transform: rotate(180deg)
+.pmr-bulk-notice
+  display: flex
+  align-items: center
+  flex-wrap: wrap
+  gap: 12px
+  padding: 9px 12px
+  border: 1px solid var(--border)
+  border-top: 0
+  background: var(--bg-elevated)
+  color: var(--text-muted)
+  font-size: 12px
+.pmr-bulk-notice label
+  display: flex
+  align-items: center
+  gap: 7px
+  margin: 0
+  color: var(--text)
+.pmr-bulk-notice input
+  width: 15px
+  height: 15px
+  margin: 0
+  accent-color: #8d9cb4
+.pmr-row-select
+  width: 15px
+  height: 15px
+  margin: 0
+  accent-color: #8d9cb4
+.pmr-bulk-hint
+  margin-left: auto
+.pmr-list-result-wrap
+  border-bottom: 1px solid var(--border)
+  background: transparent
+.pmr-list-state
+  padding: 34px 18px
+  color: var(--text-muted)
+  text-align: center
+  font-size: 13px
+.pmr-list-state.error
+  color: #ffb4ae
+.pmr-result-list
+  list-style: none
+  margin: 0
+  padding: 0
+.pmr-result-row
+  display: flex
+  align-items: center
+  gap: 12px
+  min-width: 0
+  padding: 13px 10px 13px 14px
+  border-bottom: 1px solid #292a2f
+  background: transparent
+.pmr-result-row:hover
+  background: rgba(255,255,255,.018)
+.pmr-result-row:last-child
+  border-bottom: 0
+.pmr-result-copy
+  flex: 1 1 auto
+  min-width: 0
+.pmr-result-title
+  display: block
+  overflow: hidden
+  margin-bottom: 3px
+  color: var(--text)
+  font-size: 13px
+  font-weight: 650
+  line-height: 1.45
+  text-overflow: ellipsis
+.pmr-result-title:hover
+  color: #d6dce7
+  text-decoration: underline
+.pmr-result-meta
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 5px
+  color: var(--text-muted)
+  font-size: 11px
+  line-height: 1.55
+.pmr-branch-pair
+  display: inline-flex
+  align-items: center
+  gap: 5px
+.pmr-branch-pair code
+  color: #b8bac3
+  font-size: 11px
+.pmr-draft-tag
+  margin-right: 6px
+  padding: 2px 5px
+  border: 1px solid var(--border-strong)
+  border-radius: 3px
+  color: var(--text-muted)
+  font-size: 9px
+  font-weight: 700
+  text-transform: uppercase
+  vertical-align: 1px
+.pmr-row-status
+  display: grid
+  place-items: center
+  flex: 0 0 30px
+  width: 30px
+  height: 30px
+  color: #43b581
+.pmr-row-status svg
+  display: block
+  width: 27px
+  height: 27px
+  fill: none
+  stroke: currentColor
+  stroke-width: 2.2
+  stroke-linecap: round
+  stroke-linejoin: round
+.pmr-row-status.status-closed
+  color: #8a8d96
+.pmr-row-status.status-merged
+  color: #43b581
+.pmr-list-footer
+  display: flex
+  align-items: center
+  justify-content: flex-end
+  gap: 12px
+  min-height: 60px
+  padding: 11px 0
+.pmr-total
+  margin-right: auto
+  color: var(--text-muted)
+  font-size: 11px
+.pmr-page-size
+  display: flex
+  align-items: center
+  gap: 8px
+  margin: 0
+  color: var(--text-muted)
+  font-size: 12px
+.pmr-page-size select
+  width: auto
+  min-width: 124px
+  height: 37px
+  margin: 0
+  padding: 5px 27px 5px 10px
+  border: 1px solid var(--border-strong)
+  border-radius: 6px
+  background: #34353b
+  color: var(--text)
+  font: inherit
+  font-size: 12px
+@media(max-width:850px)
+  .pmr-list-topline
+    align-items: flex-start
+    flex-direction: column
+  .pmr-list-actions
+    width: 100%
+    justify-content: flex-end
+  .pmr-list-toolbar
+    flex-wrap: wrap
+    gap: 8px
+  .pmr-history-filter summary
+    border-radius: 6px
+  .pmr-searchbox
+    flex-basis: calc(100% - 66px)
+  .pmr-sort-control
+    margin-left: 0
+  .pmr-sort-control select
+    border-radius: 6px 0 0 6px
+  .pmr-list-actions
+    padding-bottom: 9px
+@media(max-width:520px)
+  .pmr-list-breadcrumb
+    gap: 6px
+  .pmr-list-actions
+    flex-wrap: wrap
+  .pmr-primary-button
+    flex: 1 1 auto
+  .pmr-sort-control
+    flex: 1 1 auto
+  .pmr-sort-control select
+    flex: 1 1 auto
+    min-width: 0
+  .pmr-row-status
+    flex-basis: 24px
+    width: 24px
+  .pmr-row-status svg
+    width: 23px
+    height: 23px
+  .pmr-result-row
+    padding: 11px 7px
+.pmr-index
+  width: 100%
+  min-width: 0
+  color: var(--text)
+.pmr-list-page
+  width: 100%
+  min-width: 0
+  color: var(--text)
+.pmr-list-breadcrumb
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 9px
+  min-height: 37px
+  margin: 0 0 12px
+  padding: 0 0 12px
+  border-bottom: 1px solid var(--border)
+  color: var(--text-muted)
+  font-size: 12px
+.pmr-list-breadcrumb a
+  color: var(--text-muted)
+.pmr-list-breadcrumb a:hover
+  color: var(--text)
+.pmr-list-breadcrumb strong
+  color: var(--text)
+  font-weight: 600
+.pmr-list-topline
+  display: flex
+  align-items: stretch
+  justify-content: space-between
+  flex-wrap: wrap
+  gap: 12px
+  min-height: 48px
+  border-bottom: 1px solid var(--border)
+.pmr-list-tabs
+  display: flex
+  align-items: stretch
+  flex-wrap: wrap
+  gap: 0
+  min-width: 0
+.pmr-list-tabs button
+  display: flex
+  align-items: center
+  gap: 5px
+  padding: 10px 13px 9px
+  border: 0
+  border-bottom: 2px solid transparent
+  background: transparent
+  color: var(--text-muted)
+  font: inherit
+  font-size: 13px
+  cursor: pointer
+  white-space: nowrap
+  text-decoration: none
+.pmr-list-tabs a
+  display: flex
+  align-items: center
+  gap: 5px
+  padding: 10px 13px 9px
+  border: 0
+  border-bottom: 2px solid transparent
+  background: transparent
+  color: var(--text-muted)
+  font: inherit
+  font-size: 13px
+  cursor: pointer
+  white-space: nowrap
+  text-decoration: none
+.pmr-list-tabs button:hover
+  color: var(--text)
+.pmr-list-tabs a:hover
+  color: var(--text)
+.pmr-list-tabs button.active
+  border-bottom-color: #8d9cb4
+  color: var(--text)
+  font-weight: 650
+.pmr-list-tabs a.active
+  border-bottom-color: #8d9cb4
+  color: var(--text)
+  font-weight: 650
+.pmr-count
+  display: inline-flex
+  justify-content: center
+  align-items: center
+  min-width: 22px
+  height: 21px
+  padding: 0 6px
+  border-radius: 12px
+  background: #37383f
+  color: #d8d9df
+  font-size: 11px
+  font-weight: 500
+.pmr-list-actions
+  display: flex
+  align-items: center
+  gap: 8px
+  padding-bottom: 6px
+.pmr-secondary-button
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  gap: 7px
+  min-height: 34px
+  padding: 6px 12px
+  border: 1px solid var(--border-strong)
+  border-radius: 5px
+  font: inherit
+  font-size: 12px
+  white-space: nowrap
+  cursor: pointer
+  text-decoration: none
+.pmr-primary-button
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  gap: 7px
+  min-height: 34px
+  padding: 6px 12px
+  border: 1px solid var(--border-strong)
+  border-radius: 5px
+  font: inherit
+  font-size: 12px
+  white-space: nowrap
+  cursor: pointer
+  text-decoration: none
+.pmr-secondary-button
+  background: #34353b
+  color: var(--text)
+.pmr-secondary-button:hover
+  background: #42434a
+  color: #fff
+  text-decoration: none
+.pmr-secondary-button.selected
+  background: #42434a
+  color: #fff
+  text-decoration: none
+.pmr-primary-button
+  background: var(--button-primary-bg)
+  border-color: var(--button-primary-border)
+  color: var(--button-primary-text)
+  font-weight: 600
+.pmr-primary-button:hover
+  background: var(--button-primary-hover)
+  border-color: var(--button-primary-hover)
+  color: var(--button-primary-text)
+  text-decoration: none
+.pmr-more-menu
+  position: relative
+.pmr-more-menu summary
+  display: grid
+  place-items: center
+  width: 31px
+  height: 34px
+  border: 1px solid transparent
+  border-radius: 5px
+  color: var(--text-muted)
+  cursor: pointer
+  font-size: 21px
+  line-height: 1
+  list-style: none
+.pmr-more-menu summary::-webkit-details-marker
+  display: none
+.pmr-more-menu summary:hover
+  background: var(--bg-elevated)
+  border-color: var(--border)
+  color: var(--text)
+.pmr-more-menu[open] summary
+  background: var(--bg-elevated)
+  border-color: var(--border)
+  color: var(--text)
+.pmr-more-popover
+  position: absolute
+  z-index: 35
+  top: calc(100% + 5px)
+  right: 0
+  min-width: 190px
+  padding: 5px
+  border: 1px solid var(--border-strong)
+  border-radius: 7px
+  background: var(--bg-elevated)
+  box-shadow: 0 10px 25px rgba(0,0,0,.38)
+.pmr-history-popover
+  position: absolute
+  z-index: 35
+  top: calc(100% + 5px)
+  right: 0
+  min-width: 190px
+  padding: 5px
+  border: 1px solid var(--border-strong)
+  border-radius: 7px
+  background: var(--bg-elevated)
+  box-shadow: 0 10px 25px rgba(0,0,0,.38)
+.pmr-more-popover button
+  display: block
+  width: 100%
+  padding: 8px 10px
+  border: 0
+  border-radius: 4px
+  background: transparent
+  color: var(--text)
+  text-align: left
+  font: inherit
+  font-size: 12px
+  cursor: pointer
+.pmr-history-popover button
+  display: block
+  width: 100%
+  padding: 8px 10px
+  border: 0
+  border-radius: 4px
+  background: transparent
+  color: var(--text)
+  text-align: left
+  font: inherit
+  font-size: 12px
+  cursor: pointer
+.pmr-more-popover button:hover:not(:disabled)
+  background: var(--bg-inset)
+.pmr-history-popover button:hover
+  background: var(--bg-inset)
+.pmr-more-popover button:disabled
+  color: var(--text-muted)
+  cursor: not-allowed
+.pmr-more-popover p
+  margin: 4px 8px
+  color: var(--text-muted)
+  font-size: 11px
+.pmr-list-toolbar
+  display: flex
+  align-items: center
+  gap: 0
+  width: 100%
+  margin: 0
+  padding: 10px
+  border: 1px solid var(--border)
+  border-top: 0
+  background: #222328
+.pmr-history-filter
+  position: relative
+  flex: 0 0 auto
+.pmr-history-filter summary
+  display: flex
+  align-items: center
+  justify-content: center
+  gap: 5px
+  width: 58px
+  height: 38px
+  border: 1px solid var(--border-strong)
+  border-radius: 6px 0 0 6px
+  background: #18191d
+  color: var(--text-muted)
+  cursor: pointer
+  list-style: none
+.pmr-history-filter summary::-webkit-details-marker
+  display: none
+.pmr-history-filter summary svg:first-child
+  width: 19px
+  height: 19px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.65
+  stroke-linecap: round
+  stroke-linejoin: round
+.pmr-history-filter .pmr-chevron
+  width: 11px
+  height: 11px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.5
+.pmr-history-popover
+  left: 0
+  right: auto
+.pmr-history-popover button.active
+  background: #303136
+  color: var(--text)
+.pmr-searchbox
+  display: flex
+  flex: 1 1 250px
+  min-width: 120px
+  height: 38px
+.pmr-searchbox input
+  min-width: 0
+  width: 100%
+  height: 38px
+  padding: 8px 12px
+  border: 1px solid var(--border-strong)
+  border-left: 0
+  border-radius: 0
+  outline: none
+  background: #18191d
+  color: var(--text)
+  font: inherit
+  font-size: 13px
+.pmr-searchbox input:focus
+  border-color: #626773
+  box-shadow: inset 0 0 0 1px #626773
+.pmr-searchbox button
+  display: grid
+  place-items: center
+  flex: 0 0 40px
+  width: 40px
+  height: 38px
+  border: 1px solid var(--border-strong)
+  border-left: 0
+  border-radius: 0 6px 6px 0
+  background: #18191d
+  color: var(--text)
+  cursor: pointer
+.pmr-searchbox button:hover
+  background: #303136
+.pmr-searchbox button svg
+  width: 18px
+  height: 18px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.7
+  stroke-linecap: round
+.pmr-sort-control
+  display: flex
+  flex: 0 0 auto
+  height: 38px
+  margin-left: 10px
+.pmr-sort-control select
+  width: auto
+  min-width: 143px
+  height: 38px
+  margin: 0
+  padding: 0 28px 0 11px
+  border: 1px solid var(--border-strong)
+  border-radius: 6px 0 0 6px
+  background: #34353b
+  color: var(--text)
+  font: inherit
+  font-size: 12px
+.pmr-sort-direction
+  display: grid
+  place-items: center
+  width: 38px
+  height: 38px
+  padding: 0
+  border: 1px solid var(--border-strong)
+  border-left: 0
+  border-radius: 0 6px 6px 0
+  background: #34353b
+  color: var(--text)
+  cursor: pointer
+.pmr-sort-direction:hover
+  background: #46474e
+.pmr-sort-direction svg
+  width: 17px
+  height: 17px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.5
+  stroke-linecap: round
+  stroke-linejoin: round
+.pmr-sort-direction svg.ascending
+  transform: rotate(180deg)
+.pmr-bulk-notice
+  display: flex
+  align-items: center
+  flex-wrap: wrap
+  gap: 12px
+  padding: 9px 12px
+  border: 1px solid var(--border)
+  border-top: 0
+  background: var(--bg-elevated)
+  color: var(--text-muted)
+  font-size: 12px
+.pmr-bulk-notice label
+  display: flex
+  align-items: center
+  gap: 7px
+  margin: 0
+  color: var(--text)
+.pmr-bulk-notice input
+  width: 15px
+  height: 15px
+  margin: 0
+  accent-color: #8d9cb4
+.pmr-row-select
+  width: 15px
+  height: 15px
+  margin: 0
+  accent-color: #8d9cb4
+.pmr-bulk-hint
+  margin-left: auto
+.pmr-list-result-wrap
+  border-bottom: 1px solid var(--border)
+  background: transparent
+.pmr-list-state
+  padding: 34px 18px
+  color: var(--text-muted)
+  text-align: center
+  font-size: 13px
+.pmr-list-state.error
+  color: #ffb4ae
+.pmr-result-list
+  list-style: none
+  margin: 0
+  padding: 0
+.pmr-result-row
+  display: flex
+  align-items: center
+  gap: 12px
+  min-width: 0
+  padding: 13px 10px 13px 14px
+  border-bottom: 1px solid #292a2f
+  background: transparent
+.pmr-result-row:hover
+  background: rgba(255,255,255,.018)
+.pmr-result-row:last-child
+  border-bottom: 0
+.pmr-result-copy
+  flex: 1 1 auto
+  min-width: 0
+.pmr-result-title
+  display: block
+  overflow: hidden
+  margin-bottom: 3px
+  color: var(--text)
+  font-size: 13px
+  font-weight: 650
+  line-height: 1.45
+  text-overflow: ellipsis
+.pmr-result-title:hover
+  color: #d6dce7
+  text-decoration: underline
+.pmr-result-meta
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 5px
+  color: var(--text-muted)
+  font-size: 11px
+  line-height: 1.55
+.pmr-branch-pair
+  display: inline-flex
+  align-items: center
+  gap: 5px
+.pmr-branch-pair code
+  color: #b8bac3
+  font-size: 11px
+.pmr-draft-tag
+  margin-right: 6px
+  padding: 2px 5px
+  border: 1px solid var(--border-strong)
+  border-radius: 3px
+  color: var(--text-muted)
+  font-size: 9px
+  font-weight: 700
+  text-transform: uppercase
+  vertical-align: 1px
+.pmr-row-status
+  display: grid
+  place-items: center
+  flex: 0 0 30px
+  width: 30px
+  height: 30px
+  color: #43b581
+.pmr-row-status svg
+  display: block
+  width: 27px
+  height: 27px
+  fill: none
+  stroke: currentColor
+  stroke-width: 2.2
+  stroke-linecap: round
+  stroke-linejoin: round
+.pmr-row-status.status-closed
+  color: #8a8d96
+.pmr-row-status.status-merged
+  color: #43b581
+.pmr-list-footer
+  display: flex
+  align-items: center
+  justify-content: flex-end
+  gap: 12px
+  min-height: 60px
+  padding: 11px 0
+.pmr-total
+  margin-right: auto
+  color: var(--text-muted)
+  font-size: 11px
+.pmr-page-size
+  display: flex
+  align-items: center
+  gap: 8px
+  margin: 0
+  color: var(--text-muted)
+  font-size: 12px
+.pmr-page-size select
+  width: auto
+  min-width: 124px
+  height: 37px
+  margin: 0
+  padding: 5px 27px 5px 10px
+  border: 1px solid var(--border-strong)
+  border-radius: 6px
+  background: #34353b
+  color: var(--text)
+  font: inherit
+  font-size: 12px
+@media(max-width:850px)
+  .pmr-list-topline
+    align-items: flex-start
+    flex-direction: column
+  .pmr-list-actions
+    width: 100%
+    justify-content: flex-end
+  .pmr-list-toolbar
+    flex-wrap: wrap
+    gap: 8px
+  .pmr-history-filter summary
+    border-radius: 6px
+  .pmr-searchbox
+    flex-basis: calc(100% - 66px)
+  .pmr-sort-control
+    margin-left: 0
+  .pmr-sort-control select
+    border-radius: 6px 0 0 6px
+  .pmr-list-actions
+    padding-bottom: 9px
+@media(max-width:520px)
+  .pmr-list-breadcrumb
+    gap: 6px
+  .pmr-list-actions
+    flex-wrap: wrap
+  .pmr-primary-button
+    flex: 1 1 auto
+  .pmr-sort-control
+    flex: 1 1 auto
+  .pmr-sort-control select
+    flex: 1 1 auto
+    min-width: 0
+  .pmr-row-status
+    flex-basis: 24px
+    width: 24px
+  .pmr-row-status svg
+    width: 23px
+    height: 23px
+  .pmr-result-row
+    padding: 11px 7px
+.pmr-list-topline
+  min-height: 48px
+  gap: 10px
+.pmr-list-tabs button
+  gap: 6px
+  padding: 10px 13px 8px
+  font-size: 14px
+.pmr-list-tabs a
+  gap: 6px
+  padding: 10px 13px 8px
+  font-size: 14px
+.pmr-list-tabs button.active
+  border-bottom-color: #579ce6
+.pmr-list-tabs a.active
+  border-bottom-color: #579ce6
+.pmr-count
+  min-width: 22px
+  height: 21px
+  padding: 0 6px
+  border-radius: 11px
+  font-size: 12px
+.pmr-list-actions
+  gap: 8px
+  padding: 0 0 6px
+.pmr-secondary-button
+  min-height: 34px
+  padding: 6px 12px
+  border-radius: 6px
+  font-size: 14px
+  font-weight: 500
+.pmr-primary-button
+  min-height: 34px
+  padding: 6px 12px
+  border-radius: 6px
+  font-size: 14px
+  font-weight: 500
+.pmr-primary-button
+  background: #619fe2
+  border-color: #619fe2
+  color: #111827
+.pmr-primary-button:hover
+  background: #75afea
+  border-color: #75afea
+  color: #111827
+.pmr-more-menu summary
+  width: 28px
+  height: 34px
+  border-radius: 5px
+  font-size: 21px
+.pmr-list-toolbar
+  margin: 13px 0 0
+  padding: 12px
+  border: 1px solid var(--border)
+  border-radius: 7px
+  background: #222328
+.pmr-history-filter summary
+  width: 58px
+  height: 38px
+  gap: 5px
+  border-radius: 6px 0 0 6px
+.pmr-history-filter summary svg:first-child
+  width: 18px
+  height: 18px
+.pmr-history-filter .pmr-chevron
+  width: 11px
+  height: 11px
+.pmr-searchbox
+  height: 38px
+.pmr-searchbox input
+  height: 38px
+  padding: 7px 12px
+  font-size: 14px
+.pmr-searchbox button
+  flex-basis: 38px
+  width: 38px
+  height: 38px
+.pmr-searchbox button svg
+  width: 18px
+  height: 18px
+.pmr-sort-control
+  height: 38px
+  margin-left: 10px
+.pmr-sort-control select
+  min-width: 145px
+  height: 38px
+  padding: 0 26px 0 11px
+  border-radius: 6px 0 0 6px
+  font-size: 14px
+.pmr-sort-direction
+  width: 38px
+  height: 38px
+  border-radius: 0 6px 6px 0
+.pmr-sort-direction svg
+  width: 17px
+  height: 17px
+.pmr-bulk-notice
+  font-size: 13px
+.pmr-result-row
+  align-items: flex-start
+  gap: 12px
+  padding: 11px 14px 13px
+.pmr-result-title
+  margin-bottom: 3px
+  font-size: 14px
+  font-weight: 650
+  line-height: 1.4
+.pmr-result-meta
+  gap: 5px
+  font-size: 12px
+  line-height: 1.5
+.pmr-result-status
+  display: flex
+  flex: 0 0 145px
+  min-width: 125px
+  flex-direction: column
+  align-items: flex-end
+  gap: 3px
+.pmr-row-status
+  flex: 0 0 27px
+  width: 27px
+  height: 27px
+.pmr-row-status svg
+  width: 27px
+  height: 27px
+  stroke-width: 2.2
+.pmr-row-updated
+  color: var(--text-muted)
+  font-size: 12px
+  line-height: 1.4
+  white-space: nowrap
+.pmr-list-footer
+  justify-content: flex-end
+  min-height: 58px
+  padding: 20px 0 0
+.pmr-page-size
+  justify-content: space-between
+  gap: 6px
+  width: 150px
+  min-width: 150px
+  height: 36px
+  padding: 0 8px 0 12px
+  border: 1px solid var(--border-strong)
+  border-radius: 6px
+  background: #34353b
+  color: var(--text)
+  font-size: 14px
+.pmr-page-size select
+  flex: 1 1 auto
+  width: 100%
+  min-width: 0
+  height: 34px
+  margin: 0
+  padding: 3px 16px 3px 0
+  border: 0
+  border-radius: 0
+  background: transparent
+  color: var(--text)
+  font-size: 14px
+@media(max-width:850px)
+  .pmr-list-topline
+    align-items: flex-start
+    flex-direction: column
+    gap: 8px
+  .pmr-list-tabs button
+    padding: 8px 11px 7px
+    font-size: 13px
+  .pmr-list-tabs a
+    padding: 8px 11px 7px
+    font-size: 13px
+  .pmr-list-actions
+    width: 100%
+    justify-content: flex-end
+    padding-bottom: 2px
+  .pmr-list-toolbar
+    flex-wrap: wrap
+    gap: 6px
+    margin-top: 12px
+    padding: 10px
+  .pmr-history-filter summary
+    border-radius: 6px
+  .pmr-searchbox
+    flex-basis: calc(100% - 64px)
+  .pmr-sort-control
+    margin-left: 0
+  .pmr-sort-control select
+    min-width: 125px
+    border-radius: 6px 0 0 6px
+  .pmr-result-status
+    flex-basis: 110px
+    min-width: 95px
+  .pmr-result-title
+    font-size: 15px
+  .pmr-result-meta
+    font-size: 12px
+  .pmr-row-updated
+    font-size: 12px
+  .pmr-list-footer
+    padding-top: 16px
+@media(max-width:520px)
+  .pmr-list-topline
+    min-height: 0
+  .pmr-list-tabs
+    width: 100%
+    overflow-x: auto
+  .pmr-list-tabs button
+    padding: 7px 7px 6px
+    font-size: 12px
+  .pmr-list-tabs a
+    padding: 7px 7px 6px
+    font-size: 12px
+  .pmr-count
+    min-width: 18px
+    height: 18px
+    font-size: 11px
+  .pmr-list-actions
+    flex-wrap: wrap
+  .pmr-secondary-button
+    min-height: 31px
+    padding: 5px 9px
+    font-size: 12px
+  .pmr-primary-button
+    min-height: 31px
+    padding: 5px 9px
+    font-size: 12px
+  .pmr-list-toolbar
+    margin-top: 10px
+    padding: 8px
+  .pmr-searchbox
+    flex: 1 1 calc(100% - 64px)
+    min-width: 0
+  .pmr-searchbox input
+    font-size: 13px
+  .pmr-sort-control
+    flex: 1 1 auto
+    min-width: 0
+  .pmr-sort-control select
+    flex: 1 1 auto
+    min-width: 0
+  .pmr-result-row
+    padding: 8px 7px
+  .pmr-result-title
+    font-size: 14px
+  .pmr-result-meta
+    font-size: 11px
+  .pmr-result-status
+    flex-basis: auto
+    min-width: 0
+  .pmr-row-status
+    width: 21px
+    height: 21px
+  .pmr-row-status svg
+    width: 21px
+    height: 21px
+  .pmr-row-status
+    flex-basis: 21px
+  .pmr-row-updated
+    font-size: 10px
+  .pmr-page-size
+    width: 125px
+    min-width: 125px
+    height: 32px
+    font-size: 12px
+  .pmr-page-size select
+    height: 30px
+    font-size: 12px

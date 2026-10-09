@@ -69,7 +69,7 @@ function feedText(entry: { actor_name: string; summary: string; project_path: st
         <section class="card">
           <div class="card-header"><strong>Recent activity</strong></div>
           <div v-if="dashboard?.activity.length" class="feed">
-            <div v-for="entry in dashboard.activity" :key="entry.id" class="feed-row">
+            <div v-for="entry in dashboard.activity" :key="entry.id" class="index-feed-row">
               <UserAvatar :name="entry.actor_name" :size="26" />
               <div class="feed-text">
                 <div>{{ feedText(entry) }}</div>
@@ -95,7 +95,7 @@ function feedText(entry: { actor_name: string; summary: string; project_path: st
               </NuxtLink>
             </div>
             <div v-if="dashboard?.commits.length" class="feed">
-              <div v-for="entry in dashboard.commits" :key="entry.sha" class="feed-row">
+              <div v-for="entry in dashboard.commits" :key="entry.sha" class="index-feed-row">
                 <div class="feed-text">
                   <div class="truncate">{{ firstLine(entry.message) }}</div>
                   <div class="feed-meta">
@@ -133,22 +133,3 @@ function feedText(entry: { actor_name: string; summary: string; project_path: st
   </div>
 </template>
 
-<style scoped>
-.feed-row {
-  display: flex;
-  gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-}
-
-.feed-row:last-child {
-  border-bottom: none;
-}
-
-.truncate {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-</style>

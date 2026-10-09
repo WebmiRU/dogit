@@ -1,0 +1,25 @@
+// pages/settings/ssh-keys, out of its own stylesheet.
+// The bare ssh-keys-page-own table and field selectors are prefixed
+// with .ssh-keys-page because "th" on its own means every th on the
+// page once this file is global.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.ssh-keys-page textarea
+  font-family: var(--mono)
+  font-size: 12.5px
+  resize: vertical
+.code-sample
+  margin: 0 0 10px
+  padding: 10px 12px
+  background: var(--bg-inset)
+  border: 1px solid var(--border)
+  border-radius: 6px
+  color: var(--text)
+  overflow-x: auto
+.code-sample:last-child
+  margin-bottom: 0
+.name .meta
+  color: var(--text-muted)
+  font-size: 11.5px

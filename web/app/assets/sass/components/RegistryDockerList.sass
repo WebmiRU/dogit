@@ -1,0 +1,80 @@
+// components/RegistryDockerList, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.images-table
+  width: 100%
+  border-collapse: collapse
+  background: var(--bg-elevated)
+  border: 1px solid var(--border)
+  border-radius: 6px
+  overflow: hidden
+.images-table th
+  text-align: left
+  padding: 8px 12px
+  font-size: 12px
+  font-weight: 600
+  color: var(--text-muted)
+  border-bottom: 1px solid var(--border)
+.images-table td
+  height: 1px
+  padding: 10px 12px
+  vertical-align: middle
+  border-bottom: 1px solid var(--border)
+.images-table tbody tr:last-child td
+  border-bottom: none
+.images-table tbody tr:hover td
+  background: rgba(185, 185, 193, 0.045)
+.images-table .name
+  font-weight: 600
+  color: var(--text)
+  text-decoration: none
+.images-table .name:hover
+  text-decoration: underline
+.images-note
+  display: block
+  max-width: 320px
+  margin-top: 2px
+  overflow: hidden
+  text-overflow: ellipsis
+  white-space: nowrap
+  font-size: 11px
+  color: var(--text-muted)
+.chip
+  display: inline-block
+  margin-right: 4px
+  padding: 1px 6px
+  border: 1px solid var(--border)
+  border-radius: 3px
+  background: var(--bg)
+  font-size: 11px
+  color: var(--text-muted)
+  white-space: nowrap
+.source
+  display: inline-block
+  padding: 1px 7px
+  border: 1px solid var(--border)
+  border-radius: 10px
+  font-size: 11px
+  white-space: nowrap
+.source-module
+  background: var(--accent-soft)
+  border-color: rgba(185, 185, 193, 0.3)
+  color: var(--text)
+.source-written
+  color: var(--text-muted)
+.row-actions
+  text-align: right
+  white-space: nowrap
+.muted
+  color: var(--text-muted)
+.small
+  font-size: 12px
+.images-pager
+  display: flex
+  align-items: center
+  gap: 8px
+  margin-top: 12px
+.images-pager .spacer
+  flex: 1

@@ -610,7 +610,7 @@ onMounted(load)
                all", which is the coarse one every kind of module has; the other is
                whatever else the module declared, named in the module's own words. -->
           <span class="switches">
-            <label class="switch-pair" :title="row.enabled
+            <label class="targets-switch-pair" :title="row.enabled
               ? `This project may use ${addressOf(row)}`
               : `This project may not use ${addressOf(row)}`">
               <button
@@ -628,7 +628,7 @@ onMounted(load)
             <label
               v-for="flag of flagsOf(row)"
               :key="flag.key"
-              class="switch-pair"
+              class="targets-switch-pair"
               :title="flag.description || flag.label"
             >
               <button
@@ -677,7 +677,7 @@ onMounted(load)
       </section>
     </div>
 
-    <table v-else-if="rows.length" class="table">
+    <table v-else-if="rows.length" class="targets-table">
         <thead>
           <tr>
             <!-- Which module a row belongs to, only where the list can hold more than
@@ -724,7 +724,7 @@ onMounted(load)
               <!-- The buttons live in a div inside the cell rather than being the
                    cell: a table cell styled as a flex row stops being a table cell,
                    and the row's edges stop lining up with the row above it. -->
-              <div class="actions">
+              <div class="targets-actions">
               <!-- Sending a message is what a notification module does. A cluster is
                    a place to put a release and there is no message to send it, so the
                    button that appears on every row of the other list is not offered
@@ -847,172 +847,3 @@ onMounted(load)
       <button v-else class="btn" type="button" @click="openAdd">{{ words.add }}</button>
   </div>
 </template>
-<style scoped>
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-bottom: 16px;
-  background: var(--bg-card, #161b22);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.table th {
-  text-align: left;
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
-}
-
-/* Height 1px on the cell is what makes every cell in a row take the height of the
-   tallest one — which is the whole of what keeps a row of buttons from pushing its
-   own border out of line with the row above. */
-.table td {
-  height: 1px;
-  padding: 10px 12px;
-  vertical-align: middle;
-  border-bottom: 1px solid var(--border);
-}
-
-.table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-  align-items: center;
-  flex-wrap: nowrap;
-  white-space: nowrap;
-}
-
-.small {
-  font-size: 12px;
-}
-
-.row-form {
-  max-width: 560px;
-  margin-bottom: 16px;
-}
-
-.recipient-form h4 {
-  margin: 0 0 12px;
-  font-size: 14px;
-}
-
-.field {
-  margin-bottom: 14px;
-}
-
-/* The module's own words about a setting, kept off the box it describes. */
-.field-note {
-  margin-top: 4px;
-  font-size: 12px;
-}
-
-.form-note {
-  margin: 0 0 14px;
-  padding: 8px 10px;
-  border-left: 2px solid var(--accent);
-  background: var(--bg-inset);
-  font-size: 12px;
-}
-
-.form-actions {
-  display: flex;
-  gap: 8px;
-}
-/* Blocks, for rows that have something under them. */
-.blocks {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.block {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-/* The row as a heading: one line, and the whole line is a target for opening. */
-.block-head-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg-inset);
-}
-
-/* Not a button styled as one: a caret that says which way the block opens, in the
-   place the eye already is — at the left edge, where a disclosure always is. */
-.caret {
-  padding: 0 2px;
-  border: 0;
-  background: none;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.block-head-row .place {
-  font-weight: 600;
-  font-size: 13px;
-}
-
-/* What is under the row belongs to it, so it is inset inside the block rather than
-   running to the border: it is the inside of this place, not the next thing on the
-   page. */
-.block-body {
-  padding: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.block-body > :deep(.active-card) {
-  margin-bottom: 0;
-}
-/* Switches with their names, because two identical pills on one row are a riddle. */
-/* One group, pushed to the right, and never broken in half: a switch separated from
-   its name by a line break is worse than an unnamed switch, because it looks attached
-   to the one above it. */
-.switches {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
-.switch-pair {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
-/* The name of a switch, in the same words as everything else on the row. Bold and
-   letterspaced made it look like a heading and pushed the two pairs onto two lines,
-   where each label sat beside the wrong switch. */
-.switch-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-/* What this level changed about a row. Set apart from the values themselves rather
-   than in the same run of text as them, because they are a different kind of thing: the
-   others are what the place is, this is a statement about who said so. */
-.changed-here {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 1px 7px;
-  border: 1px dashed var(--border);
-  border-radius: 3px;
-}
-</style>

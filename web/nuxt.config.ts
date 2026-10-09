@@ -45,6 +45,10 @@ export default defineNuxtConfig({
     },
   },
 
+  // One stylesheet, imported whole from app.sass. Listing main.css beside it here meant
+  // two stylesheets in dev, loaded once as a link and once injected, and the second copy of
+  // the legacy file landed after the partials — so equal-specificity rules were decided by
+  // arrival order rather than by meaning.
   css: ['~/assets/sass/app.sass'],
 
   // The group list and the group page share a path prefix, which by default makes

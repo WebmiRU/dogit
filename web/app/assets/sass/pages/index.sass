@@ -1,0 +1,17 @@
+// pages/index, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.index-feed-row
+  display: flex
+  gap: 10px
+  padding: 10px 16px
+  border-bottom: 1px solid var(--border)
+  font-size: 13px
+.index-feed-row:last-child
+  border-bottom: none
+.truncate
+  overflow: hidden
+  text-overflow: ellipsis
+  white-space: nowrap

@@ -89,7 +89,7 @@ const statusClass: Record<string, string> = {
     </div>
 
     <div v-else class="card">
-      <table class="table">
+      <table class="modules-table">
         <thead>
           <tr>
             <th>Module</th>
@@ -149,33 +149,3 @@ const statusClass: Record<string, string> = {
   </div>
 </template>
 
-<style scoped>
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.table th {
-  text-align: left;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-muted);
-  font-weight: 500;
-  font-size: 12px;
-}
-
-.table td {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-.table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.small {
-  font-size: 12px;
-}
-</style>

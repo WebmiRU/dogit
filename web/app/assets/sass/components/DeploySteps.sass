@@ -1,0 +1,92 @@
+// components/DeploySteps, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.steps
+  list-style: none
+  margin: 0
+  padding: 0
+.step
+  display: flex
+  gap: 10px
+  padding: 5px 0
+  align-items: flex-start
+.mark
+  flex: 0 0 16px
+  width: 16px
+  height: 20px
+  text-align: center
+  font-size: 12px
+  line-height: 20px
+.mark.waiting
+  color: var(--accent)
+  opacity: 0.5
+.mark.done
+  color: var(--green)
+.mark.now
+  color: var(--yellow)
+  font-size: 14px
+  display: inline-block
+.mark.now.moving
+  animation: nudge 0.8s ease-in-out infinite
+@keyframes nudge
+  0%
+    transform: translateX(-1.5px)
+  100%
+    transform: translateX(-1.5px)
+  50%
+    transform: translateX(1.5px)
+@media (prefers-reduced-motion: reduce)
+  .mark.now.moving
+    animation: none
+.mark.failed
+  color: var(--red)
+.step.waiting .label
+  color: var(--text-muted)
+.step-body
+  min-width: 0
+  flex: 1 1 auto
+.label
+  display: block
+  font-size: 13px
+.step.done .label
+  color: var(--text-muted)
+.step.skipped .label
+  color: var(--text-muted)
+.step.failed .label
+  color: var(--red)
+.step.now .label
+  font-weight: 600
+.detail
+  display: block
+  margin-top: 1px
+  font-size: 12px
+  color: var(--text-muted)
+  word-break: break-word
+.step.failed .detail
+  color: var(--red)
+.step-pods
+  display: flex
+  flex-direction: column
+  align-items: flex-start
+  gap: 4px
+  margin-top: 6px
+.step-bar
+  flex: none
+  width: 160px
+  height: 6px
+  border-radius: 3px
+  background: var(--bg-inset)
+  border: 1px solid var(--border)
+  overflow: hidden
+.fill
+  display: block
+  height: 100%
+  background: var(--green)
+  transition: width 0.4s ease
+.pod-count
+  font-size: 12px
+  color: var(--text-muted)
+  font-variant-numeric: tabular-nums
+  white-space: nowrap

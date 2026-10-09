@@ -90,7 +90,7 @@ function megabytes(value: number) {
         <div class="stat-value" :class="`state-${storageState}`">
           {{ percent(storageFraction) }}
         </div>
-        <div class="bar">
+        <div class="stat-bar">
           <div class="bar-fill" :class="`state-${storageState}`" :style="{ width: percent(storageFraction) }" />
         </div>
         <div class="muted small">
@@ -166,91 +166,3 @@ function megabytes(value: number) {
   </div>
 </template>
 
-<style scoped>
-.stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 14px;
-}
-
-.stat {
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.stat.wide {
-  grid-column: 1 / -1;
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-
-.stat-value {
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.small {
-  font-size: 12px;
-}
-
-.bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border);
-  overflow: hidden;
-  margin: 8px 0 6px;
-}
-
-.bar-fill {
-  height: 100%;
-  background: var(--accent);
-}
-
-.state-ok {
-  color: inherit;
-}
-
-.bar-fill.state-ok {
-  background: var(--accent);
-}
-
-.state-near {
-  color: #b8860b;
-}
-
-.bar-fill.state-near {
-  background: #d9a441;
-}
-
-.state-warn {
-  color: #c0392b;
-  font-weight: 600;
-}
-
-.bar-fill.state-warn {
-  background: #c0392b;
-}
-
-.muted.state-warn {
-  margin-left: 6px;
-}
-
-.extras {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.spark {
-  width: 100%;
-  height: 40px;
-  color: var(--accent);
-  display: block;
-}
-</style>

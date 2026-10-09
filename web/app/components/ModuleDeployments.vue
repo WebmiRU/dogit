@@ -1409,7 +1409,7 @@ watch(() => props.module.id, load)
            instance, it changes only when somebody edits a file, and it is read far less
            often than it takes up. Beside the card rather than above the whole page,
            because it is the same information the card's steps came from. -->
-      <details v-if="props.showRepository !== false" class="places-fold">
+      <details v-if="props.showRepository !== false" class="deploy-admin-places-fold">
         <summary class="muted small">
           Where this deploys — read from the default branch's .dogit-ci.yml
         </summary>
@@ -1423,7 +1423,7 @@ watch(() => props.module.id, load)
              not, and there is no moment at which it is "now" in particular. This one says what
              the reader is looking at, which is the account of deployments, in order. -->
         <button
-          class="tab"
+          class="deploy-tab"
           :class="{ on: tab === 'log' }"
           type="button"
           @click="tab = 'log'"
@@ -1431,7 +1431,7 @@ watch(() => props.module.id, load)
           Log
         </button>
         <button
-          class="tab"
+          class="deploy-tab"
           :class="{ on: tab === 'operations' }"
           type="button"
           @click="tab = 'operations'"
@@ -1443,7 +1443,7 @@ watch(() => props.module.id, load)
           <span class="count">{{ total }}</span>
         </button>
         <button
-          class="tab"
+          class="deploy-tab"
           :class="{ on: tab === 'images' }"
           type="button"
           @click="tab = 'images'"
@@ -1457,7 +1457,7 @@ watch(() => props.module.id, load)
              something on the page that does not exist. -->
         <button
           v-if="scopedCluster"
-          class="tab"
+          class="deploy-tab"
           :class="{ on: tab === 'settings' }"
           type="button"
           @click="tab = 'settings'"
@@ -1482,7 +1482,7 @@ watch(() => props.module.id, load)
 
       <div class="columns">
         <section v-show="tab === 'operations'" class="block">
-          <div class="block-head">
+          <div class="deploy-admin-block-head">
             <h3 class="block-title">Operations</h3>
             <span class="muted small">the last {{ PAGE }}, newest first</span>
           </div>
@@ -1493,7 +1493,7 @@ watch(() => props.module.id, load)
           </p>
 
           <div v-else class="table-scroll">
-            <table class="table">
+            <table class="table deploy-admin-table">
             <thead>
               <tr>
                 <th>When</th>
@@ -1570,7 +1570,7 @@ watch(() => props.module.id, load)
 
           <!-- Each move asks the server for that page. The count comes from the same
                answer, so the control cannot promise rows that were never counted. -->
-          <div v-if="pages > 1" class="pager">
+          <div v-if="pages > 1" class="deploy-admin-pager">
             <button
               class="btn btn-small"
               type="button"
@@ -1607,7 +1607,7 @@ watch(() => props.module.id, load)
         </section>
 
         <section v-show="tab === 'images'" class="block">
-          <div class="block-head">
+          <div class="deploy-admin-block-head">
             <h3 class="block-title">Images</h3>
             <span class="muted small">what can go into the cluster</span>
           </div>
@@ -1638,7 +1638,7 @@ watch(() => props.module.id, load)
                        about this project: the same image is in the registry or it is not,
                        and it can change without anything here being deployed. -->
                   <th>In the registry</th>
-                  <th class="actions-col">Put back</th>
+                  <th class="deploy-admin-actions-col">Put back</th>
                 </tr>
               </thead>
               <tbody>
@@ -1732,7 +1732,7 @@ watch(() => props.module.id, load)
                     </span>
                     <span v-else class="badge badge-neutral">Unknown</span>
                   </td>
-                  <td class="actions-col">
+                  <td class="deploy-admin-actions-col">
                     <!-- Not gated on the row having a deployment of its own: an image
                          that is being rolled out right now is the one this place is
                          being put on, and its catalogue row has nothing recorded yet —
@@ -1804,7 +1804,7 @@ watch(() => props.module.id, load)
             </table>
           </div>
 
-          <div v-if="imagePages > 1" class="pager">
+          <div v-if="imagePages > 1" class="deploy-admin-pager">
             <button
               class="btn btn-small"
               type="button"
@@ -1829,277 +1829,3 @@ watch(() => props.module.id, load)
   </div>
 </template>
 
-<style scoped>
-.block {
-  margin-bottom: 22px;
-}
-
-.block-head {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-}
-
-.block-title {
-  margin: 0;
-  font-size: 13px;
-}
-
-/* The operation under way gets a face of its own: it is the only thing here that is
-   moving, and a card that looks like the rest of the page is read as part of the
-   history rather than as something happening. */
-.active {
-  padding: 12px 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-inset);
-}
-
-/* The rollout's own number, big enough to read while watching and not so big that
-   it becomes the thing the card is about. */
-.pods {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 10px 0 2px;
-}
-
-.pods-count {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.pods-bar {
-  flex: 1 1 auto;
-  height: 4px;
-  min-width: 60px;
-  border-radius: 2px;
-  background: var(--border);
-  overflow: hidden;
-  align-self: center;
-}
-
-.pods-fill {
-  display: block;
-  height: 100%;
-  background: var(--green, #3fb950);
-  transition: width 0.4s ease;
-}
-
-.running-place {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px 12px;
-  padding: 4px 0;
-}
-
-.running-place + .running-place {
-  border-top: 1px solid var(--border);
-}
-
-/* The two lists are never on screen at once, so there is one column and no gap to
-   manage — and the wider one is what the list of operations needs. */
-.columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* Folded away by default: a fact about the repository, read rarely, and it sits in the
-   middle of the page where everything that moves belongs to something else. */
-.places-fold {
-  margin-bottom: 10px;
-}
-
-.places-fold > summary {
-  padding: 4px 0;
-  cursor: pointer;
-  user-select: none;
-}
-
-.tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.tab.on {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
-
-/* How many there are, so switching is a decision rather than a guess. */
-.count {
-  font-size: 11px;
-  padding: 0 6px;
-  border-radius: 8px;
-  background: var(--bg-inset);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Scrolling sideways rather than squashing: a digest cannot be abbreviated to fit a
-   column, and truncating it would make two images look like one. */
-.table-scroll {
-  overflow-x: auto;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th,
-td {
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-th {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.actions-col {
-  width: 130px;
-  white-space: nowrap;
-}
-
-/* The reason is the part of a row somebody reads, and it is the longest thing in it.
-   Without a width of its own the table gives the column whatever is left over — which
-   on a narrow page is a handful of characters — and a failure becomes a column of
-   two-word lines that is taller than the whole rest of the table. */
-.state-cell {
-  min-width: 220px;
-  max-width: 380px;
-}
-
-.badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.reason {
-  margin-top: 4px;
-  line-height: 1.4;
-}
-
-.image-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-/* A digest is long and a row of tags is short, so the two columns are given what
- * they each need and no more: the digest wraps within its own cell rather than
- * pushing the tags off the right edge of the page. */
-.images .image-cell {
-  word-break: break-all;
-  min-width: 220px;
-}
-
-.images .tags-cell {
-  min-width: 120px;
-}
-
-.image {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px 12px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.image-name {
-  flex: 1 1 100%;
-  font-size: 12px;
-  word-break: break-all;
-}
-
-/* The image somebody arrived here to look at. Held rather than scrolled to, because
-   the page it is on may change under them, and a row that flashes and goes is worse
-   than one that stays. */
-.image.wanted {
-  background: var(--yellow-soft);
-  border-radius: 4px;
-  padding-left: 8px;
-  margin-left: -8px;
-}
-
-/* An image in a row of operations is a link to that image, not an action on it. */
-.link {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--accent);
-  font: inherit;
-  font-family: var(--mono);
-  font-size: 12px;
-  cursor: pointer;
-  text-align: left;
-  text-decoration: underline;
-}
-
-.link:hover {
-  color: var(--text);
-}
-
-/* The status is a badge and nothing else, so the column has room for one and the
-   sentence beside it is a sentence in its own right. */
-.state-cell {
-  min-width: 130px;
-}
-
-/* The module's own words, wrapped rather than cut. They are the only part of the
-   row that says what happened, and a sentence that stops at "...were left as they
-   are" has stopped exactly where it started being interesting — and every row with
-   a long reason is the same length on screen, so the column looks empty. */
-.what-cell {
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  min-width: 220px;
-}
-
-.pager {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.nowrap {
-  white-space: nowrap;
-}
-
-.small {
-  font-size: 12px;
-}
-</style>

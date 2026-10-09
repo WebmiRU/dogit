@@ -76,14 +76,3 @@ onMounted(async () => {
   </div>
 </template>
 
-<style scoped>
-.project-block {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.project-name {
-  margin: 0 0 6px;
-  font-size: 13px;
-}
-</style>

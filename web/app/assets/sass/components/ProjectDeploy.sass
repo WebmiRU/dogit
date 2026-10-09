@@ -1,0 +1,73 @@
+// components/ProjectDeploy, out of its own stylesheet.
+// The bare deploy-page-own table and field selectors are prefixed
+// with .deploy-page because "th" on its own means every th on the
+// page once this file is global.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.table
+  width: 100%
+  border-collapse: collapse
+.deploy-page-table th
+  text-align: left
+  padding: 10px 12px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.deploy-page-table td
+  text-align: left
+  padding: 10px 12px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.deploy-page-table th
+  font-size: 12px
+  font-weight: 600
+  color: var(--text-muted)
+.module-name
+  font-weight: 600
+.deploy-page-actions-col
+  width: 190px
+  white-space: nowrap
+.deploy-page-actions-col .btn + .btn
+  margin-left: 6px
+.panel
+  margin-top: 4px
+  padding: 14px 12px
+  background: var(--bg-inset)
+  border-radius: 0 0 6px 6px
+.small
+  font-size: 12px
+.block
+  display: block
+.head
+  padding: 12px
+  border-bottom: 1px solid var(--border)
+.head-main
+  display: flex
+  align-items: center
+  gap: 9px
+.head-state
+  font-weight: 600
+  font-size: 13px
+.lamp
+  display: inline-flex
+  width: 14px
+  height: 14px
+  flex: 0 0 auto
+.lamp-dot
+  width: 100%
+  height: 100%
+  border-radius: 50%
+  background: var(--green)
+  box-shadow: 0 0 0 2px var(--bg-inset)
+.lamp.working .lamp-dot
+  background: var(--yellow)
+.lamp.bad .lamp-dot
+  background: var(--red)
+.deploy-page-places-fold
+  padding: 0 12px
+  border-bottom: 1px solid var(--border)
+.deploy-page-places-fold > summary
+  padding: 9px 0
+  cursor: pointer
+  user-select: none

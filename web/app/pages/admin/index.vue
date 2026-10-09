@@ -77,14 +77,3 @@ const features = computed(() => Object.entries(overview.value?.features ?? {}) a
   </div>
 </template>
 
-<style scoped>
-.admin-nav {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.admin-nav a {
-  text-decoration: none;
-}
-</style>

@@ -1,0 +1,59 @@
+// pages/admin/runners, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.runners-table
+  width: 100%
+  border-collapse: collapse
+  font-size: 13px
+.runners-table th
+  text-align: left
+  font-weight: 600
+  font-size: 12px
+  color: var(--text-muted)
+  padding: 8px 12px
+  border-bottom: 1px solid var(--border)
+.runners-table td
+  padding: 9px 12px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.runner-name
+  color: inherit
+  font-weight: 500
+  text-decoration: none
+.runner-name:hover
+  text-decoration: underline
+.numeric
+  text-align: right
+.pressure
+  display: flex
+  align-items: center
+  gap: 5px
+  margin-top: 4px
+  font-size: 11px
+  color: var(--text-muted)
+.pressure::before
+  content: ''
+  width: 6px
+  height: 6px
+  border-radius: 50%
+  background: currentColor
+.pressure.green
+  color: #3fb950
+.pressure.warn
+  color: #d29922
+.pressure.blue
+  color: #a371f7
+.pressure.unknown
+  color: var(--text-muted)
+.small
+  font-size: 12px
+.btn.small
+  padding: 4px 10px
+  font-size: 12px
+.footnote
+  margin-top: 16px
+  font-size: 12px
+  color: var(--text-muted)
+  max-width: 60ch

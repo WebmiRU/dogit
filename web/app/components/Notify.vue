@@ -71,19 +71,3 @@ onMounted(() => {
   </Transition>
 </template>
 
-<style scoped>
-.notify-enter-active,
-.notify-leave-active {
-  transition: all 0.3s ease;
-}
-
-.notify-enter-from {
-  opacity: 0;
-  transform: translateY(-10px);
-}
-
-.notify-leave-to {
-  opacity: 0;
-  transform: translateY(-10px);
-}
-</style>

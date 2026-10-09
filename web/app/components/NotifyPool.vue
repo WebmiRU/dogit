@@ -25,18 +25,3 @@ const { items, remove } = useNotifyPool()
   </div>
 </template>
 
-<style scoped>
-.notify-pool {
-  position: fixed;
-  right: 20px;
-  bottom: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  max-width: 400px;
-  max-height: 80vh;
-  overflow-y: auto;
-  z-index: 999;
-}
-</style>

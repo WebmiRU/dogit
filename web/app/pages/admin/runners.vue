@@ -125,7 +125,7 @@ function humanBytes(bytes: number): string {
         this instance and starts claiming jobs, from any machine that can reach it.
       </div>
 
-      <table v-else class="table">
+      <table v-else class="runners-table">
         <thead>
           <tr>
             <th>Runner</th>
@@ -186,77 +186,3 @@ function humanBytes(bytes: number): string {
   </div>
 </template>
 
-<style scoped>
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.table th {
-  text-align: left;
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text-muted);
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.table td {
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-.runner-name {
-  color: inherit;
-  font-weight: 500;
-  text-decoration: none;
-}
-
-.runner-name:hover {
-  text-decoration: underline;
-}
-
-.numeric {
-  text-align: right;
-}
-
-.pressure {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.pressure::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.pressure.green { color: #3fb950; }
-.pressure.warn { color: #d29922; }
-.pressure.blue { color: #a371f7; }
-.pressure.unknown { color: var(--text-muted); }
-
-.small {
-  font-size: 12px;
-}
-
-.btn.small {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-
-.footnote {
-  margin-top: 16px;
-  font-size: 12px;
-  color: var(--text-muted);
-  max-width: 60ch;
-}
-</style>

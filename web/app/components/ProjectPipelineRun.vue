@@ -484,7 +484,7 @@ watch(() => props.runIid, async () => {
           <p class="crumb">
             <NuxtLink :to="`/p/${projectPath}/-/pipelines`">Pipelines</NuxtLink>
           </p>
-          <h2 class="section-title">
+          <h2 class="pipeline-section-title">
             <span class="mono">#{{ pipeline.iid }}</span>
             <span class="badge" :class="statusClass[pipeline.status] ?? 'badge-neutral'">
               {{ statusText[pipeline.status] }}
@@ -528,7 +528,7 @@ watch(() => props.runIid, async () => {
               :aria-expanded="!foldedStages[stage.name]"
               @click="toggleStage(stage.name)"
             >
-              <span class="chevron" :class="{ open: !foldedStages[stage.name] }">▸</span>
+              <span class="pipeline-chevron" :class="{ open: !foldedStages[stage.name] }">▸</span>
               <span class="dot" :class="statusClass[stage.status] ?? 'badge-neutral'" />
               <span class="outline-stage-name">{{ stage.name }}</span>
               <span class="muted small">{{ stage.job_count }}</span>
@@ -601,7 +601,7 @@ watch(() => props.runIid, async () => {
                   {{ selectedJob.error }}
                 </p>
 
-                <div v-if="lines[selectedJob.iid]?.length" class="log">
+                <div v-if="lines[selectedJob.iid]?.length" class="pipeline-log">
                   <div
                     v-for="(line, index) in lines[selectedJob.iid]"
                     :key="index"
@@ -626,232 +626,3 @@ watch(() => props.runIid, async () => {
   </div>
 </template>
 
-<style scoped>
-.section-title {
-  font-size: 18px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.commit-title {
-  color: var(--text);
-}
-
-/* The commit's message is the answer to "what was this for", so it is the only
-   part of the line that is not muted: the rest is context for it. */
-.page-subtitle {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.duration {
-  font-variant-numeric: tabular-nums;
-}
-
-.branch {
-  font-size: 11px;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text-muted);
-}
-
-.stage-block {
-  margin-bottom: 18px;
-}
-
-/* The run's shape and its output, side by side. The outline is fixed and
-   scrollable on its own so that the run's progress stays put while a long log is
-   read beside it — the page itself never scrolls for this, only the log column. */
-.run-layout {
-  display: grid;
-  grid-template-columns: 260px 1fr;
-  gap: 16px;
-  align-items: start;
-}
-
-.outline {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px;
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.02));
-}
-
-.outline-stage + .outline-stage {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-
-.outline-stage-head,
-.outline-job {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 5px 6px;
-  border-radius: 4px;
-}
-
-/* The stage is a group of jobs, so its header is a button that folds them away:
-   the shape of the pipeline is what people scan, and folding is how they get to
-   the part they care about without losing the rest of the outline. */
-.outline-stage-head {
-  background: none;
-  border: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  width: 100%;
-}
-
-.outline-stage-head:hover {
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.04));
-}
-
-.chevron {
-  color: var(--text-muted);
-  transition: transform 0.12s ease;
-  flex: 0 0 auto;
-}
-
-.chevron.open {
-  transform: rotate(90deg);
-}
-
-.outline-stage-name {
-  flex: 1;
-  font-weight: 600;
-  text-transform: capitalize;
-  font-size: 13px;
-}
-
-.outline-job {
-  background: none;
-  border: none;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.outline-job:hover {
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.04));
-}
-
-/* Which job is on show — and nothing else. The edge is the accent and not the row's
-   own colour, because beside a coloured dot a second coloured edge reads as a second
-   opinion about whether the job passed: a failed job with a green edge on it says
-   two contradictory things at once, and the eye believes the louder one. */
-.outline-job.active {
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.07));
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-
-.outline-job-name {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* A status mark rather than a badge: the outline is a list of positions, and a
-   coloured dot says how it went without making the list shout. */
-.dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  background: currentColor;
-}
-
-.dot.badge-green { background: #3fb950; }
-.dot.badge-danger { background: #f85149; }
-.dot.badge-warning { background: #d29922; }
-/* Waiting, in the blue an avatar is drawn in: hsl(220 55% 32%).
-   Without a rule of its own the dot in this state takes no background of its own and shows through as
-   nothing at all */
-.dot.badge-blue { background: hsl(220 55% 32%); }
-.dot.badge-neutral { background: #6e7681; }
-.dot.badge-private { background: #a371f7; }
-
-/* The job's own sentence about why it failed, where a person reads it: above the log
-   that is empty, and the only thing there is when nothing ran. */
-.job-reason {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid #4a2326;
-  border-radius: 6px;
-  background: #2a1a1c;
-  color: #ffb4ae;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.detail {
-  min-width: 0;
-}
-
-.job-card {
-  margin-bottom: 8px;
-}
-
-.card-header .spacer {
-  flex: 1;
-}
-
-.script summary {
-  cursor: pointer;
-  margin-bottom: 8px;
-}
-
-.plain {
-  margin: 0;
-  padding: 12px;
-  background: var(--bg-subtle, rgba(0, 0, 0, 0.03));
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  white-space: pre-wrap;
-  font-size: 13px;
-}
-
-/* As tall as the log is.
-   A capped window with its own scrollbar is worse in both directions: the page
-   has to be scrolled twice to get anywhere, and every line that arrives pushes
-   the one being read out of sight. Growing the page instead puts one scrollbar
-   where there already was one, and leaves it to the reader. */
-.log {
-  margin: 0;
-  padding: 12px;
-  background: var(--bg-subtle, rgba(0, 0, 0, 0.03));
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.log-line {
-  white-space: pre-wrap;
-  word-break: break-word;
-  min-height: 1em;
-}
-
-/* Ordinary output is most of what a build says, and it is said quietly. A line on
-   stderr is the one a person is looking for, so it is the one that stands out. */
-.log-line.stdout {
-  color: var(--text-muted);
-}
-
-.log-line.stderr {
-  color: #ff9d94;
-}
-
-.small {
-  font-size: 12px;
-}
-</style>

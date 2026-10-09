@@ -1,0 +1,219 @@
+// components/ModuleSettingsForm, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.setting-row
+  display: flex
+  flex-wrap: wrap
+  align-items: flex-start
+  gap: 8px 16px
+  padding: 14px 0
+  border-bottom: 1px solid var(--border)
+.setting-row:first-of-type
+  padding-top: 4px
+.setting-label
+  flex: 1 1 320px
+  min-width: 240px
+.setting-control
+  width: 260px
+  flex: 0 0 260px
+.setting-control input
+  width: 100%
+  padding: 6px 8px
+  font: inherit
+  font-size: 13px
+  color: inherit
+  background: var(--bg)
+  border: 1px solid var(--border)
+  border-radius: 4px
+.setting-control select
+  width: 100%
+  padding: 6px 8px
+  font: inherit
+  font-size: 13px
+  color: inherit
+  background: var(--bg)
+  border: 1px solid var(--border)
+  border-radius: 4px
+.setting-control textarea
+  width: 100%
+  padding: 6px 8px
+  font: inherit
+  font-size: 13px
+  color: inherit
+  background: var(--bg)
+  border: 1px solid var(--border)
+  border-radius: 4px
+.setting-control textarea
+  font-family: var(--mono)
+  font-size: 12px
+  resize: vertical
+.setting-list
+  flex: 1 1 100%
+  display: flex
+  flex-direction: column
+  align-items: flex-start
+  gap: 12px
+  margin-top: 4px
+.setting-entry
+  padding: 12px 14px 14px
+  border: 1px solid var(--border)
+  border-radius: 6px
+  background: var(--bg-inset)
+.setting-list.bare .setting-entry
+  padding: 0
+  border: none
+  border-radius: 0
+  background: none
+.setting-list.bare .setting-entry-actions
+  border-top: none
+  padding-top: 0
+  margin-top: 12px
+.setting-entry-head
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 8px 16px
+  margin-bottom: 10px
+  padding-bottom: 8px
+  border-bottom: 1px solid var(--border)
+.setting-entry-name
+  font-weight: 600
+.setting-entry-origin
+  padding: 1px 8px
+  border: 1px solid var(--border)
+  border-radius: 10px
+  font-size: 11px
+  font-weight: 500
+  color: var(--text-muted)
+  white-space: nowrap
+.setting-entry-origin.ours
+  border-color: var(--accent)
+  color: var(--accent)
+.row-switches
+  display: flex
+  align-items: center
+  gap: 6px 18px
+  margin-left: auto
+.row-switch
+  display: inline-flex
+  align-items: center
+  gap: 6px
+  cursor: pointer
+  margin-bottom: 0
+.row-remove
+  display: inline-flex
+  align-items: center
+  gap: 6px
+  cursor: pointer
+  margin-bottom: 0
+.row-switch-name
+  font-size: 11px
+  font-weight: 600
+  letter-spacing: 0.06em
+  color: var(--text-muted)
+  min-width: 72px
+.row-inherited-note
+  font-size: 11px
+  color: var(--text-muted)
+  white-space: nowrap
+.settings-actions
+  display: flex
+  align-items: center
+  gap: 0.5rem
+  margin-top: 1rem
+  padding-top: 0.75rem
+  border-top: 1px solid var(--border)
+.setting-entry-actions
+  display: flex
+  align-items: center
+  gap: 8px
+  min-height: 30px
+  margin-top: 10px
+  padding-top: 8px
+  border-top: 1px solid var(--border)
+.setting-entry-actions .pending
+  margin-right: auto
+  visibility: hidden
+.setting-entry-actions .pending.show
+  visibility: visible
+.switch.undecided .knob
+  left: 50%
+  transform: translateX(-50%)
+  opacity: 0.6
+.setting-field
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 6px 16px
+  padding: 7px 0
+.setting-field + .switch.undecided .knob
+  left: 50%
+  transform: translateX(-50%)
+  opacity: 0.6
+.setting-field
+  border-top: 1px solid var(--border)
+.setting-field label
+  flex: 1 1 240px
+  min-width: 200px
+  font-size: 13px
+  line-height: 1.45
+.field-name
+  display: block
+.field-hint
+  display: block
+  margin-top: 1px
+.setting-field input
+  width: 100%
+  max-width: 340px
+  padding: 6px 8px
+  font: inherit
+  font-size: 13px
+  color: inherit
+  background: var(--bg)
+  border: 1px solid var(--border)
+  border-radius: 4px
+.setting-field select
+  width: 100%
+  max-width: 340px
+  padding: 6px 8px
+  font: inherit
+  font-size: 13px
+  color: inherit
+  background: var(--bg)
+  border: 1px solid var(--border)
+  border-radius: 4px
+.setting-field textarea
+  width: 100%
+  max-width: 340px
+  padding: 6px 8px
+  font: inherit
+  font-size: 13px
+  color: inherit
+  background: var(--bg)
+  border: 1px solid var(--border)
+  border-radius: 4px
+.setting-hint
+  flex-basis: 100%
+  margin: 6px 0 0
+  font-size: 12px
+  color: var(--text-muted)
+.form-actions
+  display: flex
+  align-items: center
+  gap: 8px
+  margin-top: 18px
+  padding-top: 14px
+  border-top: 1px solid var(--border)
+.link-button
+  background: none
+  border: none
+  padding: 0 0 0 8px
+  color: var(--text-muted)
+  font: inherit
+  font-size: 12px
+  cursor: pointer
+  text-decoration: underline
+.small
+  font-size: 12px

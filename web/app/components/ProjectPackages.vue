@@ -402,7 +402,7 @@ function shortDigest(digest: string) {
 </script>
 
 <template>
-  <div>
+  <div class="packages-page">
     <div v-if="loading" class="spinner">Loading images…</div>
 
     <div v-else-if="error" class="alert alert-error">{{ error }}</div>
@@ -414,7 +414,7 @@ function shortDigest(digest: string) {
     <template v-else>
       <div class="repo-head">
         <div class="title">
-          <h2 class="section-title" style="margin: 0">Images</h2>
+          <h2 class="packages-section-title" style="margin: 0">Images</h2>
           <p class="page-subtitle">
             <span v-if="tagCount">{{ needle ? `${foundTags} of ${tagCount}` : tagCount }} tag{{
               (needle ? foundTags : tagCount) === 1 ? '' : 's'
@@ -467,7 +467,7 @@ function shortDigest(digest: string) {
               :aria-expanded="!isFolded(entry.repository.name)"
               @click="toggleFold(entry.repository.name)"
             >
-              <span class="chevron" :class="{ closed: isFolded(entry.repository.name) }">▾</span>
+              <span class="packages-chevron" :class="{ closed: isFolded(entry.repository.name) }">▾</span>
               <span class="mono">{{ entry.repository.name }}</span>
             </button>
             <span class="muted small">
@@ -476,7 +476,7 @@ function shortDigest(digest: string) {
             <span class="badge">{{ formatBytes(entry.repository.size_bytes) }}</span>
           </div>
 
-          <table v-if="!isFolded(entry.repository.name)" class="table">
+          <table v-if="!isFolded(entry.repository.name)" class="packages-table">
             <thead>
               <tr>
                 <th>Tag</th>
@@ -566,144 +566,3 @@ function shortDigest(digest: string) {
   </div>
 </template>
 
-<style scoped>
-.section-title {
-  font-size: 18px;
-}
-
-/* The repository's name folds it. The whole header is the button because the
-   bookmark is for the row, not for the stepper at its left. */
-.repo-card-header {
-  gap: 10px;
-}
-
-.fold {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.fold .mono {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chevron {
-  color: var(--text-muted);
-  transition: transform 0.15s ease;
-}
-
-.chevron.closed {
-  transform: rotate(-90deg);
-}
-
-/* The door to the menu: quiet until the row is the one being looked at, like
-   the tags page's. The panel it opens is the tags page's — same class, same
-   place in the body — so two doors that look different would be two things to
-   learn for no reason a reader can see. */
-.row-menu {
-  width: 26px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-}
-
-tr:hover .row-menu,
-tr:focus-within .row-menu,
-.row-menu[aria-expanded="true"] {
-  opacity: 1;
-}
-
-.row-menu:hover {
-  background: var(--bg-elevated);
-  color: var(--text);
-}
-
-/* A touch screen has no hover to reveal anything, so there the door is simply
-   always open. */
-@media (hover: none) and (pointer: coarse) {
-  .row-menu {
-    opacity: 1;
-  }
-}
-
-.more {
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
-}
-
-/* For the one header cell that has no words: a screen reader gets "Actions",
-   and everybody else gets the same empty cell as before. */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.push-hint {
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 14px;
-}
-
-.push-hint-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.table th {
-  text-align: left;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-muted);
-  font-weight: 500;
-  font-size: 12px;
-}
-
-.table td {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.right {
-  text-align: right;
-}
-
-.small {
-  font-size: 12px;
-}
-</style>

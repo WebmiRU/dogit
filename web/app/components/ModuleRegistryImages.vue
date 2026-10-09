@@ -329,7 +329,7 @@ onBeforeUnmount(() => stopWatching?.())
   <div>
     <div class="repo-head">
       <div class="title">
-        <h3 class="section-title" style="margin: 0">Images</h3>
+        <h3 class="images-section-title" style="margin: 0">Images</h3>
         <p class="page-subtitle">
           Everything this registry holds, by the group that owns it.
         </p>
@@ -348,7 +348,7 @@ onBeforeUnmount(() => stopWatching?.())
       Nothing has been pushed. The first image a pipeline builds will appear here.
     </div>
 
-    <div v-else class="summary">
+    <div v-else class="images-summary">
       <span class="badge badge-green">Online</span>
       <span v-if="registryNames.length > 1">{{ registryNames.length }} registries</span>
       <span>{{ groups.length }} {{ groups.length === 1 ? 'group' : 'groups' }}</span>
@@ -360,7 +360,7 @@ onBeforeUnmount(() => stopWatching?.())
 
     <section v-for="group in groups" :key="group.label" class="group">
       <button class="group-head" type="button" @click="toggle(group.label)">
-        <span class="chevron" :class="{ open: !collapsed[group.label] }">▸</span>
+        <span class="images-chevron" :class="{ open: !collapsed[group.label] }">▸</span>
         <span class="group-name">{{ group.label }}</span>
         <span class="muted small">
           {{ group.projects.length }} {{ group.projects.length === 1 ? 'project' : 'projects' }}
@@ -426,149 +426,3 @@ onBeforeUnmount(() => stopWatching?.())
   </div>
 </template>
 
-<style scoped>
-.section-title {
-  font-size: 16px;
-}
-
-.summary {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.summary strong {
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-
-.group {
-  margin-bottom: 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.group-head,
-.project-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 12px;
-  background: none;
-  border: none;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.group-head:hover,
-.project-head:hover {
-  background: var(--bg-subtle, rgba(255, 255, 255, 0.03));
-}
-
-.group-name {
-  font-weight: 600;
-}
-
-.group-head .spacer,
-.project-head .spacer {
-  flex: 1;
-}
-
-.chevron {
-  color: var(--text-muted);
-  transition: transform 0.12s ease;
-}
-
-.chevron.open {
-  transform: rotate(90deg);
-}
-
-.group-body {
-  padding: 0 12px 10px;
-}
-
-.project {
-  margin-bottom: 10px;
-}
-
-.project-head {
-  padding: 6px 0;
-  cursor: default;
-}
-
-.project-name {
-  color: inherit;
-  text-decoration: none;
-}
-
-.project-name:hover {
-  text-decoration: underline;
-}
-
-.images {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.images th {
-  text-align: left;
-  font-weight: 500;
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.images td {
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-/* The chip itself is the interface's, so that a tag in this table and a tag beside a
-   place's row are drawn the same way. Only the weight is this table's: these names are
-   the point of the row. */
-.tag {
-  font-weight: 600;
-}
-
-.numeric {
-  text-align: right;
-}
-
-.small {
-  font-size: 12px;
-}
-
-.delete {
-  padding: 3px 8px;
-  font: inherit;
-  font-size: 12px;
-  color: var(--text-muted);
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.delete:hover:not(:disabled) {
-  color: var(--danger, #f85149);
-  border-color: currentColor;
-}
-
-.delete:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-</style>

@@ -1,0 +1,30 @@
+// components/DeployLog, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.deploy-log
+  margin-top: 1rem
+  border-top: 1px solid var(--border, #e2e2e6)
+  padding-top: 0.75rem
+.deploy-log-heading
+  margin: 0 0 0.25rem
+  font-size: 0.85rem
+  font-weight: 600
+.deploy-log-lines
+  margin: 0 0 0.75rem
+  padding-left: 1.1rem
+  list-style: none
+.deploy-log-line
+  font-size: 0.85rem
+  line-height: 1.5
+  color: var(--muted, #6b6b70)
+  display: flex
+  gap: 0.5rem
+  align-items: baseline
+.deploy-log-line::before
+  content: '-'
+  color: var(--border, #b9b9bf)
+.deploy-log-position
+  font-variant-numeric: tabular-nums
+  opacity: 0.7

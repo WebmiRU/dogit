@@ -1,0 +1,17 @@
+// components/NotifyPool, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.notify-pool
+  position: fixed
+  right: 20px
+  bottom: 20px
+  display: flex
+  flex-direction: column
+  gap: 10px
+  width: 100%
+  max-width: 400px
+  max-height: 80vh
+  overflow-y: auto
+  z-index: 999

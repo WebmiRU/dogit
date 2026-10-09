@@ -233,7 +233,7 @@ async function remove() {
             The stored password will be removed when you save.
           </div>
 
-          <div class="actions">
+          <div class="docker-actions">
             <button class="btn btn-primary" type="submit" :disabled="saving">
               {{ saving ? 'Saving…' : editing ? 'Save' : 'Add registry' }}
             </button>
@@ -253,43 +253,3 @@ async function remove() {
   </div>
 </template>
 
-<style scoped>
-.card {
-  max-width: 720px;
-}
-
-.hint {
-  margin: 4px 0 0;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 13px;
-  color: var(--text);
-}
-
-/* Inputs are as wide as their field everywhere else in this interface, which is right in a
-   form and wrong for a checkbox: stretched across the card, the box stops being a box and
-   the label reads as if it were the control. */
-.checkbox input {
-  width: auto;
-  flex: 0 0 auto;
-}
-
-.actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-
-.btn-danger {
-  color: #ffb4ae;
-}
-</style>

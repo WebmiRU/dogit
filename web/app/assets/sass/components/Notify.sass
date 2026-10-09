@@ -1,0 +1,15 @@
+// components/Notify, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.notify-enter-active
+  transition: all 0.3s ease
+.notify-leave-active
+  transition: all 0.3s ease
+.notify-enter-from
+  opacity: 0
+  transform: translateY(-10px)
+.notify-leave-to
+  opacity: 0
+  transform: translateY(-10px)

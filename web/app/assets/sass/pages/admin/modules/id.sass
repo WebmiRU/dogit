@@ -1,0 +1,39 @@
+// pages/admin/modules/[id], out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.tabs
+  display: flex
+  gap: 4px
+  border-bottom: 1px solid var(--border)
+  margin: 18px 0
+.mod-tab
+  background: none
+  border: 0
+  border-bottom: 2px solid transparent
+  color: var(--text-muted)
+  padding: 8px 14px
+  cursor: pointer
+  font-size: 14px
+.mod-tab.active
+  color: var(--text)
+  border-bottom-color: var(--accent)
+.facts
+  display: grid
+  grid-template-columns: 120px minmax(0, 1fr)
+  gap: 8px 16px
+  margin: 0 0 8px
+  font-size: 13px
+.facts dt
+  color: var(--text-muted)
+.facts dd
+  margin: 0
+  display: flex
+  gap: 8px
+  flex-wrap: wrap
+  align-items: center
+.mod-section-title
+  margin: 22px 0 10px
+.small
+  font-size: 12px

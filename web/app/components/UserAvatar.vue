@@ -40,15 +40,3 @@ const style = computed(() => ({
   <span class="avatar" :style="style" :title="name" aria-hidden="true">{{ initials }}</span>
 </template>
 
-<style scoped>
-.avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  flex: 0 0 auto;
-  user-select: none;
-}
-</style>

@@ -1,0 +1,47 @@
+// components/DeployPlaces, out of its own stylesheet.
+// Prefixed with the table's own class, not with the component's: this table sits
+// inside another component on the deploy page, and a prefix naming an ancestor
+// would hand it that ancestor's padding as well.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.places
+  margin-top: 1rem
+  padding: 12px
+.places-block-head
+  display: flex
+  align-items: baseline
+  flex-wrap: wrap
+  gap: 6px 10px
+  margin-bottom: 8px
+  padding-bottom: 6px
+  border-bottom: 1px solid var(--border, #e2e2e6)
+.block-title
+  margin: 0
+  font-size: 13px
+.places-block-head .small
+  flex: 1 1 100%
+  line-height: 1.4
+.places-table
+  width: 100%
+  border-collapse: collapse
+.places-table th
+  text-align: left
+  padding: 8px 10px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.places-table td
+  text-align: left
+  padding: 8px 10px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.places-table th
+  font-size: 12px
+  font-weight: 600
+  color: var(--text-muted)
+.place-name
+  font-weight: 600
+  margin-right: 6px
+.small
+  font-size: 12px

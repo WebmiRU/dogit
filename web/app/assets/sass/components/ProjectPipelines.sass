@@ -1,0 +1,563 @@
+// components/ProjectPipelines, out of its own stylesheet.
+// The bare pipelines-page-own table and field selectors are prefixed
+// with .pipelines-page because "th" on its own means every th on the
+// page once this file is global.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.pipelines-page
+  --pipeline-line: color-mix(in srgb, var(--border) 82%, transparent)
+  max-width: 1440px
+  margin: 0 auto
+  color: var(--text)
+.pipelines-heading
+  display: flex
+  align-items: flex-start
+  justify-content: space-between
+  gap: 24px
+  padding: 10px 0 22px
+.pipelines-heading-copy
+  min-width: 0
+.pipelines-breadcrumb
+  display: flex
+  align-items: center
+  gap: 8px
+  margin: 0 0 12px
+  color: var(--text-muted)
+  font-size: 12px
+.pipelines-breadcrumb a
+  max-width: min(55vw, 420px)
+  overflow: hidden
+  color: var(--text-muted)
+  text-overflow: ellipsis
+  white-space: nowrap
+.pipelines-breadcrumb a:hover
+  color: var(--text)
+.pipelines-breadcrumb span[aria-current="page"]
+  color: var(--text)
+  font-weight: 600
+.pipelines-title
+  margin: 0
+  font-size: clamp(27px, 3vw, 34px)
+  font-weight: 680
+  letter-spacing: -.045em
+  line-height: 1.15
+.pipelines-description
+  max-width: 660px
+  margin: 9px 0 0
+  color: var(--text-muted)
+  font-size: 13px
+  line-height: 1.65
+.pipelines-description code
+  padding: 2px 5px
+  border: 1px solid var(--pipeline-line)
+  border-radius: 5px
+  color: var(--text)
+  font-size: 12px
+.pipelines-new
+  display: inline-flex
+  align-items: center
+  gap: 7px
+  min-height: 38px
+  padding: 9px 14px
+  border-radius: 8px
+  white-space: nowrap
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .12)
+.new-plus
+  font-size: 17px
+  line-height: 12px
+.pipelines-summary
+  display: flex
+  align-items: center
+  gap: 22px
+  min-height: 78px
+  padding: 15px 20px
+  margin-bottom: 22px
+  border: 1px solid var(--pipeline-line)
+  border-radius: 11px
+  background: var(--bg-elevated)
+.summary-item
+  display: flex
+  flex-direction: column
+  gap: 4px
+.summary-value
+  font-size: 21px
+  line-height: 1
+  font-weight: 650
+  font-variant-numeric: tabular-nums
+  letter-spacing: -.035em
+.summary-label
+  color: var(--text-muted)
+  font-size: 11px
+.summary-running
+  color: var(--info, #58a6ff)
+.summary-failed
+  color: var(--red, #f85149)
+.summary-divider
+  width: 1px
+  height: 34px
+  background: var(--pipeline-line)
+.summary-context
+  display: inline-flex
+  align-items: center
+  gap: 7px
+  margin-left: auto
+  color: var(--text-muted)
+  font-size: 11px
+.pipeline-toolbar
+  overflow: visible
+  margin-bottom: 0
+  border: 1px solid var(--pipeline-line)
+  border-bottom: 0
+  border-radius: 11px 11px 0 0
+  background: var(--bg-elevated)
+.toolbar-heading
+  display: flex
+  align-items: center
+  gap: 10px
+  padding: 15px 16px 2px
+.toolbar-title
+  font-size: 13px
+  font-weight: 650
+.toolbar-count
+  color: var(--text-muted)
+  font-size: 11px
+.pipeline-toolbar .toolbar
+  display: flex
+  align-items: center
+  gap: 9px
+  padding: 12px 16px 15px
+  margin: 0
+  border: 0
+.search-wrap
+  position: relative
+  display: block
+  flex: 1 1 280px
+  min-width: 220px
+  max-width: 440px
+  margin: 0
+.search-icon
+  position: absolute
+  z-index: 1
+  left: 12px
+  top: 50%
+  transform: translateY(-50%)
+  color: var(--text-muted)
+  font-size: 19px
+  pointer-events: none
+.pipeline-toolbar .pipelines-filter
+  width: 100%
+  min-width: 0
+  min-height: 36px
+  padding: 8px 12px 8px 35px
+  background: var(--bg-inset)
+  border-color: var(--pipeline-line)
+  border-radius: 7px
+.pipeline-toolbar select
+  min-height: 36px
+  max-width: 200px
+  padding: 7px 30px 7px 10px
+  border-radius: 7px
+  background-color: var(--bg-inset)
+  border-color: var(--pipeline-line)
+.pipeline-table-wrap
+  overflow-x: auto
+  border: 1px solid var(--pipeline-line)
+  border-radius: 0 0 11px 11px
+  background: var(--bg-elevated)
+.pipelines-loading
+  border: 1px solid var(--pipeline-line)
+  border-radius: 0 0 11px 11px
+.pipelines-empty
+  margin-top: 0
+  padding: 52px 24px
+  border: 1px solid var(--pipeline-line)
+  border-radius: 0 0 11px 11px
+  background: var(--bg-elevated)
+.pipelines-empty h3
+  margin: 12px 0 6px
+  color: var(--text)
+  font-size: 16px
+.pipelines-empty p
+  max-width: 440px
+  margin: 0 auto 18px
+  color: var(--text-muted)
+  font-size: 13px
+  line-height: 1.6
+.empty-symbol
+  display: grid
+  place-items: center
+  width: 44px
+  height: 44px
+  margin: 0 auto
+  border: 1px solid var(--pipeline-line)
+  border-radius: 12px
+  background: var(--bg-inset)
+  color: var(--accent)
+  font-size: 27px
+@media (max-width: 760px)
+  .pipelines-heading
+    gap: 14px
+    flex-direction: column
+  .pipelines-new
+    align-self: flex-start
+  .pipelines-summary
+    gap: 12px
+    padding: 13px
+  .summary-context
+    display: none
+  .summary-value
+    font-size: 18px
+  .summary-label
+    max-width: 88px
+    font-size: 10px
+  .pipeline-toolbar .toolbar
+    align-items: stretch
+  .pipeline-toolbar .search-wrap
+    flex: 1 1 100%
+    min-width: 0
+    max-width: none
+  .pipeline-toolbar select
+    flex: 1 1 calc(50% - 8px)
+    min-width: 0
+    max-width: none
+  .summary-context
+    display: none
+  .pipeline-toolbar .toolbar
+    gap: 8px
+  .th-hint
+    display: none
+  .stage-legend
+    gap: 10px
+  .pipeline-table td.col-pipeline
+    min-width: 280px
+  .pipeline-table
+    min-width: 760px
+.toolbar
+  display: flex
+  gap: 8px
+  margin-bottom: 10px
+.toolbar select
+  flex: 0 0 auto
+  width: auto
+.pipelines-pager
+  display: flex
+  align-items: center
+  gap: 8px
+  margin-top: 12px
+.pipelines-pager .spacer
+  flex: 1
+.pipelines-filter
+  flex: 1
+  max-width: 480px
+  padding: 7px 10px
+  font: inherit
+  font-size: 13px
+  color: inherit
+  background: var(--bg, transparent)
+  border: 1px solid var(--border)
+  border-radius: 6px
+.pipelines-filter:focus
+  outline: 2px solid var(--accent)
+  outline-offset: -1px
+.pipeline-table
+  width: 100%
+  border-collapse: collapse
+  font-size: 13px
+.pipeline-table thead
+  background: color-mix(in srgb, var(--bg-inset) 65%, var(--bg-elevated))
+.pipeline-table th
+  text-align: left
+  font-weight: 600
+  font-size: 12px
+  color: var(--text-muted)
+  padding: 8px 12px
+  border-bottom: 1px solid var(--border)
+  white-space: nowrap
+.pipeline-table td
+  padding: 10px 12px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.pipeline-table tbody tr
+  position: relative
+.pipeline-table td.col-stages
+  position: relative
+.pipeline-table tr:hover td
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.03))
+.col-status
+  width: 148px
+.col-by
+  width: 190px
+.col-stages
+  width: 180px
+.result-link
+  display: block
+.result-state
+  display: inline-flex
+  align-items: center
+  gap: 6px
+  font-size: 12px
+  font-weight: 650
+.result-symbol
+  display: inline-grid
+  place-items: center
+  width: 19px
+  height: 19px
+  border-radius: 50%
+  background: color-mix(in srgb, currentColor 15%, transparent)
+  font-size: 12px
+  line-height: 1
+.commit-title
+  display: block
+  max-width: 460px
+  font-weight: 550
+  line-height: 1.45
+.pipeline-table td.col-pipeline
+  min-width: 330px
+.pipeline-table td.col-status
+  white-space: nowrap
+.pipeline-table td.col-by
+  min-width: 160px
+.pipeline-table tbody tr
+  transition: background .15s ease
+.pipeline-table tbody tr:hover td
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-elevated))
+.pipeline-table tbody tr:hover .commit-title
+  color: var(--accent)
+.pipelines-page td a
+  color: inherit
+  text-decoration: none
+.pipelines-page td a:visited
+  color: inherit
+  text-decoration: none
+.pipelines-page td a:hover
+  color: inherit
+  text-decoration: none
+.cell-line
+  display: block
+.duration
+  font-variant-numeric: tabular-nums
+  margin-top: 4px
+.title
+  overflow: hidden
+  text-overflow: ellipsis
+  white-space: nowrap
+  max-width: 460px
+.number
+  color: var(--text-muted)
+.meta
+  display: flex
+  align-items: center
+  gap: 8px
+  margin-top: 4px
+  flex-wrap: wrap
+.branch
+  display: inline-flex
+  align-items: center
+  gap: 4px
+  font-size: 11px
+  padding: 1px 7px
+  border-radius: 10px
+  border: 1px solid var(--border)
+  color: var(--text-muted)
+.sha
+  display: inline-flex
+  align-items: center
+  gap: 4px
+  font-size: 11px
+  padding: 1px 7px
+  border-radius: 10px
+  border: 1px solid var(--border)
+  color: var(--text-muted)
+.branch-icon
+  opacity: 0.7
+.sha-icon
+  opacity: 0.7
+.avatar-img
+  border-radius: 50%
+  flex: 0 0 auto
+.avatar-img.big
+  width: 32px
+  height: 32px
+.cell-link
+  display: flex
+  align-items: center
+  gap: 10px
+.by-name
+  overflow: hidden
+  text-overflow: ellipsis
+  white-space: nowrap
+.stages
+  display: flex
+  align-items: center
+  gap: 2px
+  position: relative
+.stage-mark
+  width: 26px
+  height: 28px
+  flex: 0 0 26px
+  padding: 0
+  border: 1px solid var(--pipeline-line)
+  border-radius: 7px
+  background: var(--bg-inset)
+  cursor: pointer
+  position: relative
+  transition: border-color .15s ease, background .15s ease, transform .15s ease
+.stage-mark::after
+  content: ''
+  position: absolute
+  inset: 8px
+  border-radius: 50%
+  background: currentColor
+.stage-mark:focus-visible
+  outline: 2px solid var(--accent)
+  outline-offset: 2px
+.stage-mark:hover
+  transform: translateY(-1px)
+  border-color: currentColor
+.stage-mark.open
+  background: color-mix(in srgb, currentColor 12%, var(--bg-elevated))
+  border-color: currentColor
+  box-shadow: inset 0 0 0 1px currentColor
+.stage-mark.badge-green
+  color: #3fb950
+.stage-mark.badge-danger
+  color: #f85149
+.stage-mark.badge-warning
+  color: #d29922
+.stage-mark.badge-neutral
+  color: #6e7681
+.stage-mark.badge-blue
+  color: hsl(220 55% 32%)
+.stage-mark.badge-private
+  color: #a371f7
+.stage-pop
+  position: absolute
+  z-index: 20
+  right: 0
+  top: calc(100% + 2px)
+  width: 260px
+  max-height: 320px
+  overflow: auto
+  padding: 6px
+  background: var(--bg-elevated, #1f2126)
+  border: 1px solid var(--border)
+  border-radius: 6px
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45)
+.stage-pop-head
+  padding: 4px 8px 6px
+  font-size: 12px
+  color: var(--text-muted)
+.stage-pop-job
+  display: flex
+  align-items: center
+  gap: 8px
+  padding: 4px 8px
+  border-radius: 4px
+.stage-pop-job:hover
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.05))
+.pop-dot
+  width: 9px
+  height: 9px
+  border-radius: 50%
+  background: currentColor
+  flex: 0 0 auto
+.pop-dot.badge-green
+  background: #3fb950
+.pop-dot.badge-danger
+  background: #f85149
+.pop-dot.badge-warning
+  background: #d29922
+.pop-dot.badge-neutral
+  background: #6e7681
+.pop-dot.badge-private
+  background: #a371f7
+.pop-name
+  flex: 1
+  color: inherit
+  text-decoration: none
+.pop-retry
+  width: 24px
+  height: 24px
+  border: none
+  border-radius: 4px
+  background: none
+  color: var(--text-muted)
+  font-size: 14px
+  cursor: pointer
+.pop-retry:hover:not(:disabled)
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.1))
+  color: var(--text)
+.pop-retry:disabled
+  opacity: 0.35
+  cursor: default
+.small
+  font-size: 12px
+.refreshing
+  display: inline-flex
+  align-items: center
+  gap: 6px
+  color: var(--text-muted)
+  font-size: 11px
+.refreshing-dot
+  background: var(--accent)
+  animation: pipeline-pulse 1.2s ease-in-out infinite
+.clear-filters
+  flex: 0 0 auto
+  border: 0
+  padding: 7px 5px
+  background: transparent
+  color: var(--accent)
+  font: inherit
+  font-size: 12px
+  cursor: pointer
+.clear-filters:hover
+  text-decoration: underline
+.stage-legend
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 15px
+  padding: 11px 14px
+  border-top: 1px solid var(--pipeline-line)
+  color: var(--text-muted)
+  font-size: 11px
+.stage-legend span
+  display: inline-flex
+  align-items: center
+  gap: 6px
+.legend-dot
+  display: inline-block
+  width: 7px
+  height: 7px
+  border-radius: 50%
+.legend-success
+  background: var(--green)
+.legend-running
+  background: var(--yellow)
+.legend-failed
+  background: var(--red)
+.legend-pending
+  background: var(--accent)
+.legend-skipped
+  background: #6e7681
+.no-stages
+  color: var(--text-muted)
+  font-size: 11px
+.page-indicator
+  color: var(--text-muted)
+  font-size: 12px
+.page-indicator strong
+  color: var(--text)
+  font-weight: 650
+@keyframes pipeline-pulse
+  50%
+    opacity: .4
+@media (prefers-reduced-motion: reduce)
+  .stage-mark
+    transition: none
+  .pipeline-table tbody tr
+    transition: none
+  .refreshing-dot
+    animation: none

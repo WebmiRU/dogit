@@ -1,0 +1,180 @@
+// components/ModuleDeployments, out of its own stylesheet.
+// The bare deploy-admin-own table and field selectors are prefixed
+// with .deploy-admin because "th" on its own means every th on the
+// page once this file is global.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.block
+  margin-bottom: 22px
+.deploy-admin-block-head
+  display: flex
+  align-items: baseline
+  flex-wrap: wrap
+  gap: 10px
+  margin-bottom: 8px
+  padding-bottom: 6px
+  border-bottom: 1px solid var(--border)
+.block-title
+  margin: 0
+  font-size: 13px
+.active
+  padding: 12px 14px
+  border: 1px solid var(--border-strong)
+  border-radius: 6px
+  background: var(--bg-inset)
+.deploy-admin-pods
+  display: flex
+  align-items: baseline
+  gap: 8px
+  margin: 10px 0 2px
+.pods-count
+  font-size: 20px
+  font-weight: 600
+  color: var(--text)
+.pods-bar
+  flex: 1 1 auto
+  height: 4px
+  min-width: 60px
+  border-radius: 2px
+  background: var(--border)
+  overflow: hidden
+  align-self: center
+.pods-fill
+  display: block
+  height: 100%
+  background: var(--green, #3fb950)
+  transition: width 0.4s ease
+.running-place
+  display: flex
+  flex-wrap: wrap
+  align-items: baseline
+  gap: 8px 12px
+  padding: 4px 0
+.running-place + .running-place
+  border-top: 1px solid var(--border)
+.columns
+  display: grid
+  grid-template-columns: minmax(0, 1fr)
+.deploy-admin-places-fold
+  margin-bottom: 10px
+.deploy-admin-places-fold > summary
+  padding: 4px 0
+  cursor: pointer
+  user-select: none
+.tabs
+  display: flex
+  gap: 4px
+  margin-bottom: 12px
+  border-bottom: 1px solid var(--border)
+.deploy-tab
+  display: inline-flex
+  align-items: center
+  gap: 7px
+  padding: 7px 12px
+  background: none
+  border: none
+  border-bottom: 2px solid transparent
+  color: var(--text-muted)
+  font: inherit
+  font-size: 13px
+  cursor: pointer
+.deploy-tab.on
+  color: var(--text)
+  border-bottom-color: var(--accent)
+.count
+  font-size: 11px
+  padding: 0 6px
+  border-radius: 8px
+  background: var(--bg-inset)
+  color: var(--text-muted)
+  font-variant-numeric: tabular-nums
+.table-scroll
+  overflow-x: auto
+.table
+  width: 100%
+  border-collapse: collapse
+.deploy-admin-table th
+  text-align: left
+  padding: 6px 8px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.deploy-admin-table td
+  text-align: left
+  padding: 6px 8px
+  border-bottom: 1px solid var(--border)
+  vertical-align: top
+.deploy-admin-table th
+  font-size: 12px
+  font-weight: 600
+  color: var(--text-muted)
+.deploy-admin-actions-col
+  width: 130px
+  white-space: nowrap
+.state-cell
+  min-width: 220px
+  max-width: 380px
+.badges
+  display: flex
+  flex-wrap: wrap
+  gap: 5px
+.reason
+  margin-top: 4px
+  line-height: 1.4
+.image-list
+  list-style: none
+  margin: 0
+  padding: 0
+.images .image-cell
+  word-break: break-all
+  min-width: 220px
+.images .tags-cell
+  min-width: 120px
+.image
+  display: flex
+  flex-wrap: wrap
+  align-items: baseline
+  gap: 8px 12px
+  padding: 6px 0
+  border-bottom: 1px solid var(--border)
+.image-name
+  flex: 1 1 100%
+  font-size: 12px
+  word-break: break-all
+.image.wanted
+  background: var(--yellow-soft)
+  border-radius: 4px
+  padding-left: 8px
+  margin-left: -8px
+.link
+  background: none
+  border: none
+  padding: 0
+  color: var(--accent)
+  font: inherit
+  font-family: var(--mono)
+  font-size: 12px
+  cursor: pointer
+  text-align: left
+  text-decoration: underline
+.link:hover
+  color: var(--text)
+.state-cell
+  min-width: 130px
+.what-cell
+  font-size: 12px
+  color: var(--text-muted)
+  line-height: 1.4
+  white-space: normal
+  overflow-wrap: anywhere
+  min-width: 220px
+.deploy-admin-pager
+  display: flex
+  align-items: center
+  gap: 10px
+  margin-top: 10px
+.nowrap
+  white-space: nowrap
+.small
+  font-size: 12px

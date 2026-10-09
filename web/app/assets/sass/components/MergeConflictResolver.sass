@@ -1,0 +1,85 @@
+// components/MergeConflictResolver, out of its own stylesheet.
+// The bare card-own table and field selectors are prefixed
+// with .card because "th" on its own means every th on the
+// page once this file is global.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.resolver-note
+  margin: 0 0 16px
+  font-size: 13px
+.conflict
+  border: 1px solid var(--border)
+  border-radius: 6px
+  padding: 12px
+  margin-bottom: 20px
+.choice-label
+  font-size: 12px
+  color: var(--muted)
+.conflict .toolbar strong
+  color: var(--text)
+.version
+  display: block
+  width: 100%
+  text-align: left
+  margin-top: 10px
+  padding: 0
+  border: 1px solid var(--border)
+  border-radius: 6px
+  background: transparent
+  color: inherit
+  cursor: pointer
+  overflow: hidden
+.version:hover:not(:disabled)
+  border-color: var(--accent)
+.version:disabled
+  opacity: 0.5
+  cursor: not-allowed
+.version.picked
+  border-color: var(--accent)
+  box-shadow: inset 3px 0 0 var(--accent)
+.version header
+  display: flex
+  align-items: center
+  gap: 10px
+  padding: 8px 12px
+  background: rgba(110, 118, 129, 0.08)
+  font-size: 13px
+.version .title
+  font-weight: 600
+.marker
+  margin-left: auto
+  color: var(--accent)
+  font-size: 12px
+.conflict-note
+  margin: 8px 12px
+  font-size: 12px
+  color: var(--muted)
+.version pre
+  margin: 0
+  padding: 12px
+  background: var(--bg-code, #0d1117)
+  border-top: 1px solid var(--border)
+  font: 12px/1.5 var(--mono)
+  white-space: pre-wrap
+  word-break: break-word
+  max-height: 320px
+  overflow: auto
+.absent
+  margin: 0
+  padding: 12px
+  border-top: 1px solid var(--border)
+  font-size: 12px
+  color: var(--muted)
+.write-label
+  display: flex
+  align-items: center
+  gap: 8px
+  margin-top: 12px
+  font-size: 13px
+.write-label input
+  width: auto
+.card textarea
+  margin-top: 8px
+  font: 12px/1.5 var(--mono)

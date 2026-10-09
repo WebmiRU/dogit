@@ -55,7 +55,7 @@ const sshDirHint = '~/.ssh/id_ed25519.pub'
 </script>
 
 <template>
-  <div>
+  <div class="ssh-keys-page">
     <h1 class="page-title">SSH keys</h1>
     <p class="page-subtitle">
       These keys authenticate you for git over SSH. Add the public half only — the
@@ -135,29 +135,3 @@ const sshDirHint = '~/.ssh/id_ed25519.pub'
   </div>
 </template>
 
-<style scoped>
-textarea {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  resize: vertical;
-}
-
-.code-sample {
-  margin: 0 0 10px;
-  padding: 10px 12px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  overflow-x: auto;
-}
-
-.code-sample:last-child {
-  margin-bottom: 0;
-}
-
-.name .meta {
-  color: var(--text-muted);
-  font-size: 11.5px;
-}
-</style>

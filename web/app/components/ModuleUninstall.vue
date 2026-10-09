@@ -259,7 +259,7 @@ const statusClass: Record<string, string> = {
         <span v-if="job.status === 'running'" class="muted small">
           {{ followed ? 'following' : 'reconnecting…' }}
         </span>
-        <div class="spacer" />
+        <div class="uninstall-spacer" />
         <span class="muted small">started {{ timeAgo(job.started_at ?? job.created_at) }}</span>
       </div>
 
@@ -285,86 +285,9 @@ const statusClass: Record<string, string> = {
           {{ job.progress_done }} of {{ job.progress_total }}
         </p>
 
-        <pre class="log">{{ lines.map((line) => line.message).join('\n') || 'waiting for the module…' }}</pre>
+        <pre class="uninstall-log">{{ lines.map((line) => line.message).join('\n') || 'waiting for the module…' }}</pre>
       </div>
     </div>
   </div>
 </template>
 
-<style scoped>
-.option {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 8px 0;
-  cursor: pointer;
-}
-
-/* The form styles elsewhere stretch an input across its field, which is right for
-   a text box and absurd for a box you tick: at full width it would push its own
-   label off the end of the row. */
-.option input[type='checkbox'] {
-  width: auto;
-  flex: 0 0 auto;
-  margin: 2px 0 0;
-}
-
-.option > span {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1 1 auto;
-  text-align: left;
-}
-
-.option-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.small {
-  font-size: 12px;
-}
-
-.confirm {
-  margin: 10px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--danger, #c0392b);
-  border-radius: 6px;
-  background: rgba(192, 57, 43, 0.06);
-}
-
-.progress {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border);
-  overflow: hidden;
-  margin: 6px 0;
-}
-
-.progress-fill {
-  height: 100%;
-  background: var(--accent);
-  transition: width 0.3s ease;
-}
-
-.log {
-  margin: 12px 0 0;
-  padding: 12px;
-  background: var(--bg-subtle, rgba(0, 0, 0, 0.03));
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  max-height: 420px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.spacer {
-  flex: 1;
-}
-</style>

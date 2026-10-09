@@ -155,16 +155,3 @@ async function createProject() {
   </div>
 </template>
 
-<style scoped>
-.checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text);
-  font-size: 13px;
-}
-
-.checkbox input {
-  width: auto;
-}
-</style>

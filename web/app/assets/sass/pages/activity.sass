@@ -1,0 +1,20 @@
+// pages/activity, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.activity-feed-row
+  display: flex
+  gap: 10px
+  padding: 11px 16px
+  border-bottom: 1px solid var(--border)
+.activity-feed-row:last-child
+  border-bottom: none
+.feed-text
+  flex: 1
+  min-width: 0
+.feed-meta
+  color: var(--text-muted)
+  font-size: 12px
+.feed-when
+  opacity: 0.7

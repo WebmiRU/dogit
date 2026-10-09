@@ -1,0 +1,57 @@
+// pages/admin/users, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.toolbar
+  display: flex
+  gap: 8px
+  margin-bottom: 10px
+.users-filter
+  flex: 1
+  max-width: 420px
+  padding: 7px 10px
+  font: inherit
+  font-size: 13px
+  color: inherit
+  background: var(--bg, transparent)
+  border: 1px solid var(--border)
+  border-radius: 6px
+.users-summary
+  display: flex
+  gap: 16px
+  padding: 10px 12px
+  margin-bottom: 12px
+  border: 1px solid var(--border)
+  border-radius: 6px
+  font-size: 13px
+  color: var(--text-muted)
+.users-table
+  width: 100%
+  border-collapse: collapse
+  font-size: 13px
+.users-table th
+  text-align: left
+  font-weight: 600
+  font-size: 12px
+  color: var(--text-muted)
+  padding: 8px 12px
+  border-bottom: 1px solid var(--border)
+.users-table td
+  padding: 9px 12px
+  border-bottom: 1px solid var(--border)
+.users-table tbody tr:hover td
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.03))
+.who
+  display: flex
+  align-items: center
+  gap: 10px
+.who-name
+  display: flex
+  align-items: center
+  gap: 8px
+  font-weight: 500
+.numeric
+  text-align: right
+.small
+  font-size: 12px

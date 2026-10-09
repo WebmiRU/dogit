@@ -1,0 +1,149 @@
+// components/ProjectPlaces, out of its own stylesheet.
+//
+// The element attribute that made this scoped is gone with it: global styles are
+// selected by name, so a name used here has to mean one thing across the site.
+
+.project-places
+  margin-top: 28px
+.places-add
+  margin-top: 14px
+.places-add-form
+  display: flex
+  align-items: center
+  flex-wrap: wrap
+  gap: 8px
+.add-name
+  flex: 1 1 320px
+  max-width: 420px
+  padding: 6px 10px
+  border: 1px solid var(--border)
+  border-radius: 6px
+  background: var(--bg)
+  color: var(--text)
+  font: inherit
+.places-title
+  font-size: 15px
+  font-weight: 600
+  margin: 0 0 4px
+.place
+  margin-top: 12px
+  border: 1px solid var(--border)
+  border-radius: 8px
+.place-off .place-head
+  opacity: 0.55
+.place-off .place-head:hover
+  opacity: 0.7
+.place-head
+  display: grid
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)
+  align-items: center
+  gap: 8px 16px
+  padding: 12px 14px
+  cursor: pointer
+  list-style: none
+.place-leading
+  display: flex
+  align-items: center
+  gap: 8px 10px
+  min-width: 0
+.place-switches
+  display: flex
+  align-items: center
+  justify-content: center
+  gap: 6px 18px
+.place-trailing
+  display: flex
+  align-items: center
+  justify-content: flex-end
+  gap: 10px
+  min-width: 0
+.place-ran
+  white-space: nowrap
+  overflow: hidden
+  text-overflow: ellipsis
+.place-running
+  display: inline-flex
+  align-items: center
+  gap: 6px
+  white-space: nowrap
+.place-running-split
+  font-size: 11px
+.place-running-digest
+  font-size: 11px
+  text-transform: none
+.place-state
+  width: 10px
+  height: 10px
+  flex: 0 0 auto
+  align-self: center
+  border-radius: 50%
+  background: var(--border-strong, #30363d)
+.place-state.ok
+  background: var(--green)
+.place-state.working
+  background: var(--yellow)
+.place-state.bad
+  background: var(--red)
+@media (max-width: 900px)
+  .place-head
+    grid-template-columns: minmax(0, 1fr) auto
+  .place-switches
+    grid-column: 1 / -1
+    grid-row: 2
+    justify-content: flex-start
+.place-head::-webkit-details-marker
+  display: none
+.place-name
+  font-weight: 600
+  white-space: nowrap
+  overflow: hidden
+  text-overflow: ellipsis
+.place-registry
+  font-size: 11px
+  white-space: nowrap
+  overflow: hidden
+  text-overflow: ellipsis
+.place-registry.unchosen
+  color: var(--yellow)
+.place-registry-from
+  opacity: 0.75
+.place-note
+  font-size: 11px
+  font-weight: 600
+  letter-spacing: 0.06em
+  color: var(--text-muted)
+.place-origin
+  margin-right: auto
+.place-origin.ours
+  background: var(--accent-soft)
+  color: var(--accent)
+.place-body
+  padding: 0 14px 14px
+.place-actions
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 8px 14px
+  padding-bottom: 10px
+  margin-bottom: 10px
+  border-bottom: 1px solid var(--border)
+.project-switch-pair
+  display: inline-flex
+  align-items: flex-end
+  gap: 6px
+  cursor: pointer
+  margin-bottom: 0
+.switch-name
+  font-size: 11px
+  font-weight: 600
+  letter-spacing: 0.06em
+  color: var(--text-muted)
+  min-width: 68px
+.switch-state
+  min-width: 26px
+  font-size: 11px
+  font-weight: 600
+  letter-spacing: 0.06em
+  color: var(--text-muted)
+.not-saved
+  margin-right: auto
