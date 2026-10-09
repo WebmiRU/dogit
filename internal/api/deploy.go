@@ -393,8 +393,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// that picks the fields out of it is a core that has to be taught a new
 				// field every time a module learns to say something. What belongs here
 				// is routing, not editing: who is allowed to hear it, and where it goes.
-				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation,
-					relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy"))
+				relayed := relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy")
+				s.rememberDeployProgress(ctx, job.ID, relayed)
+				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, relayed)
 
 				if stepDelay > 0 {
 					time.Sleep(stepDelay)
@@ -479,6 +480,29 @@ type deployProgress struct {
 	// on the last one: a page that gets it once at the end has to spend the whole
 	// rollout with an empty row, which is exactly when somebody is reading it.
 	Deployment map[string]any `json:"deployment,omitempty"`
+}
+
+// rememberDeployProgress writes down what a deployment has most recently said about itself.
+//
+// One place, called from every path a deployment's line travels. That is the whole reason it is
+// here and not in the handler that receives a build's progress: a deployment says what it is
+// doing over two different transports, and the first version of this was written into the one
+// that a deployment never uses. It compiled, it was tested against the path that did call it,
+// and on every deployment since the module moved to the channel it had never once run — so a
+// page opened during a rollout was told the rollout had not begun.
+func (s *Server) rememberDeployProgress(ctx context.Context, jobID int64, payload map[string]any) {
+	kept, err := json.Marshal(payload)
+	if err != nil {
+		s.log.Warn("could not write down a deployment's progress", "job_id", jobID, "error", err)
+		return
+	}
+	if err := s.store.Pipelines().RememberDeployProgress(ctx, jobID, kept); err != nil {
+		// Not fatal, and deliberately. The line is already in the job's log and already on
+		// its way to whoever is watching. Failing the deployment over a note kept for a page
+		// that has not arrived yet would turn a page being slightly behind into a
+		// deployment not happening.
+		s.log.Warn("could not write down a deployment's progress", "job_id", jobID, "error", err)
+	}
 }
 
 // relayOf is the module's own line, as an event, with the two things the core knows and

@@ -1097,26 +1097,9 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 			payload["deployment"] = record
 		}
 
-		// Written down as well as published, and for a different reader. The event reaches
-		// pages that are open; this reaches the ones that arrive later. A page opened halfway
-		// through a rollout has seen no lines at all, and without this it draws the plan's
-		// steps with none of them marked — seven steps in the colour of steps not yet
-		// reached, on a deployment that is on its fourth.
-		//
-		// Once for the job rather than once per place, because the progress is a fact about
-		// the operation and not about which of a project's places is watching it. The event
-		// is still sent per place: a card is watching one place, and this is about the other.
-		kept, kerr := json.Marshal(payload)
-		if kerr != nil {
-			s.log.Warn("could not write down a deployment's progress", "job_id", job.ID, "error", kerr)
-		} else if err := s.store.Pipelines().RememberDeployProgress(
-			r.Context(), job.ID, kept); err != nil {
-			// Not fatal, and deliberately: the line is already in the job's log and already
-			// on its way to whoever is watching. Failing the request over a note kept for a
-			// page that has not arrived yet would turn a page being slightly behind into a
-			// deployment not happening.
-			s.log.Warn("could not write down a deployment's progress", "job_id", job.ID, "error", err)
-		}
+		// Written down as well as published, and for a different reader: the event reaches
+		// pages that are open, and the note reaches the ones that arrive later.
+		s.rememberDeployProgress(r.Context(), job.ID, payload)
 
 		s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, payload)
 	}
