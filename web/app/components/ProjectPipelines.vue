@@ -322,11 +322,15 @@ watch(() => props.projectPath, () => load())
   <section class="pipelines-page">
     <header class="pipelines-heading">
       <div class="pipelines-heading-copy">
-        <div class="eyebrow"><span class="eyebrow-mark">↗</span> CONTINUOUS INTEGRATION</div>
+        <nav class="pipelines-breadcrumb" aria-label="Breadcrumb">
+          <NuxtLink :to="`/p/${projectPath}`">{{ projectPath }}</NuxtLink>
+          <span aria-hidden="true">/</span>
+          <span aria-current="page">Pipelines</span>
+        </nav>
         <h1 class="pipelines-title">Pipelines</h1>
         <p class="pipelines-description">
-          Track builds, inspect stages, and follow every change through
-          <code class="mono">.dogit-ci.yml</code>.
+          Builds, tests and deployments for this project.
+          Configuration: <code class="mono">.dogit-ci.yml</code>
         </p>
       </div>
       <button class="btn btn-primary pipelines-new" type="button" :disabled="starting" @click="start">
@@ -359,15 +363,19 @@ watch(() => props.projectPath, () => load())
       <div class="toolbar-heading">
         <span class="toolbar-title">Run history</span>
         <span class="toolbar-count">{{ range }}</span>
+        <span v-if="loading" class="refreshing"><span class="refreshing-dot" /> Updating</span>
       </div>
       <div class="toolbar">
-      <input
+      <label class="search-wrap">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input
         v-model="typing"
         class="filter"
         type="search"
         placeholder="Search runs, branches and commits"
         aria-label="Search runs"
       />
+      </label>
 
       <select
         :value="view.ref"
@@ -398,6 +406,12 @@ watch(() => props.projectPath, () => load())
         <option value="push">Pushes</option>
         <option value="manual">Started by hand</option>
       </select>
+      <button
+        v-if="view.search || view.status || view.ref || view.source"
+        type="button"
+        class="clear-filters"
+        @click="clearFilters"
+      >Clear filters</button>
       </div>
     </div>
 
@@ -427,10 +441,10 @@ watch(() => props.projectPath, () => load())
     <table class="pipeline-table">
       <thead>
         <tr>
-          <th class="col-status">Result</th>
-          <th class="col-pipeline">Pipeline / commit</th>
+          <th class="col-status">Status</th>
+          <th class="col-pipeline">Run details</th>
           <th class="col-by">Triggered by</th>
-          <th class="col-stages">Stage progress</th>
+          <th class="col-stages">Stages <span class="th-hint">· select a stage for jobs</span></th>
         </tr>
       </thead>
       <tbody>
@@ -501,7 +515,7 @@ watch(() => props.projectPath, () => load())
           </td>
 
           <td class="col-stages" @mouseleave="closeStage">
-            <div class="stages">
+            <div v-if="stageMarks(run).length" class="stages" :aria-label="`${stageMarks(run).length} stages`">
               <button
                 v-for="stage in stageMarks(run)"
                 :key="stage.name"
@@ -537,12 +551,18 @@ watch(() => props.projectPath, () => load())
                 </div>
               </div>
             </div>
+            <span v-else class="no-stages">No stage details</span>
           </td>
-
-
         </tr>
       </tbody>
     </table>
+    <div class="stage-legend" aria-label="Stage status legend">
+      <span><i class="legend-dot legend-success" /> Passed</span>
+      <span><i class="legend-dot legend-running" /> Running</span>
+      <span><i class="legend-dot legend-failed" /> Failed</span>
+      <span><i class="legend-dot legend-pending" /> Waiting</span>
+      <span><i class="legend-dot legend-skipped" /> Skipped</span>
+    </div>
     </div>
 
     <div v-if="total > 0" class="pager">
@@ -556,7 +576,7 @@ watch(() => props.projectPath, () => load())
       >
         Newer
       </button>
-      <span class="muted small">page {{ page }} of {{ pages }}</span>
+      <span class="page-indicator">Page <strong>{{ page }}</strong> of {{ pages }}</span>
       <button
         class="btn btn-small"
         type="button"
@@ -577,7 +597,7 @@ watch(() => props.projectPath, () => load())
   color: var(--text);
 }
 
-.pipelines-heading {
+ .pipelines-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -586,6 +606,24 @@ watch(() => props.projectPath, () => load())
 }
 
 .pipelines-heading-copy { min-width: 0; }
+
+.pipelines-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.pipelines-breadcrumb a {
+  max-width: min(55vw, 420px);
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipelines-breadcrumb a:hover { color: var(--text); }
+.pipelines-breadcrumb span[aria-current="page"] { color: var(--text); font-weight: 600; }
 
 .eyebrow {
   display: flex;
@@ -671,7 +709,10 @@ watch(() => props.projectPath, () => load())
 .summary-running { color: var(--info, #58a6ff); }
 .summary-failed { color: var(--red, #f85149); }
 .summary-divider { width: 1px; height: 34px; background: var(--pipeline-line); }
-.summary-context {
+ .summary-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   margin-left: auto;
   color: var(--text-muted);
   font-size: 11px;
@@ -695,37 +736,60 @@ watch(() => props.projectPath, () => load())
 .toolbar-title { font-size: 13px; font-weight: 650; }
 .toolbar-count { color: var(--text-muted); font-size: 11px; }
 
-.pipeline-toolbar .toolbar {
+ .pipeline-toolbar .toolbar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   padding: 12px 16px 15px;
   margin: 0;
   border: 0;
 }
 
-.pipeline-toolbar .filter {
+ .search-wrap {
+  position: relative;
+  display: block;
+  flex: 1 1 280px;
   min-width: 220px;
+  max-width: 440px;
+  margin: 0;
+}
+.search-icon {
+  position: absolute;
+  z-index: 1;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 19px;
+  pointer-events: none;
+}
+.pipeline-toolbar .filter {
+  width: 100%;
+  min-width: 0;
   min-height: 36px;
-  padding: 8px 12px;
+  padding: 8px 12px 8px 35px;
   background: var(--bg-inset);
   border-color: var(--pipeline-line);
   border-radius: 7px;
 }
 
-.pipeline-toolbar select {
+ .pipeline-toolbar select {
   min-height: 36px;
+  max-width: 200px;
   padding: 7px 30px 7px 10px;
   border-radius: 7px;
   background-color: var(--bg-inset);
   border-color: var(--pipeline-line);
 }
 
-.pipeline-table-wrap {
+ .pipeline-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--pipeline-line);
   border-radius: 0 0 11px 11px;
   background: var(--bg-elevated);
 }
 
-.pipelines-loading {
+ .pipelines-loading {
   border: 1px solid var(--pipeline-line);
   border-radius: 0 0 11px 11px;
 }
@@ -766,12 +830,16 @@ watch(() => props.projectPath, () => load())
   .summary-value { font-size: 18px; }
   .summary-label { max-width: 88px; font-size: 10px; }
   .pipeline-toolbar .toolbar { align-items: stretch; }
-  .pipeline-toolbar .filter { flex: 1 1 100%; max-width: none; }
-  .pipeline-toolbar select { flex: 1 1 calc(50% - 8px); min-width: 0; }
+  .pipeline-toolbar .search-wrap { flex: 1 1 100%; min-width: 0; max-width: none; }
+  .pipeline-toolbar select { flex: 1 1 calc(50% - 8px); min-width: 0; max-width: none; }
+  .summary-context { display: none; }
+  .pipeline-toolbar .toolbar { gap: 8px; }
+  .th-hint { display: none; }
+  .stage-legend { gap: 10px; }
+  .pipeline-table td.col-pipeline { min-width: 280px; }
   .pipeline-table { min-width: 760px; }
 }
 
-.section-title {
 .section-title {
   font-size: 18px;
 }
@@ -825,6 +893,9 @@ watch(() => props.projectPath, () => load())
   font-size: 13px;
 }
 
+ .pipeline-table thead {
+  background: color-mix(in srgb, var(--bg-inset) 65%, var(--bg-elevated));
+}
 .pipeline-table th {
   text-align: left;
   font-weight: 600;
@@ -879,12 +950,12 @@ watch(() => props.projectPath, () => load())
   background: var(--bg-subtle, rgba(255, 255, 255, 0.03));
 }
 
-.col-status { width: 148px; }
+ .col-status { width: 148px; }
 .col-by { width: 190px; }
 .col-stages { width: 180px; }
 
 .result-link { display: block; }
-.result-state {
+ .result-state {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -901,7 +972,10 @@ watch(() => props.projectPath, () => load())
   font-size: 12px;
   line-height: 1;
 }
-.commit-title { font-weight: 550; }
+ .commit-title { display: block; max-width: 460px; font-weight: 550; line-height: 1.45; }
+.pipeline-table td.col-pipeline { min-width: 330px; }
+.pipeline-table td.col-status { white-space: nowrap; }
+.pipeline-table td.col-by { min-width: 160px; }
 .pipeline-table tbody tr { transition: background .15s ease; }
 .pipeline-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 5%, var(--bg-elevated)); }
 .pipeline-table tbody tr:hover .commit-title { color: var(--accent); }
@@ -991,7 +1065,7 @@ td a:hover {
    positioning the popover against the cell would drop it below the whole row —
    a long way from the dot that was clicked, and further down with every row that
    had more stages. */
-.stages {
+ .stages {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1133,7 +1207,50 @@ td a:hover {
   font-size: 12px;
 }
 
+.live-indicator, .refreshing-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+}
+.refreshing { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11px; }
+.refreshing-dot { background: var(--accent); animation: pipeline-pulse 1.2s ease-in-out infinite; }
+.clear-filters {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 7px 5px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.clear-filters:hover { text-decoration: underline; }
+.stage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 15px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--pipeline-line);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.stage-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+.legend-success { background: var(--green); }
+.legend-running { background: var(--yellow); }
+.legend-failed { background: var(--red); }
+.legend-pending { background: var(--accent); }
+.legend-skipped { background: #6e7681; }
+.no-stages { color: var(--text-muted); font-size: 11px; }
+.page-indicator { color: var(--text-muted); font-size: 12px; }
+.page-indicator strong { color: var(--text); font-weight: 650; }
+@keyframes pipeline-pulse { 50% { opacity: .4; } }
+
 @media (prefers-reduced-motion: reduce) {
   .stage-mark, .pipeline-table tbody tr { transition: none; }
+  .refreshing-dot { animation: none; }
 }
 </style>
