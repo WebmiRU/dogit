@@ -25,6 +25,7 @@ export interface Place {
   latest_pipeline_at?: string
   open_merge_requests: number
   open_issues: number
+  forks: number
   created_at?: string
   archived_at?: string | null
 }

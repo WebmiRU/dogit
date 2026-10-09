@@ -237,6 +237,9 @@ const visibilities = [
             </td>
             <td class="places-activity-cell">
               <div class="places-activity-counts">
+                <span class="places-count" :class="{ muted: !place.forks }" :title="place.forks + ' forks'">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5" /><circle cx="12" cy="13" r="1.5" /><circle cx="12" cy="3" r="1.5" /><path d="M4 4.5v4a4 4 0 0 0 4 4h2.5M5.5 3H10.5" /></svg>{{ place.forks }}
+                </span>
                 <NuxtLink v-if="place.open_merge_requests > 0" :to="place.kind === 'project' ? '/p/' + place.path + '/-/merge_requests' : placeHref(place)" :title="place.open_merge_requests + ' open merge requests'" class="places-count">
                   <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2v12M4 4h5a3 3 0 0 1 3 3v2M9 12l3 3 3-3" /></svg>{{ place.open_merge_requests }}
                 </NuxtLink>
