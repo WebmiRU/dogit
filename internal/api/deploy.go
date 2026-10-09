@@ -401,6 +401,23 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// field every time a module learns to say something. What belongs here
 				// is routing, not editing: who is allowed to hear it, and where it goes.
 				relayed := relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy")
+				// Some module paths emit the terminal "finished" line outside the normal
+				// progress/note callback. Close the previous phase here as well when a new
+				// phase arrives, before recording the new phase. Otherwise the durable
+				// snapshot can keep the old phase open forever after a refresh.
+				if progress.Phase != "" && !progress.Finished {
+					for phase, previous := range phaseHistory {
+						if phase == progress.Phase {
+							continue
+						}
+						if previous["finished"] == true {
+							continue
+						}
+						previous["finished"] = true
+						previous["message"] = "finished"
+						previous["active_phases"] = []string{}
+					}
+				}
 				if progress.Phase != "" {
 					if progress.Finished {
 						kept := activePhases[:0]
