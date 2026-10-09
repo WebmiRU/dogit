@@ -658,12 +658,10 @@ function lateProgress(operation: DeployOperation): Watching | null {
   if (progress.phase && !seen.some((line) => line.phase === progress.phase)) {
     seen.push(progress)
   }
-  // Older module versions sometimes report a terminal progress message ("finished")
-  // without setting the structured finished flag. The snapshot's active_phases may then still
-  // contain that phase. Prefer the latest per-phase history when reconciling active arrows.
+  // Completion is state, not prose. Only the structured flag is authoritative here;
+  // the API persists phase-closing records with finished=true.
   const finishedByHistory = new Set(history
-    .filter((line) => line.finished === true ||
-      (typeof line.message === 'string' && /^finished[.!]?$/i.test(line.message.trim())))
+    .filter((line) => line.finished === true)
     .map((line) => String(line.phase ?? ''))
     .filter(Boolean))
   const active = (Array.isArray(said.active_phases)
