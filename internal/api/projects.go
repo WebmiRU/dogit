@@ -90,6 +90,8 @@ func (s *Server) handleListPlaces(w http.ResponseWriter, r *http.Request) {
 		Search:     r.URL.Query().Get("search"),
 		Kind:       r.URL.Query().Get("type"),
 		Visibility: r.URL.Query().Get("visibility"),
+		Scope:      r.URL.Query().Get("scope"),
+		Sort:       r.URL.Query().Get("sort"),
 		Page:       atoiOr(r.URL.Query().Get("page"), 1),
 		PerPage:    atoiOr(r.URL.Query().Get("per_page"), store.DefaultPageSize),
 	}
@@ -113,6 +115,12 @@ func (s *Server) handleListPlaces(w http.ResponseWriter, r *http.Request) {
 			ProjectCount: row.ProjectCount,
 			AccessLevel:  row.AccessLevel,
 			AccessName:   models.AccessLevelName(row.AccessLevel),
+			LastCommitAt: row.LastCommitAt,
+			LastCommitMessage: row.LastCommitMessage,
+			LatestPipelineStatus: row.LatestPipelineStatus,
+			LatestPipelineAt: row.LatestPipelineAt,
+			OpenMergeRequests: row.OpenMergeRequests,
+			OpenIssues: row.OpenIssues,
 		})
 	}
 
@@ -144,6 +152,12 @@ type placeView struct {
 	ProjectCount *int       `json:"project_count,omitempty"`
 	AccessLevel  int        `json:"access_level"`
 	AccessName   string     `json:"access_name"`
+	LastCommitAt *time.Time `json:"last_commit_at,omitempty"`
+	LastCommitMessage string `json:"last_commit_message,omitempty"`
+	LatestPipelineStatus string `json:"latest_pipeline_status,omitempty"`
+	LatestPipelineAt *time.Time `json:"latest_pipeline_at,omitempty"`
+	OpenMergeRequests int `json:"open_merge_requests"`
+	OpenIssues int `json:"open_issues"`
 }
 
 // atoiOr reads a number from a query, falling back when it is absent or nonsense.
