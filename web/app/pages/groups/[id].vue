@@ -40,6 +40,13 @@ function setTab(name: string) {
   navigateTo({ path: route.path, query: name === 'projects' ? {} : { tab: name } }, { replace: true })
 }
 
+function formatProjectDate(value?: string): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date)
+}
+
 async function load() {
   loading.value = true
   loadError.value = ''
@@ -69,12 +76,12 @@ watch([groupId, tab], load)
 </script>
 
 <template>
-  <div>
+  <div class="project-index group-detail-index">
     <div v-if="loading" class="spinner">Loading group…</div>
     <div v-else-if="loadError" class="alert alert-error">{{ loadError }}</div>
 
     <template v-else-if="group">
-      <div class="repo-head">
+      <div class="repo-head project-index-head group-detail-head">
         <div class="title">
           <h1 class="page-title">{{ group.name || group.full_path }}</h1>
           <p class="page-subtitle">
@@ -82,7 +89,12 @@ watch([groupId, tab], load)
             <span class="badge">{{ group.access_name }}</span>
           </p>
         </div>
-        <NuxtLink class="btn" to="/groups">All groups</NuxtLink>
+        <NuxtLink class="btn group-back-button" to="/groups">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="m14 18-6-6 6-6M8 12h12" />
+          </svg>
+          <span>All groups</span>
+        </NuxtLink>
       </div>
 
       <nav class="repo-tabs">
@@ -98,22 +110,59 @@ watch([groupId, tab], load)
         </button>
       </nav>
 
-      <div v-if="tab === 'projects'">
-        <div v-if="projects.length === 0" class="card empty">
+      <div v-if="tab === 'projects'" class="group-projects">
+        <div v-if="projects.length === 0" class="card empty group-projects-empty">
           No projects in this group yet. Create one from the
           <NuxtLink to="/projects">projects page</NuxtLink> with this namespace.
         </div>
-        <div v-else class="project-grid">
-          <article v-for="project in projects" :key="project.id" class="project-card">
-            <h3>
-              <NuxtLink :to="`/p/${project.path}`">{{ project.name || project.path }}</NuxtLink>
-            </h3>
-            <p>{{ project.description || 'No description' }}</p>
-            <div class="meta">
-              <span class="mono">{{ project.path }}</span>
-              <span class="badge" :class="`badge-${project.visibility}`">{{ project.visibility }}</span>
-            </div>
-          </article>
+
+        <div v-else class="group-projects-table-wrap">
+          <table class="admin-table places-table group-projects-table">
+            <thead>
+              <tr>
+                <th>Project</th>
+                <th>Visibility</th>
+                <th>Default branch</th>
+                <th>Access</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="project in projects" :key="project.id">
+                <td>
+                  <div class="place-name-line">
+                    <span class="place-avatar is-project">
+                      {{ (project.name || project.path).slice(0, 1).toUpperCase() }}
+                    </span>
+                    <div class="place-name-content">
+                      <NuxtLink :to="'/p/' + project.path" class="name">
+                        {{ project.name || project.path }}
+                      </NuxtLink>
+                      <div class="muted small mono group-project-path">{{ project.path }}</div>
+                      <div v-if="project.description" class="muted small place-description">
+                        {{ project.description }}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <span class="badge badge-label" :class="'badge-' + project.visibility">
+                    {{ project.visibility }}
+                  </span>
+                  <span v-if="project.archived_at" class="badge badge-neutral badge-label">Archived</span>
+                </td>
+                <td>
+                  <span v-if="project.default_branch" class="mono small">{{ project.default_branch }}</span>
+                  <span v-else class="muted small">—</span>
+                </td>
+                <td>
+                  <span v-if="project.access_name" class="places-access-value">{{ project.access_name }}</span>
+                  <span v-else class="muted small">—</span>
+                </td>
+                <td class="muted small">{{ formatProjectDate(project.created_at) }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

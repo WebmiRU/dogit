@@ -1,16 +1,96 @@
 // pages/groups/[id], out of its own stylesheet.
-//
-// The element attribute that made this scoped is gone with it: global styles are
-// selected by name, so a name used here has to mean one thing across the site.
+// Keep the same flat header, underline tabs, and compact data rows as the
+// project directory. A group page is a directory, not a stack of project cards.
 
-.group-tab
-  background: none
-  border: none
-  border-bottom: 2px solid transparent
+.group-detail-index
+  min-width: 0
+
+.group-detail-head
+  align-items: center
+  gap: 20px
+
+  .page-title
+    margin: 0
+
+  .page-subtitle
+    margin: 5px 0 0
+
+.group-detail-head + .repo-tabs
+  margin-top: 0
+
+.group-back-button
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  flex: 0 0 auto
+  gap: 8px
+  min-height: 36px
+  padding: 7px 12px
+  border-radius: 6px
+  background: var(--bg-elevated)
+  border-color: var(--border-strong)
   color: var(--text-muted)
-  cursor: pointer
-  font: inherit
-  padding: 10px 14px
-.group-tab.active
+  font-size: 13px
+  font-weight: 500
+  text-decoration: none
+
+.group-back-button:hover
+  border-color: var(--accent)
+  background: #222328
   color: var(--text)
-  border-bottom-color: var(--accent)
+  text-decoration: none
+
+.group-back-button svg
+  width: 16px
+  height: 16px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.7
+  stroke-linecap: round
+  stroke-linejoin: round
+
+.group-projects
+  min-width: 0
+  margin-top: 12px
+
+.group-projects-table-wrap
+  width: 100%
+  overflow-x: auto
+
+.project-index .group-projects-table
+  min-width: 900px
+
+.project-index .group-projects-table th:first-child
+  min-width: 300px
+
+.project-index .group-projects-table th:nth-child(2)
+  min-width: 125px
+
+.project-index .group-projects-table th:nth-child(3)
+  min-width: 160px
+
+.project-index .group-projects-table th:nth-child(4)
+  min-width: 130px
+
+.project-index .group-projects-table th:last-child
+  min-width: 150px
+  width: 150px
+
+.project-index .group-projects-table td
+  vertical-align: middle
+
+.group-project-path
+  margin-top: 2px
+  overflow-wrap: anywhere
+
+.group-projects-empty
+  margin-top: 0
+
+@media (max-width: 700px)
+  .group-detail-head
+    align-items: flex-start
+    flex-wrap: wrap
+    gap: 12px
+
+  .group-back-button
+    min-height: 34px
