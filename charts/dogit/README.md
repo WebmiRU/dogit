@@ -139,4 +139,4 @@ Replace the example credentials; don't keep a real password in shell history.
 
 Back up PostgreSQL, the application data volume, the generated `*-app-secret` (especially `secret-key`), and the PostgreSQL Secret. The application secret key is used to encrypt stored credentials; losing or rotating it can make existing encrypted credentials unreadable.
 
-The chart deliberately does not install a privileged Docker runner by default. A runner that mounts the node's Docker socket effectively has root-equivalent access to that node and needs a deployment-specific workspace and storage setup. Configure runner execution separately after deciding where builds are allowed to run.
+The chart never installs `runner:docker` and never mounts the node's Docker socket. A separate Kubernetes CI build-runner is not present as an executable in this revision, so this chart does not try to substitute the Docker runner for it.
