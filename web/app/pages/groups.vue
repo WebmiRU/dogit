@@ -37,7 +37,7 @@ async function createGroup() {
       <div class="title">
         <h1 class="page-title">Groups</h1>
       </div>
-      <button class="btn project-create-button" type="button" @click="showForm = !showForm">
+      <button class="btn btn-primary project-create-button" type="button" @click="showForm = !showForm">
         <span class="project-create-icon" aria-hidden="true">{{ showForm ? '−' : '+' }}</span>
         {{ showForm ? 'Cancel' : 'New group' }}
       </button>

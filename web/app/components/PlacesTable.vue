@@ -199,7 +199,7 @@ const visibilities = [
     </div>
 
     <template v-else>
-      <table class="table">
+      <table class="admin-table places-table">
         <thead>
           <tr>
             <th>{{ props.kind === 'group' ? 'Group' : 'Project' }}</th>

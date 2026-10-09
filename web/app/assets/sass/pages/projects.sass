@@ -11,3 +11,241 @@
   font-size: 13px
 .checkbox input
   width: auto
+
+
+// Projects and groups use the same flat list chrome as the admin tables.
+.project-index-head
+  display: flex
+  align-items: center
+  justify-content: space-between
+  gap: 16px
+  flex-wrap: nowrap
+  padding: 4px 0 18px
+  margin: 0
+  border: 0
+  border-radius: 0
+  border-bottom: 1px solid var(--border)
+  background: transparent
+
+  .title
+    flex: 1 1 auto
+    min-width: 0
+
+  .page-title
+    margin: 0
+
+  .page-subtitle
+    display: block
+    margin: 5px 0 0
+
+.project-create-button
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  flex: 0 0 auto
+  gap: 7px
+  min-height: 36px
+  padding: 7px 12px
+  border-radius: 6px
+  background: var(--button-primary-bg)
+  border-color: var(--button-primary-border)
+  color: var(--button-primary-text)
+  font-size: 13px
+  font-weight: 600
+  box-shadow: none
+
+  &:hover:not(:disabled)
+    background: var(--button-primary-hover)
+    border-color: var(--button-primary-hover)
+    color: var(--button-primary-text)
+
+.project-create-icon
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  width: auto
+  height: auto
+  border: 0
+  border-radius: 0
+  color: inherit
+  font-size: 16px
+  line-height: 1
+
+.project-index-tabs
+  display: flex
+  align-items: stretch
+  gap: 0
+  min-height: 42px
+  padding: 0
+  margin: 0 0 12px
+  border: 0
+  border-bottom: 1px solid var(--border)
+  border-radius: 0
+  background: transparent
+
+  a
+    display: inline-flex
+    align-items: center
+    gap: 4px
+    padding: 11px 13px 9px
+    margin-bottom: -1px
+    border: 0
+    border-bottom: 2px solid transparent
+    border-radius: 0
+    background: transparent
+    color: var(--text-muted)
+    font-size: 13px
+    font-weight: 500
+    text-decoration: none
+
+    &:hover
+      color: var(--text)
+      border-bottom-color: var(--border-strong)
+
+    &.active
+      color: var(--text)
+      border-bottom-color: var(--accent)
+      font-weight: 600
+
+.project-index .places-table
+  width: 100%
+  min-width: 900px
+  border-collapse: collapse
+  border: 0
+  border-radius: 0
+  border-spacing: 0
+  background: transparent
+  overflow: visible
+
+.project-index .places-table th
+  padding-top: 9px
+  padding-bottom: 9px
+  background: transparent
+  color: var(--text-muted)
+  font-size: 12px
+  font-weight: 600
+  letter-spacing: 0
+  text-transform: none
+
+.project-index .places-table td
+  padding-top: 12px
+  padding-bottom: 12px
+  vertical-align: middle
+
+.project-index .places-table tbody tr
+  transition: background 120ms ease
+
+.project-index .places-table tbody tr:hover td
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.03))
+
+.project-index .places-table .name
+  font-size: 13px
+  font-weight: 600
+
+.project-index .places-table th:first-child
+  min-width: 250px
+
+.project-index .places-table th:nth-child(2)
+  min-width: 145px
+
+.project-index .places-table th:nth-child(3)
+  min-width: 130px
+
+.project-index .places-table th:nth-child(4)
+  min-width: 250px
+
+.project-index .places-table th:last-child,
+.project-index .places-table td:last-child
+  width: 42px
+  min-width: 42px
+  text-align: right
+
+.places-pipeline-cell
+  min-width: 125px
+  white-space: nowrap
+
+.pipeline-state
+  display: inline-flex
+  align-items: center
+  gap: 6px
+  padding: 3px 8px
+  border: 1px solid color-mix(in srgb, currentColor 42%, var(--border))
+  border-radius: 3px
+  background: color-mix(in srgb, currentColor 7%, transparent)
+  font-size: 11px
+  line-height: 1.35
+  color: var(--text-muted)
+  white-space: nowrap
+
+.pipeline-state-dot
+  width: 7px
+  height: 7px
+  border-radius: 50%
+  background: currentColor
+  flex: 0 0 auto
+
+.pipeline-state-success
+  color: #8fdca6
+
+.pipeline-state-success .pipeline-state-dot
+  background: #3fb950
+
+.pipeline-state-failed
+  color: #ff9aa5
+
+.pipeline-state-failed .pipeline-state-dot
+  background: #f85149
+
+.pipeline-state-running
+  color: #f0c674
+
+.pipeline-state-running .pipeline-state-dot
+  background: #d29922
+
+.pipeline-state-pending
+  color: #a0a0a8
+
+.pipeline-state-canceled,
+.pipeline-state-interrupted,
+.pipeline-state-skipped
+  color: var(--text-muted)
+
+.pipeline-state-canceled .pipeline-state-dot,
+.pipeline-state-interrupted .pipeline-state-dot,
+.pipeline-state-skipped .pipeline-state-dot
+  background: #737781
+
+@media (max-width: 900px)
+  .project-index
+    overflow-x: auto
+
+  .project-index-head
+    gap: 14px
+
+  .project-index .places-table
+    min-width: 900px
+
+@media (max-width: 700px)
+  .project-index-head
+    flex-wrap: wrap
+    align-items: flex-start
+
+  .project-index-head .title
+    flex-basis: 100%
+
+  .project-create-button
+    min-height: 35px
+    padding: 6px 10px
+
+  .project-index-tabs
+    overflow-x: auto
+    white-space: nowrap
+
+  .project-index .toolbar
+    flex-wrap: wrap
+
+  .places-search
+    flex-basis: 100%
+
+  .project-index .toolbar select
+    flex: 1 1 auto

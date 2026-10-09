@@ -849,3 +849,25 @@
     select
       height: 30px
       font-size: 12px
+
+// Shared tab affordance: straight underline, no rounded frame or page-specific blue.
+.mr-list-topline
+  border-radius: 0
+  border-bottom: 1px solid var(--border)
+
+.mr-list-tabs
+  border-radius: 0
+
+  button,
+  a
+    border-radius: 0
+    box-shadow: none
+    background: transparent
+
+    &.active
+      border-bottom-color: var(--accent)
+      color: var(--text)
+
+.mr-list-actions
+  align-self: center
+  margin-left: auto

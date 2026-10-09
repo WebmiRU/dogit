@@ -28,19 +28,23 @@ onBeforeUnmount(() => clearInterval(timer))
 </script>
 
 <template>
-  <div>
-    <h1 class="page-title">Activity</h1>
-    <p class="page-subtitle">Everything that happened across your projects.</p>
+  <div class="activity-page">
+    <header class="repo-head activity-heading">
+      <div class="title">
+        <h1 class="page-title">Activity</h1>
+        <p class="page-subtitle">Everything that happened across your projects.</p>
+      </div>
+    </header>
 
-    <div class="card">
+    <div class="activity-feed">
       <div v-if="loading && entries.length === 0" class="spinner">Loading activity…</div>
-      <div v-else-if="error" class="alert alert-error" style="margin: 16px">{{ error }}</div>
+      <div v-else-if="error" class="alert alert-error activity-error">{{ error }}</div>
       <div v-else-if="entries.length === 0" class="feed-empty">Nothing has happened yet.</div>
       <div v-else class="feed">
         <div v-for="entry in entries" :key="entry.id" class="activity-feed-row">
           <UserAvatar :name="entry.actor_name" :size="28" />
           <div class="feed-text">
-            <div>{{ entry.actor_name }} {{ entry.summary }} in {{ entry.project_path }}</div>
+            <div class="activity-summary">{{ entry.actor_name }} {{ entry.summary }} in <NuxtLink :to="`/p/${entry.project_path}`">{{ entry.project_path }}</NuxtLink></div>
             <div class="feed-meta">
               <NuxtLink :to="`/p/${entry.project_path}`">{{ entry.project_name }}</NuxtLink>
               <span v-if="entry.detail"> · {{ entry.detail }}</span>
