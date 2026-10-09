@@ -179,9 +179,16 @@ const visibilities = [
         <tbody>
           <tr v-for="place in places" :key="place.id">
             <td>
-              <NuxtLink :to="placeHref(place)" class="name">{{ place.name || place.path }}</NuxtLink>
-              <div class="muted small mono">{{ place.path }}</div>
-              <div v-if="place.description" class="muted small">{{ place.description }}</div>
+              <div class="place-name-line">
+                <span class="place-avatar" :class="place.kind === 'group' ? 'is-group' : 'is-project'">
+                  {{ (place.name || place.path).slice(0, 1).toUpperCase() }}
+                </span>
+                <div class="place-name-content">
+                  <NuxtLink :to="placeHref(place)" class="name">{{ place.name || place.path }}</NuxtLink>
+                  <div class="muted small mono">{{ place.path }}</div>
+                  <div v-if="place.description" class="muted small place-description">{{ place.description }}</div>
+                </div>
+              </div>
             </td>
             <td>
               <span class="badge" :class="place.kind === 'group' ? 'badge-blue' : 'badge-neutral'">
@@ -222,83 +229,3 @@ const visibilities = [
   </div>
 </template>
 
-<style scoped>
-.toolbar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
-  flex-wrap: wrap;
-}
-
-/* The search takes what is left; the filters are as wide as their words. Inputs are
-   full width everywhere else in this interface, which is right in a form and wrong
-   here: two filters stacked under a search box read as three separate controls. */
-.toolbar .search {
-  flex: 1 1 260px;
-  min-width: 200px;
-  width: auto;
-}
-
-.toolbar select {
-  flex: 0 0 auto;
-  width: auto;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.table th {
-  text-align: left;
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
-}
-
-.table td {
-  height: 1px;
-  padding: 10px 12px;
-  vertical-align: middle;
-  border-bottom: 1px solid var(--border);
-}
-
- .table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.table tbody tr:hover td {
-  background: rgba(185, 185, 193, 0.045);
-}
-
-.table .name {
-  font-weight: 600;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.table .name:hover {
-  text-decoration: underline;
-}
-
-.small {
-  font-size: 12px;
-}
-
-.pager {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.pager .spacer {
-  flex: 1;
-}
-</style>
