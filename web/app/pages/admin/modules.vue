@@ -89,60 +89,60 @@ const statusClass: Record<string, string> = {
     </div>
 
     <table v-else class="admin-table modules-table">
-        <thead>
-          <tr>
-            <th>Module</th>
-            <th>Status</th>
-            <th>Address</th>
-            <th>Storage</th>
-            <th>Channel</th>
-            <th>Last seen</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="module in modules" :key="module.id">
-            <td>
-              <NuxtLink :to="`/admin/modules/${module.id}`" class="strong">
-                {{ module.name }}
-              </NuxtLink>
-              <div class="mono muted small">{{ module.kind }} · v{{ module.module_version || '?' }}</div>
-            </td>
-            <td>
-              <span class="badge" :class="statusClass[module.status] ?? 'badge-neutral'">
-                {{ module.status }}
+      <thead>
+        <tr>
+          <th>Module</th>
+          <th>Status</th>
+          <th>Address</th>
+          <th>Storage</th>
+          <th>Channel</th>
+          <th>Last seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="module in modules" :key="module.id">
+          <td>
+            <NuxtLink :to="`/admin/modules/${module.id}`" class="strong">
+              {{ module.name }}
+            </NuxtLink>
+            <div class="mono muted small">{{ module.kind }} · v{{ module.module_version || '?' }}</div>
+          </td>
+          <td>
+            <span class="badge" :class="statusClass[module.status] ?? 'badge-neutral'">
+              {{ module.status }}
+            </span>
+            <span v-if="!module.enabled" class="badge badge-warning">Forbidden</span>
+          </td>
+          <td>
+            <span v-if="module.public_url" class="mono small">{{ module.public_url }}</span>
+            <span v-else class="muted small">internal</span>
+          </td>
+          <td>
+            <template v-if="storageBadge(module)">
+              <span class="badge" :class="storageBadge(module)!.cls">
+                {{ storageBadge(module)!.text }}
               </span>
-              <span v-if="!module.enabled" class="badge badge-warning">Forbidden</span>
-            </td>
-            <td>
-              <span v-if="module.public_url" class="mono small">{{ module.public_url }}</span>
-              <span v-else class="muted small">internal</span>
-            </td>
-            <td>
-              <template v-if="storageBadge(module)">
-                <span class="badge" :class="storageBadge(module)!.cls">
-                  {{ storageBadge(module)!.text }}
-                </span>
-              </template>
-              <span v-else class="muted small">not reported</span>
-            </td>
-            <td class="small">
-              <!-- Two numbers rather than one badge, because they answer different
-                   questions: a module can be connected and still have nothing waiting, and
-                   commands waiting for a connected module is the state that looks like a
-                   module ignoring its core. -->
-              <span
-                class="badge"
-                :class="module.channel_connections ? 'badge-green' : 'badge-warning'"
-              >
-                {{ module.channel_connections || 0 }}
-              </span>
-              <span v-if="module.channel_pending_commands" class="muted small">
-                {{ module.channel_pending_commands }} waiting
-              </span>
-            </td>
-            <td class="small">{{ module.last_seen_at ? timeAgo(module.last_seen_at) : 'never' }}</td>
-          </tr>
-        </tbody>
+            </template>
+            <span v-else class="muted small">not reported</span>
+          </td>
+          <td class="small">
+            <!-- Two numbers rather than one badge, because they answer different
+                 questions: a module can be connected and still have nothing waiting, and
+                 commands waiting for a connected module is the state that looks like a
+                 module ignoring its core. -->
+            <span
+              class="badge"
+              :class="module.channel_connections ? 'badge-green' : 'badge-warning'"
+            >
+              {{ module.channel_connections || 0 }}
+            </span>
+            <span v-if="module.channel_pending_commands" class="muted small">
+              {{ module.channel_pending_commands }} waiting
+            </span>
+          </td>
+          <td class="small">{{ module.last_seen_at ? timeAgo(module.last_seen_at) : 'never' }}</td>
+        </tr>
+      </tbody>
     </table>
   </div>
 </template>
