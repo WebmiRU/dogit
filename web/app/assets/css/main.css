@@ -611,41 +611,99 @@ label {
   background: var(--bg-inset);
 }
 
-/* Deleting is not there until the row is the one being looked at — under the
-   pointer, or under the keyboard's focus. A list where every line ends in
+/* Deleting is not on the row until the row is the one being looked at — under
+   the pointer, or under the keyboard's focus. A list where every line ends in
    Delete reads as work to be done, and it is one misdirected click from doing
-   it; a list with nothing on it reads as a list, and the action is still one
-   hover away for anyone who came for it. */
-.tag-list .row-action {
+   it; a row that ends in a quiet ⋯ reads as a row, and everything behind that
+   door is still two clicks away for anyone who came for it. */
+.tag-list .row-menu {
   justify-self: end;
-  padding: 2px 6px;
+  width: 26px;
+  height: 22px;
+  padding: 0;
   border: 0;
   border-radius: 4px;
   background: none;
   color: var(--text-muted);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 1;
   cursor: pointer;
   opacity: 0;
 }
 
-.tag-list li:hover .row-action,
-.tag-list li:focus-within .row-action {
+/* The open menu keeps its own door lit: the panel is in the body by then, and
+   the row it belongs to would otherwise look untouched. */
+.tag-list li:hover .row-menu,
+.tag-list li:focus-within .row-menu,
+.tag-list .row-menu[aria-expanded="true"] {
   opacity: 1;
 }
 
-.tag-list .row-action:hover:not(:disabled) {
+.tag-list .row-menu:hover {
   background: var(--bg-elevated);
+  color: var(--text);
+}
+
+/* The menu itself, in the body rather than in the row: the card clips whatever
+   is inside it, and a panel belonging to the last row would be cut in half by
+   the card it belongs to. Fixed coordinates are the same choice — the panel
+   cannot follow the row, so scrolling closes it instead of misplacing it. */
+.row-menu-panel {
+  position: fixed;
+  z-index: 90;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  /* The shadow is what separates the panel from the row underneath it: without
+     it a dark menu on a dark page reads as part of whatever it lands on. */
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  display: grid;
+  gap: 2px;
+}
+
+.row-menu-panel.up {
+  transform: translateY(-100%);
+}
+
+.row-menu-panel a,
+.row-menu-panel button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.row-menu-panel a:hover,
+.row-menu-panel button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+/* Delete is the one red thing in the menu: the same hover rule recoloured
+   rather than a different control, because it is a choice like the others and
+   only its consequence is different. */
+.row-menu-panel .row-menu-danger:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.12);
   color: var(--red);
 }
 
-/* A touch screen has no hover to reveal anything, so there the button is
-   simply always there. The coarse pointer is part of the test on purpose: an
+/* A touch screen has no hover to reveal anything, so there the door is simply
+   always open. The coarse pointer is part of the test on purpose: an
    environment that points precisely but cannot hover reports hover:none as
    well — a screenshot tool is one of those — and without the pointer test every
    row would light up its button in a place no user will ever see it. */
 @media (hover: none) and (pointer: coarse) {
-  .tag-list .row-action {
+  .tag-list .row-menu {
     opacity: 1;
   }
 }

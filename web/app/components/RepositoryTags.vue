@@ -18,9 +18,11 @@
  * to say it rides along with the name and truncates, so a tag with a note is
  * still one row.
  *
- * Deleting is behind the row being pointed at rather than on every row: a list
- * of releases is read, not pruned, and a page where every line ends in Delete
- * is one misdirected click away from doing something nobody meant to do.
+ * Deleting is not on the row: it lives in a menu behind the ⋯ at the end of the
+ * line, next to the two other things one does with a release after reading it —
+ * look at it, see what it changed. A list of releases is read, not pruned, and a
+ * page where every line ends in Delete is one misdirected click away from doing
+ * something nobody meant to do.
  */
 import type { RefsResponse } from '~/types/repository'
 import { timeAgo } from '~/utils/format'
@@ -36,6 +38,72 @@ const emit = defineEmits<{ (event: 'refs-changed'): void }>()
 const error = ref('')
 const pending = ref<string | null>(null)
 const filter = ref('')
+
+/**
+ * The one row whose menu is open, and where its panel goes.
+ *
+ * The panel is teleported to the body and placed in fixed coordinates rather
+ * than drawn inside the row: the card clips its children — its corners are
+ * rounded and the lists inside it are square — so a panel belonging to a row
+ * near the bottom of the card would be cut in half by the card itself. In the
+ * body nothing clips it. The price is that the panel does not follow the row
+ * when the page scrolls, so a scroll closes it: a menu hanging next to the
+ * wrong row is worse than no menu at all.
+ */
+const open = ref<string | null>(null)
+const panel = ref({ top: 0, left: 0, up: false })
+
+const openedTag = computed(() =>
+  open.value ? tags.value.find((tag) => tag.name === open.value) ?? null : null,
+)
+
+const defaultBranch = computed(() => props.refs?.default_branch ?? '')
+
+function showMenu(name: string, event: MouseEvent) {
+  // The same ⋯ twice is a toggle: the second press is a decision to look at the
+  // row again, not to open the menu a second time.
+  if (open.value === name) {
+    closeMenu()
+    return
+  }
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  panel.value = {
+    top: box.bottom + 6,
+    left: box.right - 190,
+    up: window.innerHeight - box.bottom < 150,
+  }
+  open.value = name
+}
+
+function closeMenu() {
+  open.value = null
+}
+
+// Three ways the open menu stops being the thing at hand: a pointer down anywhere
+// else, Escape, and the page moving under it. All three are ignored while no
+// menu is open, so they cost three idle listeners for the life of the page.
+function onPointerAway(event: PointerEvent) {
+  if (!open.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.row-menu-panel') || target?.closest('.row-menu')) return
+  closeMenu()
+}
+
+function onKeyAway(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeMenu()
+}
+
+onMounted(() => {
+  window.addEventListener('pointerdown', onPointerAway, true)
+  window.addEventListener('keydown', onKeyAway)
+  window.addEventListener('scroll', closeMenu, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', onPointerAway, true)
+  window.removeEventListener('keydown', onKeyAway)
+  window.removeEventListener('scroll', closeMenu, true)
+})
 
 const allTags = computed(() => props.refs?.tags ?? [])
 
@@ -55,6 +123,21 @@ const tags = computed(() => {
 function saidAbout(tag: { message?: string; created_by?: string }) {
   if (!tag.message) return ''
   return tag.created_by ? `${tag.created_by}: ${tag.message}` : tag.message
+}
+
+/**
+ * A comparison of this release against the branch it is read against: the
+ * default branch, because "what did this release change" is a question asked of
+ * a branch, not of another release.
+ *
+ * Built here rather than with repoViewUrl because the compare view reads two
+ * refs — from and to — and that helper carries one. The one view whose address
+ * is not its helper's shape is worth a comment rather than a second parameter
+ * nobody else passes.
+ */
+function compareUrl(tagName: string): string {
+  const query = new URLSearchParams({ from: defaultBranch.value, to: tagName })
+  return `/p/${props.projectPath}/-/compare?${query.toString()}`
 }
 
 async function remove(name: string) {
@@ -117,16 +200,48 @@ async function remove(name: string) {
           </span>
           <span class="meta sha">{{ tag.target.slice(0, 8) }}</span>
           <span v-if="tag.created_at" class="meta">{{ timeAgo(tag.created_at) }}</span>
+          <!-- The row ends in a door to a menu rather than in the actions themselves:
+               reading the list must not be an act of almost destroying something. -->
           <button
-            class="row-action"
+            class="row-menu"
             type="button"
-            :disabled="pending === tag.name"
-            @click="remove(tag.name)"
+            aria-haspopup="menu"
+            :aria-expanded="open === tag.name"
+            :aria-label="`Actions for tag ${tag.name}`"
+            @click="showMenu(tag.name, $event)"
           >
-            {{ pending === tag.name ? 'Deleting…' : 'Delete' }}
+            ⋯
           </button>
         </li>
       </ul>
+
+      <!-- In the body, not in the row: the card clips whatever is inside it, and a
+           menu that belongs to the last row would be cut off by that clip. Fixed
+           coordinates also mean the panel cannot outlive the page moving under
+           it — a scroll closes it. -->
+      <Teleport to="#teleports">
+        <div
+          v-if="openedTag"
+          class="row-menu-panel"
+          :class="{ up: panel.up }"
+          :style="{ top: `${panel.top}px`, left: `${panel.left}px` }"
+        >
+          <NuxtLink :to="repoViewUrl(projectPath, 'tree', openedTag.name)" @click="closeMenu">
+            Browse files
+          </NuxtLink>
+          <NuxtLink :to="compareUrl(openedTag.name)" @click="closeMenu">
+            {{ defaultBranch ? `Compare with ${defaultBranch}` : 'Compare' }}
+          </NuxtLink>
+          <button
+            class="row-menu-danger"
+            type="button"
+            :disabled="pending === openedTag.name"
+            @click="remove(openedTag.name)"
+          >
+            {{ pending === openedTag.name ? 'Deleting…' : 'Delete' }}
+          </button>
+        </div>
+      </Teleport>
     </div>
   </div>
 </template>
