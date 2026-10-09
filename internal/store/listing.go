@@ -62,6 +62,7 @@ type ListingQuery struct {
 	Visibility string
 	Scope string
 	Sort string
+	Direction string
 	// Page is one-based. Zero means the first page.
 	Page int
 	// PerPage is how many rows to return. Zero means a full page.
@@ -95,7 +96,8 @@ func (q ListingQuery) normalise() ListingQuery {
 	}
 	q.Search = strings.TrimSpace(q.Search)
 	switch q.Scope { case "contributed", "personal", "member", "inactive": default: q.Scope = "" }
-	switch q.Sort { case "name", "created", "last_activity": default: q.Sort = "path" }
+	switch q.Sort { case "name", "created", "last_activity": default: q.Sort = "name" }
+	if q.Direction != "desc" { q.Direction = "asc" }
 	return q
 }
 
@@ -131,12 +133,12 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 			SELECT 'project' AS kind, p.id, p.path, p.name,
 			       COALESCE(p.description, '') AS description, p.visibility,
 			       p.group_id, NULL::int AS project_count, p.created_at,
-			       (SELECT c.timestamp FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1),
-			       COALESCE((SELECT left(c.message, 120) FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1), ''),
-			       COALESCE((SELECT pl.status FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1), ''),
-			       (SELECT pl.created_at FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1),
-			       (SELECT count(*)::int FROM merge_requests mr WHERE mr.project_id = p.id AND mr.state = 'opened'),
-			       (SELECT count(*)::int FROM issues i WHERE i.project_id = p.id AND i.state = 'opened')
+			       (SELECT c.timestamp FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1) AS last_commit_at,
+			       COALESCE((SELECT left(c.message, 120) FROM commits c WHERE c.project_id = p.id ORDER BY c.timestamp DESC LIMIT 1), '') AS last_commit_message,
+			       COALESCE((SELECT pl.status FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1), '') AS latest_pipeline_status,
+			       (SELECT pl.created_at FROM pipelines pl WHERE pl.project_id = p.id ORDER BY pl.id DESC LIMIT 1) AS latest_pipeline_at,
+			       (SELECT count(*)::int FROM merge_requests mr WHERE mr.project_id = p.id AND mr.state = 'opened') AS open_merge_requests,
+			       (SELECT count(*)::int FROM issues i WHERE i.project_id = p.id AND i.state = 'opened') AS open_issues
 			FROM projects p
 			WHERE (($5 = 'inactive' AND p.archived_at IS NOT NULL) OR ($5 <> 'inactive' AND p.archived_at IS NULL))
 			  AND (p.visibility <> 'private'
@@ -177,16 +179,20 @@ func (s *Store) ListVisible(ctx context.Context, userID uuid.UUID, q ListingQuer
 			SELECT count(*) AS total FROM visible
 		), page AS (
 			SELECT * FROM visible
-			ORDER BY CASE WHEN $8 = 'name' THEN lower(name) END ASC NULLS LAST,
-			         CASE WHEN $8 = 'created' THEN created_at END DESC NULLS LAST,
-			         CASE WHEN $8 = 'last_activity' THEN last_commit_at END DESC NULLS LAST,
-			         lower(path)
+			ORDER BY CASE WHEN $8 = 'name' AND $9 = 'asc' THEN lower(name) END ASC NULLS LAST,
+			         CASE WHEN $8 = 'name' AND $9 = 'desc' THEN lower(name) END DESC NULLS LAST,
+			         CASE WHEN $8 = 'created' AND $9 = 'asc' THEN created_at END ASC NULLS LAST,
+			         CASE WHEN $8 = 'created' AND $9 = 'desc' THEN created_at END DESC NULLS LAST,
+			         CASE WHEN $8 = 'last_activity' AND $9 = 'asc' THEN last_commit_at END ASC NULLS LAST,
+			         CASE WHEN $8 = 'last_activity' AND $9 = 'desc' THEN last_commit_at END DESC NULLS LAST,
+			         CASE WHEN $9 = 'desc' THEN lower(path) END DESC,
+			         CASE WHEN $9 = 'asc' THEN lower(path) END ASC
 			LIMIT $6 OFFSET $7
 		)
 		SELECT page.*, totals.total FROM page CROSS JOIN totals`
 
 	rows, err := s.pool.Query(ctx, statement, userID, q.Visibility, q.Kind, pattern,
-		q.Scope, q.PerPage, (q.Page-1)*q.PerPage, q.Sort)
+		q.Scope, q.PerPage, (q.Page-1)*q.PerPage, q.Sort, q.Direction)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list what is here: %w", err)
 	}
