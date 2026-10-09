@@ -49,24 +49,18 @@ async function load() {
 onMounted(load)
 watch(state, load)
 
-async function created(mr: MergeRequest) {
-  // A new request is by definition an open one, so the list moves there rather
-  // than leaving the person looking at a filtered view that does not contain it.
-  state.value = 'opened'
-  await navigateTo(`/p/${props.projectPath}/-/merge_requests/${mr.iid}`)
-}
 </script>
 
 <template>
   <div>
-    <MergeRequestForm
+    <NuxtLink
       v-if="canCreate"
-      :project-id="projectId"
-      :project-path="projectPath"
-      :refs="refs"
-      :default-branch="defaultBranch"
-      @created="created"
-    />
+      class="btn btn-primary mr-open"
+      :to="'/p/' + projectPath + '/-/merge_requests/new'"
+    >
+      <span class="mr-open-icon" aria-hidden="true">＋</span>
+      New merge request
+    </NuxtLink>
 
     <nav class="mr-list-filters" aria-label="Filter merge requests">
       <button

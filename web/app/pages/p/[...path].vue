@@ -33,6 +33,7 @@ import type {
   RefsResponse,
   TreeResponse,
 } from '~/types/repository'
+import type { MergeRequest } from '~/types/merge_requests'
 
 interface ProjectResponse {
   project: ProjectSummary
@@ -188,6 +189,10 @@ const mergeRequestNumber = computed(() => {
   const candidate = view.value.rest[0] ?? ''
   return /^\d+$/.test(candidate) ? candidate : ''
 })
+
+function mergeRequestCreated(mr: MergeRequest) {
+  void navigateTo('/p/' + (project.value?.path ?? projectPath.value) + '/-/merge_requests/' + mr.iid)
+}
 
 const projectId = computed(() => project.value?.id ?? '')
 
@@ -401,6 +406,15 @@ async function copyCloneUrl() {
           :refs="refs"
           :default-branch="project.default_branch"
           @refs-changed="refsChanged"
+        />
+        <MergeRequestCreatePage
+          v-else-if="view.name === 'merge_requests' && view.rest[0] === 'new'"
+          :project-id="projectId"
+          :project-path="project.path"
+          :project-name="project.name || project.path"
+          :refs="refs"
+          :default-branch="project.default_branch"
+          @created="mergeRequestCreated"
         />
         <!-- Only a number after the name makes it one request rather than the
              list; anything else is a mistyped address, and showing the list beats
