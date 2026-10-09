@@ -86,16 +86,25 @@ interface Held {
 const listeners = new Set<Listener>()
 const rewakers = new Set<Rewake>()
 
+/** Forgets what is older than the window, oldest first, so the held events stay in order. */
+function forgetOlderThan(at: number): void {
+  while (recent.length > 0) {
+    const oldest = recent[0]
+    // Nothing older than the oldest thing held, which is only possible if the list is empty.
+    if (!oldest || at - oldest.at <= recentWindowMS) return
+    recent.shift()
+  }
+}
+
 function remember(event: InstanceEvent) {
   const at = Date.now()
-  while (recent.length && at - recent[0].at > recentWindowMS) recent.shift()
+  forgetOlderThan(at)
   recent.push({ event, at })
 }
 
 /** What a listener joining now has missed, oldest first. */
 function sinceJoin(): InstanceEvent[] {
-  const at = Date.now()
-  while (recent.length && at - recent[0].at > recentWindowMS) recent.shift()
+  forgetOlderThan(Date.now())
   return recent.map((held) => held.event)
 }
 

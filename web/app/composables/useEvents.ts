@@ -17,7 +17,7 @@
  * ever be right for one page — the exception being a deployment's progress, which
  * is gone by the time anybody could ask what it was, and which `onEvent` is for.
  */
-import { onEvent, type InstanceEvent } from '~/lib/eventSocket'
+import { onEvent, onRewake, type InstanceEvent } from '~/lib/eventSocket'
 
 export type { InstanceEvent }
 
@@ -50,13 +50,27 @@ export interface WatchOptions {
   onEvent?: (event: InstanceEvent) => void
   /** Called when one of the watched kinds arrives. */
   onChange?: () => void
+  /**
+   * Called when the socket comes back.
+   *
+   * Its own option and not a kind, because a reconnection is not something that happened on this
+   * instance — it is something that happened to the connection, and there is no event for it. A
+   * page that patches itself from the events after a gap draws steps nobody saw finish: what was
+   * missed is not the two lines that did not arrive, it is the whole of the operation.
+   */
+  onReconnect?: () => void
 }
 
 /** Starts following and returns a stop function. */
 export function watchEvents(options: WatchOptions): () => void {
   const watched = options.kinds?.length ? new Set(options.kinds) : null
 
-  return onEvent((event) => {
+  // Registered before the listener, so a page is not told to re-read for an event it has not
+  // been given yet: the socket's own history is handed to the listener below, and a reload
+  // triggered before that would read the list and then read it again.
+  const stopRewake = options.onReconnect ? onRewake(options.onReconnect) : null
+
+  const stopEvents = onEvent((event) => {
     if (watched && !watched.has(event.kind)) return
 
     const project = typeof options.project === 'function' ? options.project() : options.project
@@ -71,4 +85,9 @@ export function watchEvents(options: WatchOptions): () => void {
     options.onChange?.()
     options.onEvent?.(event)
   })
+
+  return () => {
+    stopEvents()
+    stopRewake?.()
+  }
 }
