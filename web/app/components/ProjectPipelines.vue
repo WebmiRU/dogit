@@ -551,7 +551,7 @@ watch(() => props.projectPath, () => load())
                     :aria-label="`Retry ${entry.name}`"
                     :disabled="entry.status === 'running' || entry.status === 'pending'"
                     @click="retry(run, entry)"
-                  >↻</button>
+                  ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></button>
                 </div>
               </div>
             </div>
@@ -1135,14 +1135,29 @@ td a:hover {
 
 /* Run it again. Small, because it is offered on every job and used once. */
 .pop-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
   width: 24px;
   height: 24px;
+  padding: 0;
   border: none;
   border-radius: 4px;
   background: none;
   color: var(--text-muted);
-  font-size: 14px;
   cursor: pointer;
+}
+
+.pop-retry svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .pop-retry:hover:not(:disabled) {
