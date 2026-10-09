@@ -45,7 +45,7 @@ export default defineNuxtConfig({
     },
   },
 
-  css: ['~/assets/css/main.css'],
+  css: ['~/assets/sass/app.sass'],
 
   // The group list and the group page share a path prefix, which by default makes
   // the list their parent and the detail a child rendered through a <NuxtPage>
