@@ -68,22 +68,20 @@ async function created(mr: MergeRequest) {
       @created="created"
     />
 
-    <div class="card">
-      <div class="toolbar">
-        <nav class="mr-state-tabs" aria-label="Filter merge requests">
-          <button
-            v-for="option in states"
-            :key="option.value"
-            class="btn mr-state-tab"
-            :class="{ active: state === option.value }"
-            type="button"
-            @click="state = option.value"
-          >
-            {{ option.label }}
-          </button>
-        </nav>
-      </div>
+    <nav class="mr-list-filters" aria-label="Filter merge requests">
+      <button
+        v-for="option in states"
+        :key="option.value"
+        class="btn mr-state-tab"
+        :class="{ active: state === option.value }"
+        type="button"
+        @click="state = option.value"
+      >
+        {{ option.label }}
+      </button>
+    </nav>
 
+    <div class="card mr-list-results">
       <div v-if="loading" class="empty">Loading merge requests…</div>
       <div v-else-if="loadError" class="empty">{{ loadError }}</div>
       <div v-else-if="requests.length === 0" class="empty">
@@ -118,30 +116,22 @@ async function created(mr: MergeRequest) {
 </template>
 
 <style scoped>
-.mr-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+.mr-list-filters {
+  display:flex; align-items:center; flex-wrap:wrap; gap:4px;
+  width:100%; box-sizing:border-box; min-height:46px; margin:16px 0 14px; padding:6px 8px;
+  border:1px solid var(--border); border-radius:7px; background:var(--bg-elevated);
 }
-
-/* The meta line is a row of words, so it is laid out as one: without this the
-   spans sit against each other and "into main" reads as "intom ain". */
-.meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+.mr-state-tab {
+  min-height:32px; padding:5px 12px; border:1px solid transparent;
+  border-radius:5px; background:transparent; color:var(--text-muted); font-size:13px; font-weight:550;
 }
-
-.add {
-  color: #3fb950;
+.mr-state-tab:hover:not(:disabled) { border-color:var(--border); background:var(--bg-inset); color:var(--text); }
+.mr-state-tab.active,.mr-state-tab.active:hover:not(:disabled) {
+  border-color:var(--border-strong); background:var(--bg-inset); color:var(--text);
 }
-
-.del {
-  color: #f85149;
-}
-
-
-
+.mr-list-results { width:100%; box-sizing:border-box; }
+.mr-list-results .mr-body { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.mr-list-results .meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.add { color:#3fb950; }
+.del { color:#f85149; }
 </style>
