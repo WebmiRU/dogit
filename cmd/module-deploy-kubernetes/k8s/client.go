@@ -653,7 +653,25 @@ func (c *clusterClient) Counts(ctx context.Context, namespace, name, image strin
 	if deployment.Spec.Replicas != nil {
 		desired = *deployment.Spec.Replicas
 	}
-	counts := RolloutCounts{Desired: int(desired), Ready: int(deployment.Status.ReadyReplicas)}
+	counts := RolloutCounts{Desired: int(desired)}
+
+	// By digest, from the pods themselves — and not from the Deployment's own ready count, though
+	// the field is right there and says something. It counts every ready pod the Deployment owns,
+	// including the ones from the revision being replaced, so it is satisfied before the new pods
+	// have started: three old pods still serving answer "3 of 3" on a rollout whose new pods
+	// have not left Pending. That is how a deployment announced that it had finished while the
+	// thing it deployed was still waiting to be pulled.
+	//
+	// Asked of a tag rather than a digest, though, the question has no answer and the fallback is
+	// taken instead. The pods being replaced are already running the image this deployment names,
+	// so counting pods on that name counts the old ones as the new ones — and a deployment that
+	// says so has claimed a rollout happened when what it did was re-apply a manifest. The
+	// wording a reader is given already refuses the claim in this case; the count must not make
+	// it behind the reader's back. So the Deployment's own number is used, which cannot
+	// distinguish the two either, and the sentence beside it does not claim to.
+	if digestOf(image) == "" {
+		counts.Ready = int(deployment.Status.ReadyReplicas)
+	}
 
 	pods, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelectorOf(deployment),
@@ -665,41 +683,138 @@ func (c *clusterClient) Counts(ctx context.Context, namespace, name, image strin
 
 	for index := range pods.Items {
 		pod := pods.Items[index]
-		if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
-			continue
-		}
-		// A pod on its way out is not counted. It is still running its image and it is
-		// still counted by nothing else that matters: the cluster takes terminating pods
-		// out of a workload's available replicas the moment it starts deleting them.
-		// Counted here, a place finished rolling out kept announcing that the image it
-		// had just replaced was still there — for as long as the pod took to go, which
-		// is a minute of a badge that has nothing left to say.
-		if pod.DeletionTimestamp != nil {
+		if !worthCounting(&pod) {
 			continue
 		}
 
-		// What the container is running, not what its spec was written with.
+		// On the image being deployed, and serving — the two things at once.
 		//
-		// The two differ exactly when it matters: a pod of the new ReplicaSet whose
-		// image has not been pulled yet is on the old one, and a pod somebody changed
-		// by hand is on neither. Counted from the spec, a rollout reports the old pods
-		// gone while a third of the place is still serving the old image — and the
-		// number of them goes up and down as surge pods come and go, which is how a
-		// three-pod workload came to say it was retiring five.
+		// A pod on its way out is not counted, and neither is one that exists but would not take
+		// traffic: the cluster takes terminating pods out of a workload's available replicas the
+		// moment it starts deleting them, and a pod that is up but not yet ready is not one of
+		// the ones that would. Counted, a place finished rolling out kept announcing that the
+		// image it had just replaced was still there for as long as the pod took to go.
+		onTheNewImage, saidWhich := false, false
+
+		// What the container is running, not what its spec was written with, and a pod that
+		// has not said is not counted as being on the old one: saying nothing is not the same
+		// as saying it is on the old one, and counted the same way it puts pods that are still
+		// pulling into the number of pods being retired.
 		for _, container := range pod.Spec.Containers {
-			running := container.Image
-			for _, status := range pod.Status.ContainerStatuses {
-				if status.Name == container.Name && status.ImageID != "" {
-					running = status.ImageID
-					break
-				}
+			running := containerImage(&pod, container)
+			if running == "" {
+				continue
 			}
-			if running != image {
+			saidWhich = true
+			if SameImage(image, running) {
+				onTheNewImage = true
+			} else {
 				counts.OldUp++
 			}
 		}
+		if saidWhich && onTheNewImage && serving(&pod) {
+			counts.Ready++
+		}
+	}
+
+	// Never more ready than were asked for. A pod left over from a wider previous state is
+	// counted as new because nothing says it is not, and eleven of them are not eleven of ten.
+	if counts.Ready > counts.Desired {
+		counts.Ready = counts.Desired
 	}
 	return counts, nil
+}
+
+// digestOf is the digest an image reference names, or an empty string if it names none.
+//
+// A reference says two things at once, and which of them the cluster will hand back is the part
+// that catches people out: `registry/thing:3.9` is a promise and `registry/thing@sha256:…` is an
+// address. A pod reports `status.imageID`, which is an address whatever it pulled, and which may
+// or may not arrive with a `docker-pullable://` in front of it. Comparing the two as written is
+// comparing a promise with an address and losing.
+func digestOf(image string) string {
+	if _, after, found := strings.Cut(image, "@sha256:"); found {
+		return after
+	}
+	return ""
+}
+
+// DigestOf is the digest an image reference names, or an empty string if it names none.
+//
+// A tag is a promise that can be withdrawn, and every question this module asks about a rollout —
+// are these pods the new ones, has anything changed — is unanswerable about one. This is what
+// says whether the question can be asked at all.
+func DigestOf(image string) string { return digestOf(image) }
+
+// SameImage reports whether two references name the same thing.
+//
+// By digest when both carry one, and by the whole reference when neither does. Not one rule for
+// both, because they are not the same question: two runs of the same tag are different images,
+// and treating them as one is what lets a deployment finish in a second having changed nothing.
+//
+// Both of the places that count pods ask this, and they asked it by hand in two ways that
+// disagreed — one comparing whole strings, the other comparing them too, from a caller that had
+// been handed a name. A rollout the module reported as finished because no pod matched the
+// reference it was given is the shape of it.
+func SameImage(want, got string) bool {
+	wantedDigest, gotDigest := digestOf(want), digestOf(got)
+	switch {
+	case wantedDigest != "" && gotDigest != "":
+		return wantedDigest == gotDigest
+	case wantedDigest != "" || gotDigest != "":
+		// One of them is an address and the other a promise, and there is no telling from here
+		// whether the promise is pointing at it.
+		return false
+	default:
+		return want == got
+	}
+}
+
+// worthCounting asks whether a pod says anything about how the rollout is going right now.
+//
+// One question, asked once, for the two places that count pods: this module had one answer in
+// the tally a watcher is drawn from and another in the count a deployment is declared finished
+// by, and they disagreed on exactly the case that matters — a rollout whose new pods had not
+// started. Two callers of one rule, rather than one of them carrying its own.
+func worthCounting(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
+		// A pod that has finished or failed is neither serving nor on its way out.
+		return false
+	}
+	return pod.DeletionTimestamp == nil
+}
+
+// containerImage is what a container is really running, not what its spec was written with.
+//
+// The two differ exactly when it matters: a pod of the new ReplicaSet whose image has not been
+// pulled yet is on the old one, and a pod somebody changed by hand is on neither. Counted from
+// the spec, a rollout reports the old pods gone while a third of the place is still serving the
+// old image — and the number of them goes up and down as surge pods come and go, which is how a
+// three-pod workload came to say it was retiring five.
+func containerImage(pod *corev1.Pod, container corev1.Container) string {
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == container.Name && status.ImageID != "" {
+			return status.ImageID
+		}
+	}
+	return container.Image
+}
+
+// serving asks whether a pod would take traffic, from the containers' own statuses.
+//
+// Every container and not any: a pod whose sidecar has not come up is not serving, and counting
+// it as though it were is how a rollout reports itself finished while it is still starting. A
+// pod with no statuses at all has not said anything about itself, and is not counted.
+func serving(pod *corev1.Pod) bool {
+	if len(pod.Status.ContainerStatuses) == 0 {
+		return false
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if !status.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 // ImageCount is how many pods are running one image.
@@ -1090,30 +1205,18 @@ func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image 
 // name, because a pod's name is not its identity — a new pod may reuse a name a
 // deleted one had, and treating those as the same pod loses an entire rollout.
 func remember(pods map[string]podSeen, pod *corev1.Pod, revision string) {
-	if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
-		// A pod that has finished or failed is neither serving nor on its way out;
-		// keeping it would put a number on the page that no longer describes anything.
-		delete(pods, string(pod.UID))
-		return
-	}
-	if pod.DeletionTimestamp != nil {
-		// Being deleted already. The cluster takes such a pod out of the workload's
-		// availability the moment deletion starts, and counted here it keeps a rollout
-		// reporting a drain that has visibly finished for as long as the pod takes to go.
+	if !worthCounting(pod) {
+		// A pod that has finished, failed or started being deleted: none of them describes
+		// anything now, and keeping it puts a number on the page that no longer says it.
 		delete(pods, string(pod.UID))
 		return
 	}
 
-	// Whether it is serving yet, asked of the containers' own statuses and matched by
-	// name — the only field the spec and the status agree on. A pod that is up but not
-	// yet ready is not one of the ones that would take traffic, and counting it is how a
-	// rollout reports itself finished while it is still starting.
-	serving := false
+	// Whether it is serving yet, from the same helper the counts a deployment is declared
+	// finished by ask with, so the two cannot come to disagree about it.
+	servingNow := serving(pod)
 	running := ""
 	for _, status := range pod.Status.ContainerStatuses {
-		if status.Ready {
-			serving = true
-		}
 		if running == "" && status.ImageID != "" {
 			running = status.ImageID
 		}
@@ -1123,7 +1226,7 @@ func remember(pods map[string]podSeen, pod *corev1.Pod, revision string) {
 	pods[string(pod.UID)] = podSeen{
 		revision: own,
 		new:      revision != "" && own == revision,
-		ready:    serving,
+		ready:    servingNow,
 		image:    running,
 	}
 }
@@ -1152,7 +1255,7 @@ func tally(pods map[string]podSeen, desired int, image string) RolloutCounts {
 			// as saying it is on the old one.
 			continue
 		}
-		if pod.image == image {
+		if SameImage(image, pod.image) {
 			if pod.ready {
 				counts.Ready++
 			}

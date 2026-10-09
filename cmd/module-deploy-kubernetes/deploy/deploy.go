@@ -576,7 +576,7 @@ func (d *Deployer) runJob(ctx context.Context, substitution k8s.Substitution,
 // built — is unanswerable about a promise. Two runs name the same tag, the pods match, and the
 // answer is yes to both.
 func pinned(image string) bool {
-	return strings.Contains(image, "@sha256:")
+	return k8s.DigestOf(image) != ""
 }
 
 // wait waits for the workload's pods to be running the image this deployment put there.
