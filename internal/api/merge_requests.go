@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -159,8 +160,32 @@ func (s *Server) handleCreateMergeRequest(w http.ResponseWriter, r *http.Request
 }
 
 // handleListProjectMergeRequests lists the merge requests of one project.
+func mergeRequestSince(value string) (*time.Time, error) {
+	now := time.Now()
+	switch strings.TrimSpace(value) {
+	case "", "all":
+		return nil, nil
+	case "7d":
+		cutoff := now.AddDate(0, 0, -7)
+		return &cutoff, nil
+	case "30d":
+		cutoff := now.AddDate(0, 0, -30)
+		return &cutoff, nil
+	case "1y":
+		cutoff := now.AddDate(-1, 0, 0)
+		return &cutoff, nil
+	default:
+		return nil, errBadRequest("since must be one of all, 7d, 30d or 1y")
+	}
+}
+
 func (s *Server) handleListProjectMergeRequests(w http.ResponseWriter, r *http.Request) {
 	rc, err := s.repoWithAccess(r, store.ActionReadProject)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	since, err := mergeRequestSince(r.URL.Query().Get("since"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -168,6 +193,7 @@ func (s *Server) handleListProjectMergeRequests(w http.ResponseWriter, r *http.R
 
 	filter := store.ListFilter{
 		ProjectID: &rc.Project.ID,
+		Since: since,
 		State: strings.TrimSpace(r.URL.Query().Get("state")),
 		Query: strings.TrimSpace(r.URL.Query().Get("query")),
 		Sort: strings.TrimSpace(r.URL.Query().Get("sort")),
@@ -224,9 +250,15 @@ func (s *Server) handleListMergeRequests(w http.ResponseWriter, r *http.Request)
 			visibleIDs = append(visibleIDs, project.ID)
 		}
 	}
+	since, err := mergeRequestSince(r.URL.Query().Get("since"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 
 	filter := store.ListFilter{
 		VisibleProjectIDs: visibleIDs,
+		Since: since,
 		State: strings.TrimSpace(r.URL.Query().Get("state")),
 		Query: strings.TrimSpace(r.URL.Query().Get("query")),
 		Sort: strings.TrimSpace(r.URL.Query().Get("sort")),

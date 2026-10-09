@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -144,6 +145,7 @@ type ListFilter struct {
 	Query             string
 	Sort              string
 	Direction         string
+	Since             *time.Time
 	Limit             int
 	Offset            int
 }
@@ -193,10 +195,11 @@ func (r *MergeRequestRepo) List(ctx context.Context, f ListFilter) ([]*models.Me
 		       u.username ILIKE '%' || $5 || '%' OR
 		       p.path ILIKE '%' || $5 || '%' OR
 		       ('!' || mr.iid::text) ILIKE $5 || '%')
+		  AND ($6::timestamptz IS NULL OR mr.updated_at >= $6)
 		ORDER BY `+orderBy+` `+direction+`, mr.id DESC
-		LIMIT $6 OFFSET $7`,
+		LIMIT $7 OFFSET $8`,
 		f.ProjectID, f.VisibleProjectIDs, f.State, f.AuthorID,
-		strings.TrimSpace(f.Query), f.Limit, f.Offset)
+		strings.TrimSpace(f.Query), f.Since, f.Limit, f.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("list merge requests: %w", err)
 	}
@@ -246,8 +249,9 @@ func (r *MergeRequestRepo) Count(ctx context.Context, f ListFilter) (int, error)
 		       COALESCE(u.name, '') ILIKE '%' || $5 || '%' OR
 		       u.username ILIKE '%' || $5 || '%' OR
 		       p.path ILIKE '%' || $5 || '%' OR
-		       ('!' || mr.iid::text) ILIKE $5 || '%')`,
-		f.ProjectID, f.VisibleProjectIDs, f.State, f.AuthorID, strings.TrimSpace(f.Query)).Scan(&count)
+		       ('!' || mr.iid::text) ILIKE $5 || '%')
+		  AND ($6::timestamptz IS NULL OR mr.updated_at >= $6)`,
+		f.ProjectID, f.VisibleProjectIDs, f.State, f.AuthorID, strings.TrimSpace(f.Query), f.Since).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count merge requests: %w", err)
 	}
