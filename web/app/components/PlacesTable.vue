@@ -43,6 +43,16 @@ function pipelineLabel(value: string): string {
   return labels[value] ?? value
 }
 
+function pipelineBadgeClass(value: string): string {
+  const classes: Record<string, string> = {
+    success: 'badge-green',
+    failed: 'badge-danger',
+    running: 'badge-warning',
+    pending: 'badge-blue',
+  }
+  return classes[value] ?? 'badge-neutral'
+}
+
 const places = ref<Place[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -226,16 +236,18 @@ const visibilities = [
             <td>
               <div class="places-tags">
                 <span v-if="place.kind === 'group'" class="badge badge-neutral">Group</span>
-                <span v-else-if="place.visibility" class="badge" :class="'badge-' + place.visibility">{{ place.visibility }}</span>
+                <span v-else-if="place.visibility" class="badge badge-label" :class="'badge-' + place.visibility">{{ place.visibility }}</span>
                 <span v-if="place.access_name" class="badge badge-neutral">{{ place.access_name }}</span>
                 <span v-if="place.kind === 'project' && filters.scope === 'inactive'" class="badge badge-neutral">Archived</span>
                 <span v-if="place.kind === 'group' && place.project_count !== undefined" class="muted small">{{ place.project_count }} projects</span>
               </div>
             </td>
             <td class="places-pipeline-cell">
-              <span v-if="place.kind === 'project' && place.latest_pipeline_status" class="pipeline-state" :class="'pipeline-state-' + place.latest_pipeline_status">
-                <span class="pipeline-state-dot"></span>{{ pipelineLabel(place.latest_pipeline_status) }}
-              </span>
+              <span
+                v-if="place.kind === 'project' && place.latest_pipeline_status"
+                class="badge badge-label"
+                :class="pipelineBadgeClass(place.latest_pipeline_status)"
+              >{{ pipelineLabel(place.latest_pipeline_status) }}</span>
               <span v-else class="muted small">—</span>
               <div v-if="place.latest_pipeline_at" class="muted small">{{ formatDate(place.latest_pipeline_at) }}</div>
             </td>
