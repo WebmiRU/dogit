@@ -168,11 +168,10 @@ const visibilities = [
             <option value="last_activity">Last activity</option>
           </select>
         </label>
-        <button class="places-sort-direction" type="button" :title="filters.direction === 'asc' ? 'Currently ascending; click to sort descending' : 'Currently descending; click to sort ascending'" :aria-label="filters.direction === 'asc' ? 'Currently sorting ascending. Click to switch to descending.' : 'Currently sorting descending. Click to switch to ascending.'" @click="go({ direction: filters.direction === 'asc' ? 'desc' : 'asc' })">
+        <button class="places-sort-direction" type="button" :title="filters.direction === 'asc' ? 'Sort ascending; click to sort descending' : 'Sort descending; click to sort ascending'" :aria-label="filters.direction === 'asc' ? 'Sort ascending. Click to sort descending.' : 'Sort descending. Click to sort ascending.'" @click="go({ direction: filters.direction === 'asc' ? 'desc' : 'asc' })">
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" :class="{ descending: filters.direction === 'desc' }">
-            <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
+            <path d="M2 4h5M2 8h7M2 12h5M12 13V3M9.5 5.5 12 3l2.5 2.5" />
           </svg>
-          <span>{{ filters.direction === 'asc' ? 'Ascending' : 'Descending' }}</span>
         </button>
       </div>
 
