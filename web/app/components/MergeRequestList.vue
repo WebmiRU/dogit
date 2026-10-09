@@ -104,6 +104,9 @@ function copyListLink() {
     menuMessage.value = 'Copying is not supported by this browser.'
   }
 }
+function onHistoryToggle(event: Event) {
+  historyOpen.value = (event.currentTarget as HTMLDetailsElement).open
+}
 onMounted(load)
 watch([state, sort, direction, since, pageSize, offset], load)
 watch(query, () => {
@@ -145,7 +148,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="mr-list-toolbar">
-      <details class="mr-history-filter" :open="historyOpen" @toggle="historyOpen = ($event.target as HTMLDetailsElement).open">
+      <details class="mr-history-filter" :open="historyOpen" @toggle="onHistoryToggle">
         <summary title="Filter by activity date" aria-label="Filter by activity date">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.2 8A7 7 0 1 1 3 12M3 3.5V8h4.5M10 5.5V10l3 2" /></svg>
           <svg class="mr-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="m3 4.5 3 3 3-3" /></svg>
