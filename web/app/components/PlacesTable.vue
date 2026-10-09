@@ -20,10 +20,10 @@ import { placeHref, placeQuery } from '~/types/place'
 const props = withDefaults(
   defineProps<{
     /** Which kinds to show. Empty means both. */
-    type?: '' | 'project' | 'group'
+    kind?: '' | 'project' | 'group'
     filterVisibility?: boolean
   }>(),
-  { type: '', filterVisibility: true },
+  { kind: '', filterVisibility: true },
 )
 
 const route = useRoute()
@@ -57,7 +57,7 @@ const sortedPlaces = computed(() => places.value)
 /** What is asked of the server, read out of the address bar. */
 const filters = computed<Required<PlaceFilters>>(() => ({
   search: String(route.query.search ?? ''),
-  type: (props.type || String(route.query.type ?? '')) as PlaceFilters['type'] as 'project' | 'group' | '',
+  type: (props.kind || String(route.query.type ?? '')) as PlaceFilters['type'] as 'project' | 'group' | '',
   visibility: String(route.query.visibility ?? ''),
   scope: String(route.query.scope ?? '') as PlaceFilters['scope'],
   sort: (String(route.query.sort ?? 'name') || 'name') as PlaceFilters['sort'],
@@ -75,8 +75,11 @@ async function load() {
   error.value = ''
   try {
     const answer = await api.get<PagedPlaces>(`/projects/places?${query.value}`)
-    places.value = answer.places ?? []
-    total.value = answer.total ?? 0
+    const responsePlaces = answer.places ?? []
+    places.value = props.kind ? responsePlaces.filter((place) => place.kind === props.kind) : responsePlaces
+    // Normally the API already filters by kind. Correct the visible count as a
+    // fallback for an older backend that still returns mixed rows.
+    total.value = (answer.total ?? 0) - (props.kind ? responsePlaces.filter((place) => place.kind !== props.kind).length : 0)
     page.value = answer.page ?? 1
     pages.value = Math.max(1, answer.pages ?? 1)
   } catch (caught) {
@@ -153,7 +156,7 @@ const visibilities = [
           <circle cx="10.8" cy="10.8" r="6.3" />
           <path d="m15.5 15.5 4.2 4.2" />
         </svg>
-        <input v-model="typing" class="search" type="search" :placeholder="props.type === 'group' ? 'Search groups' : 'Filter or search projects'" :aria-label="props.type === 'group' ? 'Search groups' : 'Search projects'">
+        <input v-model="typing" class="search" type="search" :placeholder="props.kind === 'group' ? 'Search groups' : 'Filter or search projects'" :aria-label="props.kind === 'group' ? 'Search groups' : 'Search projects'">
       </div>
 
       <label class="places-sort">
@@ -184,10 +187,10 @@ const visibilities = [
 
     <div v-else-if="places.length === 0" class="card empty">
       <template v-if="filters.search">
-        No {{ props.type === 'group' ? 'groups' : 'projects' }} match “{{ filters.search }}”.
+        No {{ props.kind === 'group' ? 'groups' : 'projects' }} match “{{ filters.search }}”.
       </template>
       <template v-else>
-        No {{ props.type === 'group' ? 'groups' : 'projects' }} yet.
+        No {{ props.kind === 'group' ? 'groups' : 'projects' }} yet.
       </template>
     </div>
 
@@ -195,7 +198,7 @@ const visibilities = [
       <table class="table">
         <thead>
           <tr>
-            <th>{{ props.type === 'group' ? 'Group' : 'Project' }}</th>
+            <th>{{ props.kind === 'group' ? 'Group' : 'Project' }}</th>
             <th>Tags</th>
             <th>Pipeline</th>
             <th>Activity</th>
