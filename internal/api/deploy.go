@@ -349,6 +349,15 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		// another is about the same record, so the core says which.
 		lastRecord map[string]any
 	)
+	// The order phases are shown in when restoring a page that did not watch this run.
+	//
+	// A hint and not knowledge: this core deploys through whichever module a project names,
+	// and the phases below are the ones the kubernetes module happens to use. It is here to put
+	// the familiar ones in a sensible order, not to decide what a deployment went through —
+	// a phase it does not name is kept too, after these, in the order it was said. Written down
+	// once, because a second copy of a list of names is a list that will be edited in one place.
+	phaseOrder := []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"}
+
 	// Persist the set of phases still in progress alongside the last line. The latest
 	// line alone cannot tell a page opened mid-rollout that both rollout and retire
 	// may be active, or that a phase was explicitly closed.
@@ -356,6 +365,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// Keep the latest line for every phase as well. This lets a page opened mid-run
 	// restore the completed ticks without pretending it watched the earlier events.
 	phaseHistory := map[string]map[string]any{}
+	// Every phase this run has named, in the order it named them, kept whatever has since
+	// finished: the open set is pruned as phases close and cannot say what came before.
+	saidPhases := []string{}
 	reader := bufio.NewReader(response.Body)
 	// Пауза между строками от модуля, для разработки и демонстраций.
 	//
@@ -402,6 +414,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 				// is routing, not editing: who is allowed to hear it, and where it goes.
 				relayed := relayOf([]byte(trimmed), job.ID, progress.Deployment, "deploy")
 				if progress.Phase != "" {
+					if _, named := phaseHistory[progress.Phase]; !named {
+						saidPhases = append(saidPhases, progress.Phase)
+					}
 					if progress.Finished {
 						kept := activePhases[:0]
 						for _, phase := range activePhases {
@@ -434,26 +449,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 					delete(snapshot, "phase_history")
 					phaseHistory[progress.Phase] = snapshot
 				}
-				history := make([]map[string]any, 0, len(phaseHistory))
-				for _, phase := range []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"} {
-					if line, ok := phaseHistory[phase]; ok {
-						history = append(history, line)
-					}
-				}
-				// Keep unknown module-specific phases too, in their insertion-independent
-				// map order only after the standard phases.
-				for phase, line := range phaseHistory {
-					known := false
-					for _, key := range []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"} {
-						if phase == key {
-							known = true
-							break
-						}
-					}
-					if !known {
-						history = append(history, line)
-					}
-				}
+				history := phaseHistoryInOrder(phaseHistory, saidPhases, phaseOrder)
 				relayed["phase_history"] = history
 				s.rememberDeployProgress(ctx, job.ID, relayed)
 				s.publishPipeline(ctx, project.ID, nil, models.EventDeployOperation, relayed)
@@ -480,6 +476,39 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 
 	log("Deployed in %s.\n", time.Since(started).Round(time.Second))
 	return nil
+}
+
+// phaseHistoryInOrder puts the last line of each phase back in the order the phases happened.
+//
+// The named phases first, because that is the order a deployment walks them in, and anything this
+// core does not recognise after them — in the order it was said, which is kept beside the lines
+// rather than left to a map.
+//
+// That last part is the whole reason this is a function rather than a loop in place. A map walks
+// in an order that is stable within one run and arbitrary between two, so a list built by ranging
+// over one rearranges itself when nothing about the deployment changed. Every other ordering on
+// this page is kept for the same reason, and the time on each line exists so a reader can see
+// when it was said.
+func phaseHistoryInOrder(history map[string]map[string]any, said []string, order []string) []map[string]any {
+	ordered := make([]map[string]any, 0, len(history))
+	placed := make(map[string]bool, len(history))
+
+	for _, phase := range order {
+		if line, ok := history[phase]; ok {
+			placed[phase] = true
+			ordered = append(ordered, line)
+		}
+	}
+	for _, phase := range said {
+		if placed[phase] {
+			continue
+		}
+		if line, ok := history[phase]; ok {
+			placed[phase] = true
+			ordered = append(ordered, line)
+		}
+	}
+	return ordered
 }
 
 // shortDigest is an image reference cut down to something a log line can carry.

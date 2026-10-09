@@ -180,14 +180,39 @@ function reorder(answer: OperationsAnswer) {
   const next = [...(answer.active ?? []), ...(answer.finished ?? [])]
   operations.value = next
 
-  // A reconnect is a fresh snapshot, not merely a request to redraw the list. Replace
-  // local progress for active operations with the core's durable snapshot; otherwise
-  // the card remains "caught" and keeps stale phases from before the socket dropped.
+  // A reconnect is a fresh snapshot, not merely a request to redraw the list: whatever the page
+  // missed while the socket was down is in here and nowhere else.
+  //
+  // Added to what this page already has, and not put in its place. A card the reader watched is
+  // the richer record — every line of it, in the order they arrived — and a snapshot is one line
+  // per phase. Replacing with it takes away what the reader was watching because their connection
+  // blinked, and it is their own record being taken from them.
+  //
+  // The latest line is taken from the snapshot rather than kept, because that is the one thing it
+  // is for: it is written as each line is relayed, so it is at least as fresh as anything this
+  // page heard. The phases are the union of both, since a page says a phase began until it is
+  // told otherwise and the core says the same, and the two agreeing is the normal case.
   const restored = { ...watching.value }
   for (const operation of next) {
     if (!operation.running || !operation.progress) continue
     const snapshot = lateProgress(operation)
-    if (snapshot) restored[operation.job_id] = snapshot
+    if (!snapshot) continue
+
+    const mine = restored[operation.job_id]
+    if (!mine) {
+      restored[operation.job_id] = snapshot
+      continue
+    }
+
+    const heard = new Set(mine.seen.map((line) => `${line.phase}\u0000${line.message}`))
+    const missing = snapshot.seen.filter((line) => !heard.has(`${line.phase}\u0000${line.message}`))
+    restored[operation.job_id] = {
+      ...mine,
+      kind: mine.kind ?? snapshot.kind,
+      progress: snapshot.progress,
+      seen: [...mine.seen, ...missing],
+      phases: [...new Set([...mine.phases, ...snapshot.phases])],
+    }
   }
   watching.value = restored
 }
