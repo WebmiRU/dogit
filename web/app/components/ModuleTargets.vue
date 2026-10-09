@@ -677,7 +677,7 @@ onMounted(load)
       </section>
     </div>
 
-    <table v-else-if="rows.length" class="targets-table">
+    <table v-else-if="rows.length" class="admin-table targets-table">
         <thead>
           <tr>
             <!-- Which module a row belongs to, only where the list can hold more than

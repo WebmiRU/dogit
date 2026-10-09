@@ -476,7 +476,7 @@ function shortDigest(digest: string) {
             <span class="badge">{{ formatBytes(entry.repository.size_bytes) }}</span>
           </div>
 
-          <table v-if="!isFolded(entry.repository.name)" class="packages-table">
+          <table v-if="!isFolded(entry.repository.name)" class="admin-table packages-table">
             <thead>
               <tr>
                 <th>Tag</th>
