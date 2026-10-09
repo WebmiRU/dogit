@@ -106,3 +106,71 @@ func assertOpen(t *testing.T, payload map[string]any, want ...string) {
 		}
 	}
 }
+
+// The snapshot that gets stored, after a phase changes.
+//
+// The test above is about the order of two calls. This one is about the thing the page actually
+// reads: `RememberDeployProgress` replaces the whole document rather than merging fields, so a
+// closing saved on its own survives in nothing at all — the next line overwrites it. What has to
+// hold is the snapshot left behind after the new phase is written, and it has to hold on its own.
+//
+// Modelled as the handler runs it: note the first phase, note its closing, note the next. What
+// comes out is what `rememberDeployProgress` would store.
+func TestTheStoredSnapshotAfterAPhaseChanges(t *testing.T) {
+	memory := newPhaseMemory()
+
+	build := lineOf("build", "the image is built")
+	memory.note(build, "build", false)
+
+	closing := lineOf("build", "finished")
+	closing["finished"] = true
+	memory.note(closing, "build", true)
+
+	push := lineOf("push", "the registry has it as sha256:0abc")
+	memory.note(push, "push", false)
+
+	stored, ok := push["phase_history"].([]map[string]any)
+	if !ok {
+		t.Fatalf("the stored snapshot carries no phase history: %v", push)
+	}
+
+	byPhase := map[string]map[string]any{}
+	for _, line := range stored {
+		byPhase[line["phase"].(string)] = line
+	}
+
+	if byPhase["build"]["finished"] != true {
+		t.Errorf("build is stored as %v, want finished: true — the closing was overwritten", byPhase["build"])
+	}
+	if byPhase["build"]["message"] != "finished" {
+		t.Errorf("build is stored as saying %q, want the closing", byPhase["build"]["message"])
+	}
+	if byPhase["push"] == nil {
+		t.Fatalf("the phase that is under way is not in the snapshot: %v", stored)
+	}
+
+	assertOpen(t, push, "push")
+	if _, stillThere := byPhase["push"]; !stillThere {
+		t.Error("the snapshot does not keep the phase being worked on")
+	}
+}
+
+// And a rollout overlapping its own retiring keeps both, which is the case a rule that closes
+// everything a new phase begins throws away.
+//
+// Two arrows rather than one, because one arrow for a rollout says one of the two things is not
+// happening — and the new pods really are coming up while the old ones are going.
+func TestAStoredSnapshotKeepsBothOfTwoOverlappingPhases(t *testing.T) {
+	memory := newPhaseMemory()
+
+	memory.note(lineOf("rollout", "3 of 3 running the new image"), "rollout", false)
+	retire := lineOf("retire", "3 pods still running the previous image")
+	memory.note(retire, "retire", false)
+
+	// And then the rollout says it is done, which must not take the retiring with it.
+	done := lineOf("rollout", "finished")
+	done["finished"] = true
+	memory.note(done, "rollout", true)
+
+	assertOpen(t, done, "retire")
+}
