@@ -72,10 +72,15 @@ func (s *Server) handleCreateMergeRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	sourceSHA := ""
 	for _, branch := range []string{source, target} {
-		if _, err := s.git.RevParse(r.Context(), rc.RepoDir, branch); err != nil {
+		sha, resolveErr := s.git.RevParse(r.Context(), rc.RepoDir, branch)
+		if resolveErr != nil {
 			s.writeError(w, r, errNotFoundf("branch %q does not exist", branch))
 			return
+		}
+		if branch == source {
+			sourceSHA = sha
 		}
 	}
 
@@ -131,7 +136,7 @@ func (s *Server) handleCreateMergeRequest(w http.ResponseWriter, r *http.Request
 	mr, err := s.store.MergeRequests().Create(r.Context(), store.CreateParams{
 		ProjectID: rc.Project.ID, AuthorID: user.ID,
 		SourceBranch: source, TargetBranch: target,
-		Title: title, Description: req.Description, Squash: req.Squash,
+		Title: title, Description: req.Description, Squash: req.Squash, SHA: sourceSHA,
 		IsDraft: req.IsDraft, AssigneeID: req.AssigneeID, ReviewerID: req.ReviewerID,
 		Milestone: strings.TrimSpace(req.Milestone), Labels: req.Labels,
 		RemoveSourceBranch: req.RemoveSourceBranch, PipelineRequired: req.PipelineRequired,
