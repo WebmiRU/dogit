@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { packageTagId, packageTagUrl } from '~/utils/package-tag-url'
+
 /**
  * Every image this instance's registry holds.
  *
@@ -19,6 +21,11 @@ interface CatalogTag {
   size_bytes: number
   /** When the image was built, as its own config says. Absent when unreadable. */
   created_at?: string
+}
+
+interface OpenCatalogTag {
+  repo: CatalogRepository
+  tag: CatalogTag
 }
 
 interface CatalogRepository {
@@ -82,6 +89,47 @@ const unreachable = ref<string[]>([])
 const registryNames = ref<string[]>([])
 const busyTag = ref('')
 const collapsed = ref<Record<string, boolean>>({})
+const openTag = ref<OpenCatalogTag | null>(null)
+const panel = ref({ top: 0, left: 0, up: false })
+
+const openedTag = computed(() => openTag.value)
+
+function isOpen(repo: CatalogRepository, tag: CatalogTag): boolean {
+  return !!openTag.value &&
+    openTag.value.repo.project === repo.project &&
+    openTag.value.repo.repository === repo.repository &&
+    openTag.value.repo.registry === repo.registry &&
+    openTag.value.tag.name === tag.name
+}
+
+function showMenu(repo: CatalogRepository, tag: CatalogTag, event: MouseEvent) {
+  if (isOpen(repo, tag)) {
+    closeMenu()
+    return
+  }
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  panel.value = {
+    top: box.bottom + 6,
+    left: box.right - 190,
+    up: window.innerHeight - box.bottom < 150,
+  }
+  openTag.value = { repo, tag }
+}
+
+function closeMenu() {
+  openTag.value = null
+}
+
+function onPointerAway(event: PointerEvent) {
+  if (!openTag.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.row-menu-panel') || target?.closest('.row-menu')) return
+  closeMenu()
+}
+
+function onKeyAway(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeMenu()
+}
 
 /**
  * What is here, counted three ways because they are three different things.
@@ -246,6 +294,7 @@ function arrange(repos: CatalogRepository[], where: Placement): CatalogGroup[] {
  * theatre.
  */
 async function removeTag(repo: CatalogRepository, tag: CatalogTag) {
+  closeMenu()
   const full = `${repo.repository}:${tag.name}`
   if (!confirm(`Delete ${full}? Anything built from this tag will have to be built again.`)) return
 
@@ -308,6 +357,9 @@ let stopWatching: (() => void) | undefined
 
 onMounted(() => {
   void load()
+  window.addEventListener('pointerdown', onPointerAway, true)
+  window.addEventListener('keydown', onKeyAway)
+  window.addEventListener('scroll', closeMenu, true)
 
   // Images appear because something was pushed, which happens on a machine
   // somebody else is sitting at. This page says so by itself rather than waiting to
@@ -322,7 +374,12 @@ onMounted(() => {
   })
 })
 
-onBeforeUnmount(() => stopWatching?.())
+onBeforeUnmount(() => {
+  stopWatching?.()
+  window.removeEventListener('pointerdown', onPointerAway, true)
+  window.removeEventListener('keydown', onKeyAway)
+  window.removeEventListener('scroll', closeMenu, true)
+})
 </script>
 
 <template>
@@ -392,11 +449,11 @@ onBeforeUnmount(() => stopWatching?.())
                 <th>Digest</th>
                 <th>Built</th>
                 <th class="numeric">Size</th>
-                <th></th>
+                <th class="numeric"><span class="visually-hidden">Actions</span></th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="tag in repo.tags" :key="tag.name">
+              <tr :id="packageTagId(repo.repository, tag.name)" v-for="tag in repo.tags" :key="tag.name">
                 <td class="mono small">
                   {{ repo.repository }}
                   <span
@@ -411,11 +468,13 @@ onBeforeUnmount(() => stopWatching?.())
                 <td class="numeric mono small">{{ size(tag.size_bytes) }}</td>
                 <td class="numeric">
                   <button
-                    class="delete"
+                    class="row-menu"
                     type="button"
-                    :disabled="busyTag === `${repo.repository}:${tag.name}`"
-                    @click="removeTag(repo, tag)"
-                  >Delete</button>
+                    aria-haspopup="menu"
+                    :aria-expanded="isOpen(repo, tag)"
+                    :aria-label="`Actions for ${repo.repository}:${tag.name}`"
+                    @click="showMenu(repo, tag, $event)"
+                  >⋯</button>
                 </td>
               </tr>
             </tbody>
@@ -423,6 +482,27 @@ onBeforeUnmount(() => stopWatching?.())
         </div>
       </div>
     </section>
+
+    <Teleport to="#teleports">
+      <div
+        v-if="openedTag"
+        class="row-menu-panel"
+        :class="{ up: panel.up }"
+        :style="{ top: `${panel.top}px`, left: `${panel.left}px` }"
+      >
+        <NuxtLink :to="packageTagUrl(openedTag.repo.project, openedTag.repo.repository, openedTag.tag.name)" @click="closeMenu">
+          Open record
+        </NuxtLink>
+        <button
+          class="row-menu-danger"
+          type="button"
+          :disabled="busyTag === `${openedTag.repo.repository}:${openedTag.tag.name}`"
+          @click="removeTag(openedTag.repo, openedTag.tag)"
+        >
+          {{ busyTag === `${openedTag.repo.repository}:${openedTag.tag.name}` ? 'Deleting…' : 'Delete' }}
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
