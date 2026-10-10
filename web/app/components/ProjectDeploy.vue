@@ -114,7 +114,7 @@ async function loadHead() {
 
 /** Follows deployments only as far as "is one happening, is one waiting, did the last one work". */
 const stopState = watchEvents({
-  kinds: ['deploy.operation', 'deploy.history'],
+  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued'],
   project: () => props.projectPath,
   onEvent: (event) => {
     if (event.kind === 'deploy.operation') {
