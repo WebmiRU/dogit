@@ -161,7 +161,7 @@ async function remove() {
       <div v-if="error" class="alert alert-error">{{ error }}</div>
       <div v-if="loading" class="spinner">Loading…</div>
 
-      <form v-else class="card" @submit.prevent="save">
+      <form v-else class="card registry-docker-form" @submit.prevent="save">
         <div class="card-body">
           <div class="field">
             <label for="url">Address</label>
