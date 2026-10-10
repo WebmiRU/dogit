@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -231,6 +232,99 @@ func TestTheTwoCountsCannotDisagree(t *testing.T) {
 			t.Errorf("with %d new pods: the deployment is judged on %d ready/%d old, the card is drawn from %d ready/%d old",
 				newPods, counts.Ready, counts.OldUp, watched.Ready, watched.OldUp)
 		}
+	}
+}
+
+// A rollback can make an older ReplicaSet the current revision again. The Deployment's
+// revision annotation, not creation time or a mutable image tag, says which ReplicaSet is
+// being rolled out to. Both the live counter and the watcher must reach the same answer.
+func TestCountsAndWatcherAgreeForTaggedRollbackToAnOlderReplicaSet(t *testing.T) {
+	const (
+		targetSet    = "versions-target"
+		currentSet   = "versions-current"
+		targetImage  = "registry.f220.ru/test/versions:v-old"
+		currentImage = "registry.f220.ru/test/versions:v-new"
+		targetDigest = "docker-pullable://registry.f220.ru/test/versions@sha256:2222"
+		oldDigest    = "docker-pullable://registry.f220.ru/test/versions@sha256:1111"
+	)
+
+	deployment := deploymentOf("versions", 3, 3)
+	deployment.UID = types.UID("deployment-uid")
+	deployment.Generation = 2
+	deployment.Annotations = map[string]string{"deployment.kubernetes.io/revision": "8"}
+	deployment.Status.ObservedGeneration = 2
+	deployment.Status.UpdatedReplicas = 0
+	deployment.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app", Image: targetImage}}
+
+	owner := []metav1.OwnerReference{{
+		Kind: "Deployment", Name: deployment.Name, UID: deployment.UID,
+	}}
+	// This ReplicaSet was created earlier, but has been promoted to revision 8 by the
+	// rollback. The newer-created set is revision 7 and still has the ready old pods.
+	target := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: targetSet, Namespace: "versions-dev", UID: types.UID(targetSet),
+			CreationTimestamp: metav1.NewTime(time.Unix(100, 0)),
+			Annotations: map[string]string{"deployment.kubernetes.io/revision": "8"},
+			OwnerReferences: owner,
+		},
+	}
+	current := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: currentSet, Namespace: "versions-dev", UID: types.UID(currentSet),
+			CreationTimestamp: metav1.NewTime(time.Unix(200, 0)),
+			Annotations: map[string]string{"deployment.kubernetes.io/revision": "7"},
+			OwnerReferences: owner,
+		},
+	}
+
+	objects := []runtime.Object{deployment, target, current}
+	addPod := func(name, setName string, setUID types.UID, image, specImage string, ready bool) {
+		pod := podOf(name, image, corev1.PodRunning, ready)
+		pod.Spec.Containers[0].Image = specImage
+		pod.OwnerReferences = []metav1.OwnerReference{{
+			Kind: "ReplicaSet", Name: setName, UID: setUID,
+		}}
+		objects = append(objects, pod)
+	}
+	for i := 0; i < 3; i++ {
+		addPod(fmt.Sprintf("target-%d", i), targetSet, target.UID, targetDigest, targetImage, false)
+		addPod(fmt.Sprintf("current-%d", i), currentSet, current.UID, oldDigest, currentImage, true)
+	}
+
+	client := &clusterClient{typed: fake.NewSimpleClientset(objects...)}
+	counts, err := client.Counts(context.Background(), "versions-dev", "versions", targetImage)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if counts.Ready != 0 {
+		t.Errorf("ready: got %d, want 0; the target revision's pods have not passed readiness", counts.Ready)
+	}
+	if counts.OldUp != 3 {
+		t.Errorf("retiring: got %d, want 3; the old ready pods must be counted once per pod", counts.OldUp)
+	}
+
+	revision, err := currentRevision(context.Background(), client.typed, "versions-dev", "versions")
+	if err != nil {
+		t.Fatalf("read current revision: %v", err)
+	}
+	if revision != targetSet {
+		t.Errorf("current revision: got %q, want %q; the rollback target has the Deployment's revision even though it was created earlier", revision, targetSet)
+	}
+
+	list, err := client.typed.CoreV1().Pods("versions-dev").List(context.Background(),
+		metav1.ListOptions{LabelSelector: labelSelectorOf(deployment)})
+	if err != nil {
+		t.Fatalf("list pods for the watcher: %v", err)
+	}
+	seen := make(map[string]podSeen, len(list.Items))
+	for index := range list.Items {
+		remember(seen, &list.Items[index], revision)
+	}
+	watched := tally(seen, counts.Desired, targetImage, revision)
+	if counts.Ready != watched.Ready || counts.OldUp != watched.OldUp {
+		t.Errorf("counts differ: Counts says %d ready/%d retiring, watcher says %d ready/%d retiring",
+			counts.Ready, counts.OldUp, watched.Ready, watched.OldUp)
 	}
 }
 
