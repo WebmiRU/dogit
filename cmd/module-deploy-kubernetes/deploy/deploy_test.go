@@ -40,6 +40,12 @@ type fakeClient struct {
 	// counts is what the pods say, when a test needs them to say something other than
 	// "one of one, all right". Set, it replaces the usual answer entirely.
 	counts *k8s.RolloutCounts
+	// countsThen answers with the first of these once and then with the second, for the
+	// shape a real rollout has when the pods that were up a moment ago are the ones
+	// about to be replaced: the wait is satisfied by what it can see, and what is left
+	// when it looks again is nothing. One answer cannot express that, and it is the
+	// shape that made a deployment with no pods on the new image read as a success.
+	countsThen []k8s.RolloutCounts
 }
 
 func newFake() *fakeClient {
@@ -138,8 +144,16 @@ func (f *fakeClient) Revisions(_ context.Context, _, _ string) ([]k8s.Revision, 
 // Counts answers what the watching code asks, so a test sees the same numbers a page
 // would: no pods yet, none of the old ones left.
 func (f *fakeClient) Counts(_ context.Context, _, _, _ string) (k8s.RolloutCounts, error) {
+	if len(f.countsThen) > 1 {
+		first := f.countsThen[0]
+		f.countsThen = f.countsThen[1:]
+		return first, nil
+	}
 	if f.counts != nil {
 		return *f.counts, nil
+	}
+	if len(f.countsThen) == 1 {
+		return f.countsThen[0], nil
 	}
 	return k8s.RolloutCounts{Ready: 1, Desired: 1}, nil
 }
@@ -481,6 +495,87 @@ func TestAFailedPostStepSaysTheRolloutHappened(t *testing.T) {
 	// The Deployment did go out; the failure was after it.
 	if len(client.appliedRefs()) == 0 {
 		t.Error("nothing was applied at all, so this was not a post-step failure")
+	}
+}
+
+// The wait finishing is not the deployment finishing. This is the shape it takes on a
+// real cluster: the manifests apply cleanly, the Deployment reports itself updated and
+// done, and none of the pods ever come up because the image cannot be pulled. The wait
+// ends — the old pods are gone — and everything after that point used to read success.
+//
+// It said "Deployed in 2m22s" and recorded a success beside a count of zero, on a real
+// deployment, and the only place the truth was written was a line in a log somebody had
+// to go and read. The wait already refuses this case; what refused it is that it returns
+// rather than decides, and the decision was never made by anything after it.
+func TestADeploymentThatRolledOutNothingIsNotASuccess(t *testing.T) {
+	client := newFake()
+	// What the Deployment says: updated and ready, exactly as it does while the old
+	// pods are up and the new ones are failing to pull.
+	client.rollouts["app"] = k8s.Rollout{Desired: 3, Updated: 3, Ready: 3, Done: true}
+	// Three up on the first look and none on the second. That is the order a real
+	// rollout reports things in when the image cannot be pulled: the pods that are up
+	// are the ones being replaced, the wait sees them, and by the time the count that
+	// becomes the record is taken there is nothing on the new image at all.
+	client.countsThen = []k8s.RolloutCounts{
+		{Desired: 3, Ready: 3, OldUp: 3},
+		{Desired: 3, Ready: 0, OldUp: 0},
+	}
+
+	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
+
+	record, err := deployer.Run(context.Background(), Request{
+		Project:        "test/versions",
+		Cluster:        "deploy2",
+		Namespace:      "dogit-test",
+		Image:          "registry.f220.ru/test/versions@sha256:new",
+		Placeholder:    "IMAGE",
+		Manifests:      []k8s.Object{manifestObject("app", "IMAGE")},
+		Workload:       "app",
+		WaitForRollout: true,
+		Rollout:        "app",
+		Timeout:        3 * time.Second,
+	})
+
+	if err == nil {
+		t.Fatal("a deployment in which no pod came up was reported as a success")
+	}
+	if record.State == StateSucceeded {
+		t.Errorf("recorded as succeeded, want a failure: %+v", record)
+	}
+	// The count belongs in the sentence, because "it failed" does not tell whoever has
+	// to work out why which of the two things went wrong: the manifests, or the image.
+	if !strings.Contains(err.Error(), "0 of 3") {
+		t.Errorf("the reason does not carry the counts that explain it: %v", err)
+	}
+	// And the manifests really were applied: this is a failed rollout, not a refused
+	// deployment, and the two need different reading.
+	if len(client.appliedRefs()) == 0 {
+		t.Error("nothing was applied, so this was not a failed rollout")
+	}
+}
+
+// Scaled to nothing is not a failed rollout. There is nothing to wait for, and saying
+// "0 of 0 pods are ready" about it is the truth rather than a complaint.
+func TestADeploymentWithNothingToRollOutIsNotAFailure(t *testing.T) {
+	client := newFake()
+	client.rollouts["app"] = k8s.Rollout{Desired: 0, Updated: 0, Ready: 0, Done: true}
+	client.counts = &k8s.RolloutCounts{Desired: 0, Ready: 0, OldUp: 0}
+
+	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
+
+	if _, err := deployer.Run(context.Background(), Request{
+		Project:        "test/versions",
+		Cluster:        "deploy2",
+		Namespace:      "dogit-test",
+		Image:          "registry.f220.ru/test/versions@sha256:new",
+		Placeholder:    "IMAGE",
+		Manifests:      []k8s.Object{manifestObject("app", "IMAGE")},
+		Workload:       "app",
+		WaitForRollout: true,
+		Rollout:        "app",
+		Timeout:        3 * time.Second,
+	}); err != nil {
+		t.Fatalf("a deployment with nothing to roll out was reported as failed: %v", err)
 	}
 }
 

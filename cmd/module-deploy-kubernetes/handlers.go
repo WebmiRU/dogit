@@ -140,6 +140,36 @@ func registryAddressOf(registry *deployRegistry) string {
 	return registry.Address
 }
 
+// placeIsFree answers whether a deployment may start here, and clears what can be
+// cleared first.
+//
+// The order is the whole of it. A record left behind by a module that died holds its
+// place until something frees it, and this is the only code positioned to: Begin, which
+// also knows how to free one, is reached only after a deployment has been accepted. So a
+// refusal here went out without ever consulting the thing that could have prevented it,
+// and a place whose deployment ended two hours ago could not be deployed to again — the
+// page said a deployment was under way, and there was no deployment.
+//
+// Reclaiming first and asking second costs one indexed update. Asking first costs a
+// place for ever.
+func (c *coreClient) placeIsFree(ctx context.Context, project, cluster, namespace string) error {
+	if err := c.history.Reclaim(ctx, project, cluster, namespace); err != nil {
+		return err
+	}
+
+	running, err := c.history.Current(ctx, project, cluster, namespace)
+	if err != nil {
+		return err
+	}
+	if running != nil && running.State == deploy.StateRunning {
+		return deploy.ErrBusy{
+			Namespace: namespace,
+			Running:   describeImage(running.Image),
+		}
+	}
+	return nil
+}
+
 func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -180,15 +210,15 @@ func (c *coreClient) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		if namespace == "" {
 			namespace = place.DefaultNamespace
 		}
-		running, err := c.history.Current(ctx, request.Project, place.Name, namespace)
-		if err != nil {
+		if err := c.placeIsFree(ctx, request.Project, place.Name, namespace); err != nil {
+			var busy deploy.ErrBusy
+			if errors.As(err, &busy) {
+				writeError(w, http.StatusConflict, fmt.Sprintf(
+					"another deployment is under way in %s/%s (%s), so nothing was deployed here",
+					place.Name, namespace, busy.Running))
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if running != nil && running.State == deploy.StateRunning {
-			writeError(w, http.StatusConflict, fmt.Sprintf(
-				"another deployment is under way in %s/%s (%s), so nothing was deployed here",
-				place.Name, namespace, describeImage(running.Image)))
 			return
 		}
 	}

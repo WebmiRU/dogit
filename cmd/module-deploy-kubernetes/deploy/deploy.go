@@ -511,6 +511,26 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 		//
 		// So the number is reported and the claim is not made. A reader is told what was
 		// counted and not asked to draw the conclusion from a name that never changed.
+		// A deployment nobody waited for may leave the workload wherever it was, which is
+		// what that option means. One somebody did wait for has promised something, and the
+		// promise is the count.
+		//
+		// Without this the numbers above are decoration: a rollout that came up with none
+		// of its pods says "0 of 3" and then "Deployed in 2m22s", and the record beside it
+		// is a success. A manifest applied over a workload whose image cannot be pulled is
+		// the commonest way for this to happen, and it is exactly the case that must not
+		// read as a finished deployment.
+		//
+		// Zero wanted is not a failure. A workload scaled to nothing has nothing to wait
+		// for, and saying "0 of 0 pods are ready" about it is the truth rather than a
+		// complaint.
+		if wanted > 0 && ready < wanted {
+			return d.fail(ctx, request, record, PhaseApply, fmt.Errorf(
+				"the manifests were applied, but only %d of %d pods are running the image "+
+					"this deployment names — the rollout did not finish, so nothing here was "+
+					"deployed", ready, wanted))
+		}
+
 		message := fmt.Sprintf("%d of %d pods are running the image this deployment names", ready, wanted)
 		if pinned(request.Image) {
 			message = fmt.Sprintf("every pod is running the new image (%d of %d)", ready, wanted)
@@ -605,7 +625,13 @@ func (d *Deployer) wait(ctx context.Context, request Request) error {
 		if err != nil {
 			return err
 		}
-		if counts.Desired > 0 && counts.Ready >= counts.Desired {
+		// "Every pod that was asked for is up", which is a different sentence from "there
+		// were pods and they are up". A workload scaled to nothing has asked for none, and
+		// asking a rollout to wait for it is waiting for a number that will never arrive:
+		// the guard that once stood here treated zero desired as "not finished yet", so
+		// scaling a deployment to zero made every deployment to it time out, and the reason
+		// it gave was the one thing that was never wrong.
+		if counts.Ready >= counts.Desired {
 			d.logf("rollout finished: %d/%d pods on the new image", counts.Ready, counts.Desired)
 			return nil
 		}

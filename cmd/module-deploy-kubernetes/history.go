@@ -30,6 +30,9 @@ const staleDeploymentAge = 2 * time.Hour
 // History is this module's record of deployments, which is the contract deploy states.
 type History interface {
 	deploy.History
+	// Reclaim frees places held by deployments this module will never finish, so it is
+	// reachable from the handler that refuses a busy place and not only from Begin.
+	Reclaim(ctx context.Context, project, cluster, namespace string) error
 	Close(ctx context.Context)
 }
 
@@ -120,28 +123,44 @@ func (h *postgresHistory) migrate(ctx context.Context) error {
 	return nil
 }
 
+// Reclaim frees places held by deployments this module will never finish.
+//
+// A deployment that was begun and never finished — this module was killed mid-rollout,
+// or the machine it was on went away — holds its place for ever, and every later
+// deployment to that place is then refused by a row nobody will ever close.
+//
+// It is called before the refusal rather than only from Begin, and that is the whole
+// point of it. The check that refuses runs first, so a row left behind by a module that
+// died refused every deployment to its place — and the one piece of code that could have
+// cleaned it up ran only afterwards, reached by nothing, because the only thing that
+// called it was the call that had already given up. The place could not be deployed to
+// again at all, with no sign of why: the page said a deployment was under way, and there
+// was no deployment.
+//
+// Long enough is generous. A migration that legitimately takes this long is unheard of,
+// and being wrong in this direction costs one extra concurrent rollout rather than a
+// namespace that can never be deployed to.
+func (h *postgresHistory) Reclaim(ctx context.Context, project, cluster, namespace string) error {
+	_, err := h.pool.Exec(ctx, `
+		UPDATE deployments SET state = 'abandoned', finished_at = now(),
+			reason = 'the module stopped reporting this deployment'
+		WHERE project = $1 AND cluster = $2 AND namespace = $3 AND state = 'running'
+		  AND started_at < now() - $4::interval`,
+		project, cluster, namespace, staleDeploymentAge)
+	if err != nil {
+		return fmt.Errorf("clear an abandoned deployment: %w", err)
+	}
+	return nil
+}
+
 // Begin files a deployment, and refuses when one is already under way.
 func (h *postgresHistory) Begin(ctx context.Context, d deploy.Deployment) (deploy.Deployment, error) {
 	if d.ID == uuid.Nil {
 		d.ID = uuid.New()
 	}
 
-	// A deployment that was begun and never finished — this module was killed
-	// mid-rollout, or the machine it was on went away — would hold this place for
-	// ever. One that started long enough ago is not in progress, it is abandoned: its
-	// module is not coming back, and every later deployment to the same place is
-	// refused by a row nobody will ever close.
-	//
-	// Long enough is generous. A migration that legitimately takes this long is
-	// unheard of, and being wrong in this direction costs one extra concurrent
-	// rollout rather than a namespace that can never be deployed to again.
-	if _, err := h.pool.Exec(ctx, `
-		UPDATE deployments SET state = 'abandoned', finished_at = now(),
-			reason = 'the module stopped reporting this deployment'
-		WHERE project = $1 AND cluster = $2 AND namespace = $3 AND state = 'running'
-		  AND started_at < now() - $4::interval`,
-		d.Project, d.Cluster, d.Namespace, staleDeploymentAge); err != nil {
-		return d, fmt.Errorf("clear an abandoned deployment: %w", err)
+	if err := h.Reclaim(ctx, d.Project, d.Cluster, d.Namespace); err != nil {
+		return d, err
 	}
 
 	tags, err := json.Marshal(d.Tags)

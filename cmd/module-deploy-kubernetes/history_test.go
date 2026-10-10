@@ -23,6 +23,23 @@ import (
 // Needs a database. Skipped without one, so the ordinary suite stays offline.
 //
 //	DOGIT_TEST_DATABASE_URL=postgres://… go test ./cmd/module-deploy-kubernetes
+//
+// age moves a record's start into the past by d, which is the one thing that tells a
+// deployment this module lost from one that is still going: how long ago it began.
+func age(t *testing.T, ctx context.Context, history History, id uuid.UUID, d time.Duration) {
+	t.Helper()
+	stored, ok := history.(*postgresHistory)
+	if !ok {
+		t.Fatal("the history under test is not the one that keeps records in a table")
+	}
+	pool := stored.pool
+	if _, err := pool.Exec(ctx,
+		`UPDATE deployments SET started_at = started_at - $2::interval WHERE id = $1`,
+		id, d); err != nil {
+		t.Fatalf("age the record: %v", err)
+	}
+}
+
 func historyFor(t *testing.T) History {
 	t.Helper()
 
@@ -37,6 +54,103 @@ func historyFor(t *testing.T) History {
 	}
 	t.Cleanup(func() { history.Close(context.Background()) })
 	return history
+}
+
+// A record left behind by a module that died must not hold a place for ever.
+//
+// This is the shape of it on a real cluster: a deployment that was killed mid-rollout
+// leaves a row that says "running" for ever, and every later deployment to that place is
+// then refused by it. The refusal happened before the code that could have cleaned it up,
+// so nothing ever reached it, and the place could not be deployed to again — with a page
+// saying a deployment was under way, and no deployment anywhere.
+//
+// Reclaim is what the handler calls before asking whether the place is busy. Without it
+// the only caller was Begin, which the refusal happens before, and the one piece of code
+// that could have opened the place was reachable by nothing.
+func TestReclaimOpensAPlaceHeldByADeploymentThatWillNeverFinish(t *testing.T) {
+	history := historyFor(t)
+	ctx := context.Background()
+
+	lost := deploy.Deployment{
+		ID: uuid.New(), Project: "t/one", Cluster: "c", Namespace: "n",
+		Image: "reg/app@sha256:aaa", StartedAt: time.Now(),
+	}
+	if _, err := history.Begin(ctx, lost); err != nil {
+		t.Fatalf("begin the deployment that will be lost: %v", err)
+	}
+	// Older than anything a rollout takes, which is the only thing that distinguishes a
+	// lost deployment from one that is genuinely in progress.
+	age(t, ctx, history, lost.ID, staleDeploymentAge+time.Hour)
+
+	// What the handler does: clear what can be cleared, and only then ask.
+	if err := history.Reclaim(ctx, lost.Project, lost.Cluster, lost.Namespace); err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+
+	// Current is "the last deployment to this place", which is not the same question as
+	// "is this place busy" — it answers with a record whatever state that record is in,
+	// and it is the state that says whether the place is free. A record that is still
+	// "running" here is the whole defect: the handler reads it, sees a deployment under
+	// way, and refuses.
+	last, err := history.Current(ctx, lost.Project, lost.Cluster, lost.Namespace)
+	if err != nil {
+		t.Fatalf("read the last deployment: %v", err)
+	}
+	if last == nil {
+		t.Fatal("the record is gone entirely, so this test is not exercising the place " +
+			"being held — a deployment that was abandoned should still be on the record")
+	}
+	if last.State == deploy.StateRunning {
+		t.Fatalf("the place is still held by a deployment that ended: state=%q, finished_at=%v",
+			last.State, last.FinishedAt)
+	}
+	if last.FinishedAt == nil {
+		t.Error("the abandoned record has no finished_at, so a page reading it cannot tell " +
+			"when this stopped being in progress")
+	}
+
+	next := deploy.Deployment{
+		ID: uuid.New(), Project: lost.Project, Cluster: lost.Cluster, Namespace: lost.Namespace,
+		Image: "reg/app@sha256:bbb", StartedAt: time.Now(),
+	}
+	if _, err := history.Begin(ctx, next); err != nil {
+		t.Fatalf("the place could not be deployed to again: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = history.Finish(ctx, next.ID, deploy.StateSucceeded, "")
+	})
+}
+
+// A deployment that really is in progress must not be reclaimed. Reclaiming one that is
+// running would let two rollouts reach one workload, which is the thing this whole
+// mechanism exists to prevent.
+func TestReclaimLeavesADeploymentThatIsStillRunningAlone(t *testing.T) {
+	history := historyFor(t)
+	ctx := context.Background()
+
+	running := deploy.Deployment{
+		ID: uuid.New(), Project: "t/one", Cluster: "c", Namespace: "n",
+		Image: "reg/app@sha256:aaa", StartedAt: time.Now(),
+	}
+	if _, err := history.Begin(ctx, running); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = history.Finish(ctx, running.ID, deploy.StateSucceeded, "")
+	})
+
+	if err := history.Reclaim(ctx, running.Project, running.Cluster, running.Namespace); err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+
+	held, err := history.Current(ctx, running.Project, running.Cluster, running.Namespace)
+	if err != nil {
+		t.Fatalf("read the current deployment: %v", err)
+	}
+	if held == nil || held.ID != running.ID {
+		t.Fatal("a deployment that was still running was taken off its place, so two " +
+			"rollouts of one workload can now reach it at once")
+	}
 }
 
 // A second deployment to the same place is refused, and says which one is in the way.
