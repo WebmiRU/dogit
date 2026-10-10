@@ -54,8 +54,6 @@ const openedTag = computed(() =>
   open.value ? tags.value.find((tag) => tag.name === open.value) ?? null : null,
 )
 
-const defaultBranch = computed(() => props.refs?.default_branch ?? '')
-
 function showMenu(name: string, event: MouseEvent) {
   // The same ⋯ twice is a toggle: the second press is a decision to look at the
   // row again, not to open the menu a second time.
@@ -132,12 +130,8 @@ function saidAbout(tag: { message?: string; created_by?: string }) {
  * is not its helper's shape is worth a comment rather than a second parameter
  * nobody else passes.
  */
-function compareUrl(tagName: string): string {
-  const query = new URLSearchParams({ from: defaultBranch.value, to: tagName })
-  return `/p/${props.projectPath}/-/compare?${query.toString()}`
-}
-
 async function remove(name: string) {
+  closeMenu()
   if (!confirm(`Delete tag ${name}?`)) return
   pending.value = name
   error.value = ''
@@ -201,10 +195,7 @@ async function remove(name: string) {
           :style="{ top: `${panel.top}px`, left: `${panel.left}px` }"
         >
           <NuxtLink :to="repoViewUrl(projectPath, 'tree', openedTag.name)" @click="closeMenu">
-            Browse files
-          </NuxtLink>
-          <NuxtLink :to="compareUrl(openedTag.name)" @click="closeMenu">
-            {{ defaultBranch ? `Compare with ${defaultBranch}` : 'Compare' }}
+            Open record
           </NuxtLink>
           <button
             class="row-menu-danger"
