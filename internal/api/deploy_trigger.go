@@ -68,7 +68,7 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 		// that actually added it to the queue writes the waiting line and announces the
 		// change to the page; repeats are not another event or another log entry.
 		if enqueued {
-			s.writeDeployLog(ctx, job, fmt.Sprintf(
+			s.writeDeployInfo(ctx, job, fmt.Sprintf(
 				"Another deployment is already under way in %s, so this one is waiting its turn "+
 					"rather than being refused. It will be deployed when that one is finished, "+
 					"unless a newer deployment of this project arrives first — in which case this "+
@@ -89,19 +89,19 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 	// reading the row and then writing it would be a race with anything else asking
 	// at the same moment.
 	claimed, err := s.store.Pipelines().ClaimDeployJob(ctx, job.ID)
-	if err != nil {
-		if holder {
-			s.releasePlaceAfterLostClaim(context.WithoutCancel(ctx), place, job.ID)
-		}
-		s.log.Error("claim the deployment", "job_id", job.ID, "error", err)
-		return
-	}
 	if !claimed {
+		if err != nil {
+			s.log.Error("claim the deployment", "job_id", job.ID, "error", err)
+		}
 		if holder {
 			s.releasePlaceAfterLostClaim(context.WithoutCancel(ctx), place, job.ID)
 		}
 		return
 	}
+	// ClaimDeployJob can return an error after it has already marked the job running
+	// (for example, if updating the pipeline's summary timestamp then fails). The claim
+	// is durable at that point, so this caller must still start the worker rather than
+	// leave a running row and a slot that nobody will release.
 
 	// Not derived from the caller's request: that request is about a runner reporting
 	// a test result, and it is answered already. A deploy outlives it.
@@ -211,7 +211,7 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 	if spec := deploySpecForJob(job, config); spec.Present &&
 		!s.placeInUse(ctx, project, spec.Module, spec.Target) {
 		reason := fmt.Sprintf("%s is switched off for this project", spec.Target)
-		s.writeDeployLog(ctx, job, reason+", so nothing was deployed here.\n")
+		s.writeDeployInfo(ctx, job, reason+", so nothing was deployed here.\n")
 		finish(store.JobSkipped, reason)
 		return
 	}
@@ -321,7 +321,7 @@ func (s *Server) supersedeDeploy(ctx context.Context, one queuedDeploy, place de
 
 	reason := fmt.Sprintf("a newer deployment of this project was waiting for %s, so this one was not deployed",
 		place.cluster)
-	s.writeDeployLog(ctx, job, "Waiting for "+place.cluster+" was overtaken: "+reason+
+	s.writeDeployInfo(ctx, job, "Waiting for "+place.cluster+" was overtaken: "+reason+
 		". Nothing was deployed and nothing broke — the newest deployment of this project is the one "+
 		"that reached the cluster.\n")
 
@@ -349,6 +349,19 @@ func (s *Server) supersedeDeploy(ctx context.Context, one queuedDeploy, place de
 
 // startQueuedDeploy begins the deployment that was promoted, which already holds its place.
 func (s *Server) startQueuedDeploy(ctx context.Context, one *queuedDeploy, place deployPlace) {
+	placeCtx := context.WithoutCancel(ctx)
+	retryPending := true
+	defer func() {
+		if !retryPending {
+			return
+		}
+		// The promoted job owns the slot already. If loading its description fails,
+		// return the slot and let the pending job take another turn rather than blocking
+		// every deployment behind a transient read error.
+		s.releaseDeployPlace(placeCtx, place, one.jobID)
+		s.startDeployIfReady(placeCtx, one.pipelineID)
+	}()
+
 	run, err := s.store.Pipelines().PipelineByID(ctx, one.pipelineID)
 	if err != nil {
 		s.log.Error("read the run to deploy", "job_id", one.jobID, "error", err)
@@ -361,14 +374,11 @@ func (s *Server) startQueuedDeploy(ctx context.Context, one *queuedDeploy, place
 	}
 	if job.Status != store.JobPending {
 		// It stopped waiting while the place was held — cancelled, most likely.
-		//
-		// The place was handed to it, and nothing else will ever give it back: it is not
-		// running, so it will never finish and so it will never release. Handing it to
-		// the next one is the only way it is ever free again, and it is safe to do so
-		// because this job never started and so nothing of it is in the cluster.
+		// It never started, so hand the slot on without retrying this terminal job.
+		retryPending = false
 		s.log.Info("a deployment stopped waiting before its turn came",
 			"job_id", one.jobID, "status", job.Status)
-		s.releaseDeployPlace(context.WithoutCancel(ctx), place, one.jobID)
+		s.releaseDeployPlace(placeCtx, place, one.jobID)
 		return
 	}
 	project, err := s.store.Projects().ByID(ctx, run.ProjectID)
@@ -378,12 +388,25 @@ func (s *Server) startQueuedDeploy(ctx context.Context, one *queuedDeploy, place
 	}
 
 	claimed, err := s.store.Pipelines().ClaimDeployJob(ctx, job.ID)
-	if err != nil || !claimed {
+	if !claimed {
 		if err != nil {
 			s.log.Error("claim the queued deployment", "job_id", job.ID, "error", err)
 		}
+		retryPending = false
+		s.releasePlaceAfterLostClaim(placeCtx, place, job.ID)
+		if current, readErr := s.store.Pipelines().JobByID(placeCtx, job.ID); readErr == nil &&
+			current.Status == store.JobPending {
+			s.startDeployIfReady(placeCtx, one.pipelineID)
+		}
 		return
 	}
+	// As with the direct path, a claim can succeed even if its follow-up pipeline
+	// timestamp update failed. The job row already says running; it still needs a worker.
+	if err != nil {
+		s.log.Error("claimed the queued deployment but could not update its pipeline",
+			"job_id", job.ID, "error", err)
+	}
+	retryPending = false
 
 	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeoutLimit)
 	go func() {
@@ -554,7 +577,17 @@ func (s *Server) reportDeployFinished(ctx context.Context, job *store.Job, run *
 }
 
 func (s *Server) writeDeployLog(ctx context.Context, job *store.Job, line string) {
-	if _, err := s.appendJobOutput(ctx, job, "err", line); err != nil {
+	s.writeDeployOutput(ctx, job, "err", line)
+}
+
+// writeDeployInfo records a non-failure fact, such as waiting or being skipped. It shares the
+// job's log with errors but keeps the ordinary output colour: nothing broke in those cases.
+func (s *Server) writeDeployInfo(ctx context.Context, job *store.Job, line string) {
+	s.writeDeployOutput(ctx, job, "out", line)
+}
+
+func (s *Server) writeDeployOutput(ctx context.Context, job *store.Job, stream, line string) {
+	if _, err := s.appendJobOutput(ctx, job, stream, line); err != nil {
 		s.log.Error("write to the deployment log", "job_id", job.ID, "error", err)
 	}
 }
