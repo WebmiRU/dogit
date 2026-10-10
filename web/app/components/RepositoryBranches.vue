@@ -133,7 +133,6 @@ async function remove(name: string) {
               <td class="muted small">{{ branch.created_at ? timeAgo(branch.created_at) : '—' }}</td>
               <td class="numeric">
                 <button
-                  v-if="!isDefault(branch.name)"
                   class="row-menu"
                   type="button"
                   aria-haspopup="menu"
@@ -141,7 +140,6 @@ async function remove(name: string) {
                   :aria-label="`Actions for branch ${branch.name}`"
                   @click="showMenu(branch.name, $event)"
                 >⋯</button>
-                <span v-else class="muted small">—</span>
               </td>
             </tr>
           </tbody>
@@ -158,7 +156,13 @@ async function remove(name: string) {
           <NuxtLink :to="repoViewUrl(projectPath, 'tree', openedBranch.name)" @click="closeMenu">
             Open record
           </NuxtLink>
-          <button class="row-menu-danger" type="button" :disabled="pending === openedBranch.name" @click="remove(openedBranch.name)">
+          <button
+            v-if="!isDefault(openedBranch.name)"
+            class="row-menu-danger"
+            type="button"
+            :disabled="pending === openedBranch.name"
+            @click="remove(openedBranch.name)"
+          >
             {{ pending === openedBranch.name ? 'Deleting…' : 'Delete' }}
           </button>
         </div>
