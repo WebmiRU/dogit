@@ -63,6 +63,13 @@ type Registry struct {
 	URL   string
 	Image string
 	Token string
+	// Username and Password are the other shape a registry answers to. A registry
+	// module mints a token scoped to one project; a registry the instance was merely
+	// given the address of is pushed to with an account it already holds. Both arrive
+	// here from the core, and which one is filled in is the core's decision rather than
+	// this runner's.
+	Username string
+	Password string
 }
 
 // Result is how a job ended.

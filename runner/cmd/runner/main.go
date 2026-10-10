@@ -423,9 +423,11 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 	// From the answer, not from the job. See the note on core.Job.
 	if answer.Registry != nil {
 		job.Registry = &jobs.Registry{
-			URL:   answer.Registry.URL,
-			Image: answer.Registry.Image,
-			Token: answer.Registry.Token,
+			URL:      answer.Registry.URL,
+			Image:    answer.Registry.Image,
+			Token:    answer.Registry.Token,
+			Username: answer.Registry.Username,
+			Password: answer.Registry.Password,
 		}
 	}
 
@@ -507,7 +509,11 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 
 	// Said and failed, not skipped: see runJob on why a build that produced nothing is worse
 	// than a build that failed.
-	if job.Registry == nil || job.Registry.Token == "" {
+	// A credential in either of the two shapes the core answers with: a token minted
+	// for this project, or an account for a registry the instance was given the address
+	// of. Asking for both would refuse a perfectly good answer because one of them is
+	// empty.
+	if job.Registry == nil || (job.Registry.Token == "" && job.Registry.Password == "") {
 		_ = client.JobLog(ctx, job.ID, "stderr",
 			"this job asks for an image, but the core offered no credential to push it with\n")
 		return errors.New("the core offered no registry credential for this job's image")
@@ -549,11 +555,7 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 		Args:       buildArgs(build, claimed.Variables),
 		Image:      image,
 		Push:       true,
-		Registry: &builder.Credential{
-			Server:   hostOf(job.Registry.URL),
-			Username: builderName,
-			Token:    job.Registry.Token,
-		},
+		Registry:   registryCredential(job.Registry),
 	}, func(progress builder.Progress) {
 		switch {
 		case progress.Failed:
@@ -624,6 +626,26 @@ func buildArgs(build map[string]any, variables map[string]string) map[string]str
 		}
 	}
 	return arguments
+}
+
+// registryCredential is what the builder is handed to push with.
+//
+// A token names one project and is the narrower of the two answers, so it is used
+// wherever the core gave one. An account is what a registry that is not a module of this
+// instance — an address an administrator wrote down — answers to. The username is then
+// the account the core chose, and not "builder": that word says what is doing the pushing
+// rather than who is allowed to, and at a registry this runner has never heard of it
+// would be a name that means nothing.
+func registryCredential(reg *jobs.Registry) *builder.Credential {
+	cred := &builder.Credential{Server: hostOf(reg.URL)}
+	if reg.Token != "" {
+		cred.Username = builderName
+		cred.Token = reg.Token
+		return cred
+	}
+	cred.Username = reg.Username
+	cred.Token = reg.Password
+	return cred
 }
 
 func hostOf(address string) string {

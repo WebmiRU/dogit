@@ -56,9 +56,17 @@ func (c *Client) WithToken(token string) *Client {
 // — a runner that held one long-lived credential would hold access to every project it ever
 // built, for ever, and the audit trail would say "runner" instead of "this build".
 type Registry struct {
-	URL         string `json:"url"`
-	Image       string `json:"image"`
-	Token       string `json:"token"`
+	URL   string `json:"url"`
+	Image string `json:"image"`
+	Token string `json:"token"`
+	// Username and Password are the other shape a registry answers to, and the one a
+	// written-down address uses: a registry module mints a token scoped to a project,
+	// while an address an administrator wrote down is pushed to with an account that
+	// this instance already holds. Token is preferred where both are given, because a
+	// scoped token is the narrower of the two and there is no reason to prefer the
+	// wider credential when the narrower one is on offer.
+	Username    string `json:"login"`
+	Password    string `json:"password"`
 	ExpiresIn   int    `json:"expires_in"`
 	InternalURL string `json:"internal_url"`
 }
