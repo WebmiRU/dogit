@@ -184,14 +184,14 @@ function reorder(answer: OperationsAnswer) {
   // The core's queue state is authoritative. A progress snapshot may contain phases from before
   // the job started waiting; that is history, not evidence it is running now.
   const normalize = (operation: DeployOperation): DeployOperation => {
-    // What the core says about waiting is the core's answer, and a phase left in a
-    // deployment's progress from before it started waiting is not work happening now.
-    //
-    // Rewriting it here is how three queued deployments came to be drawn as three
-    // rollouts under way, on a page whose own header — asked the same question — said
-    // one was running and two were not. The page had the right answer in hand and
-    // overwrote it with an inference from a leftover field.
-    if (operation.queued) return operation
+    // The durable job status and timestamps outrank a progress snapshot. A finished or
+    // queued job can retain old phases after a retry or a previous rollout; that history
+    // cannot turn it into work that is running now.
+    if (operation.queued || operation.finished_at != null ||
+      ['success', 'failed', 'error', 'refused', 'skipped', 'superseded',
+        'canceled', 'interrupted', 'abandoned'].includes(operation.status)) {
+      return operation
+    }
     if (!operation.progress || typeof operation.progress !== 'object') return operation
     const progress = operation.progress
     const activePhases = Array.isArray(progress.active_phases)
