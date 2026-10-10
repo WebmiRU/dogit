@@ -545,7 +545,7 @@ watch(() => props.projectPath, () => load())
     </div>
 
     <div v-else class="pipeline-table-wrap" :aria-busy="loading">
-    <table class="admin-table pipeline-table">
+    <table class="admin-table repository-flat-table pipeline-table">
       <thead>
         <tr>
           <th class="col-status">Status</th>
