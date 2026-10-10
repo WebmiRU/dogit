@@ -68,3 +68,21 @@ func TestPhysicalDeployIdentityRefusesMissingOrUnparseableKubeconfig(t *testing.
 		})
 	}
 }
+
+func TestPhysicalDeployIdentitiesIncludesEveryFanOutNamespace(t *testing.T) {
+	rows := []map[string]json.RawMessage{
+		identityRow(t, "fanout", "web", "web-context", "https://web-kube.example.test:6443"),
+		identityRow(t, "fanout", "jobs", "jobs-context", "https://jobs-kube.example.test:6443"),
+		identityRow(t, "fanout", "web", "web-context-copy", "https://web-kube.example.test:6443/"),
+	}
+	identities, namespaces, err := physicalDeployIdentities(rows, "fanout")
+	if err != nil {
+		t.Fatalf("resolve fan-out targets: %v", err)
+	}
+	if len(identities) != 2 {
+		t.Errorf("got %d physical locks, want 2 unique server/namespace pairs: %v", len(identities), identities)
+	}
+	if len(namespaces) != 2 || namespaces[0] != "jobs" || namespaces[1] != "web" {
+		t.Errorf("got namespaces %v, want sorted [jobs web]", namespaces)
+	}
+}
