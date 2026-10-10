@@ -82,14 +82,14 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 	claimed, err := s.store.Pipelines().ClaimDeployJob(ctx, job.ID)
 	if err != nil {
 		if holder {
-			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+			s.releasePlaceAfterLostClaim(context.WithoutCancel(ctx), place, job.ID)
 		}
 		s.log.Error("claim the deployment", "job_id", job.ID, "error", err)
 		return
 	}
 	if !claimed {
 		if holder {
-			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+			s.releasePlaceAfterLostClaim(context.WithoutCancel(ctx), place, job.ID)
 		}
 		return
 	}
@@ -109,6 +109,32 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 		defer cancel()
 		s.carryOutDeploy(detached, job, run, project)
 	}()
+}
+
+// releasePlaceAfterLostClaim checks the durable job state before giving a place back after
+// a claim did not succeed.
+//
+// Several completion callbacks can reach the same pending deploy together. The first call
+// takes the in-memory place, but another call for that same job is also allowed to try the
+// durable claim. If that second call wins, the first call's claim returns false. Freeing the
+// place just because this call was the original holder would let a different deployment
+// start while the winning caller is already deploying.
+//
+// A running row means the successful claimant owns this place until carryOutDeploy releases
+// it. A terminal row means there is no deployment left to hold it. If the row cannot be
+// read, leave the place held: allowing overlapping rollouts is worse than requiring recovery
+// from a place that could not safely be released.
+func (s *Server) releasePlaceAfterLostClaim(ctx context.Context, place deployPlace, jobID int64) {
+	job, err := s.store.Pipelines().JobByID(ctx, jobID)
+	if err != nil {
+		s.log.Error("check the deployment after an unsuccessful claim",
+			"job_id", jobID, "error", err)
+		return
+	}
+	if job.Status == store.JobRunning {
+		return
+	}
+	s.releaseDeployPlace(ctx, place, jobID)
 }
 
 // deployTimeoutLimit is how long a deployment may take before it is abandoned.
