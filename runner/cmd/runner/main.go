@@ -570,18 +570,17 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 		return failBuild(ctx, client, job, err.Error())
 	}
 
-	log.Printf("runner: job %d built %s in %s, %d steps (%d cached)",
-		job.ID, result.Digest, result.Duration().Round(time.Millisecond), result.Steps, result.Cached)
+	log.Printf("runner: job %d pushed %s with digest %s in %s, %d steps (%d cached)",
+		job.ID, image, result.Digest, result.Duration().Round(time.Millisecond), result.Steps, result.Cached)
 	// Nothing is said on the feed here. The plan has no step for "the push is over" and a
 	// runner that invents one puts a row on the page that nothing will ever close, so the
 	// push step keeps its arrow until the deployment says its own first word, which is how
 	// it works for the module's phases too.
 	//
-	// In the log rather than only in the feed, because the feed is only watched live and
-	// this is what somebody reads in a month asking what went out. No leading newline: the
-	// core takes this text as lines, and a leading one arrives as an empty line in the
-	// middle of a build's output for no reason a reader could account for.
-	_ = client.JobLog(ctx, job.ID, "stdout", "built "+result.Digest+"\n")
+	// The job log records the exact pushed reference and digest after BuildKit's push-enabled
+	// export completed successfully. No leading newline: the core takes this text as lines,
+	// and a leading one arrives as an empty line in the middle of a build's output.
+	_ = client.JobLog(ctx, job.ID, "stdout", "pushed "+image+" with digest "+result.Digest+"\n")
 	return nil
 }
 

@@ -31,6 +31,7 @@ const (
 	// jobs were running. It is neither a failure nor a success: the machine went
 	// away mid-build, and either verdict would be a claim nobody can support.
 	PipelineInterrupted = "interrupted"
+	PipelineSuperseded  = "superseded"
 	PipelineSuccess     = "success"
 	PipelineFailed      = "failed"
 	PipelineCanceled    = "canceled"
@@ -829,12 +830,31 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 	// has not started is not over, however the first went.
 	if _, err := r.s.pool.Exec(ctx, `
 		UPDATE pipelines
-		SET finished_at = now(), status = $2
+		SET finished_at = now(),
+		    status = CASE
+		      WHEN pipelines.status = $2 OR $3 = $4 THEN $2
+		      WHEN EXISTS (
+		          SELECT 1 FROM jobs j
+		          WHERE j.pipeline_id = pipelines.id
+		            AND j.status = $5 AND NOT j.allow_failure
+		      ) THEN $6
+		      WHEN EXISTS (
+		          SELECT 1 FROM jobs j
+		          WHERE j.pipeline_id = pipelines.id AND j.status = $7
+		      ) THEN $8
+		      WHEN EXISTS (
+		          SELECT 1 FROM jobs j
+		          WHERE j.pipeline_id = pipelines.id AND j.status = $9
+		      ) THEN $10
+		      ELSE $11
+		    END
 		WHERE id = (SELECT pipeline_id FROM jobs WHERE id = $1)
 		  AND NOT EXISTS (
 		      SELECT 1 FROM jobs
-		      WHERE pipeline_id = pipelines.id AND status IN ($3, $4))`,
-		id, pipelineStatusFor(status), JobPending, JobRunning); err != nil {
+		      WHERE pipeline_id = pipelines.id AND status IN ($12, $13))`,
+		id, PipelineCanceled, status, JobCanceled, JobFailed, PipelineFailed,
+		JobInterrupted, PipelineInterrupted, JobSuperseded, PipelineSuperseded,
+		PipelineSuccess, JobPending, JobRunning); err != nil {
 		return fmt.Errorf("finish pipeline: %w", err)
 	}
 	return nil
@@ -979,7 +999,9 @@ func pipelineStatusFor(jobStatus string) string {
 		// failed: what is known is that it is no longer running, and that is the
 		// part anybody waiting needs.
 		return PipelineInterrupted
-	case JobSuccess, JobSkipped, JobRefused, JobSuperseded:
+	case JobSuperseded:
+		return PipelineSuperseded
+	case JobSuccess, JobSkipped, JobRefused:
 		// A refused deployment does not fail the run. Nothing broke, and the places after
 		// it in the same run are waiting on it — a run failed over a busy cluster is a run
 		// that took every other place down with it for no reason at all.
@@ -1000,7 +1022,7 @@ func pipelineStatusOf(status string, jobs []Job) string {
 		return PipelineCanceled
 	}
 
-	pending, running, failed, interrupted := 0, 0, 0, 0
+	pending, running, failed, interrupted, superseded := 0, 0, 0, 0, 0
 	for _, job := range jobs {
 		switch job.Status {
 		case JobInterrupted:
@@ -1008,9 +1030,11 @@ func pipelineStatusOf(status string, jobs []Job) string {
 			// machine running it did. It still decides the pipeline, because a
 			// pipeline with a job that will never finish is not a successful one.
 			interrupted++
+		case JobSuperseded:
+			superseded++
 		// A skipped job is one that will never run, and a pipeline waiting for
 		// something that will never happen is a pipeline that never finishes.
-		case JobSkipped, JobRefused, JobSuperseded:
+		case JobSkipped, JobRefused:
 		case JobPending:
 			pending++
 		case JobRunning:
@@ -1031,6 +1055,8 @@ func pipelineStatusOf(status string, jobs []Job) string {
 		return PipelinePending
 	case interrupted > 0:
 		return PipelineInterrupted
+	case superseded > 0:
+		return PipelineSuperseded
 	default:
 		return PipelineSuccess
 	}

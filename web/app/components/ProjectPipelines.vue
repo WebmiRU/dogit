@@ -155,6 +155,7 @@ const states = [
   { value: 'failed', label: 'Failed' },
   { value: 'canceled', label: 'Canceled' },
   { value: 'running', label: 'Running' },
+  { value: 'superseded', label: 'Superseded' },
 ]
 
 /** A search or a filter, dropped. */

@@ -7,6 +7,7 @@ export type PipelineStatus =
   | 'failed'
   | 'canceled'
   | 'interrupted'
+  | 'superseded'
 
 export type JobStatus =
   | 'pending'
@@ -15,6 +16,10 @@ export type JobStatus =
   | 'failed'
   | 'canceled'
   | 'skipped'
+  | 'interrupted'
+  | 'refused'
+  | 'superseded'
+  | 'abandoned'
 
 /** One person, as the interface names them. */
 export interface PipelinePerson {
@@ -106,6 +111,9 @@ export const statusText: Record<PipelineStatus | JobStatus, string> = {
   canceled: 'Canceled',
   interrupted: 'Interrupted',
   skipped: 'Skipped',
+  refused: 'Refused',
+  superseded: 'Superseded',
+  abandoned: 'Abandoned',
 }
 
 /**
@@ -125,6 +133,9 @@ export const statusClass: Record<string, string> = {
   pending: 'badge-blue',
   interrupted: 'badge-neutral',
   skipped: 'badge-neutral',
+  refused: 'badge-neutral',
+  superseded: 'badge-neutral',
+  abandoned: 'badge-neutral',
 }
 
 /**
@@ -142,6 +153,9 @@ export const statusMark: Record<string, string> = {
   canceled: '⚪',
   interrupted: '⚪',
   skipped: '⚪',
+  refused: '⚪',
+  superseded: '⚪',
+  abandoned: '⚪',
 }
 
 /**

@@ -95,9 +95,10 @@ const (
 	PipelinePending  PipelineStatus = "pending"
 	PipelineRunning  PipelineStatus = "running"
 	PipelineSuccess  PipelineStatus = "success"
-	PipelineFailed   PipelineStatus = "failed"
-	PipelineCanceled PipelineStatus = "canceled"
-	PipelineSkipped  PipelineStatus = "skipped"
+	PipelineFailed      PipelineStatus = "failed"
+	PipelineCanceled    PipelineStatus = "canceled"
+	PipelineSkipped     PipelineStatus = "skipped"
+	PipelineSuperseded  PipelineStatus = "superseded"
 	PipelineManual   PipelineStatus = "manual"
 )
 

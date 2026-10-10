@@ -320,6 +320,8 @@ func statusMark(status string) (mark, colour string, level string) {
 		return "🟡", "yellow", "running"
 	case store.PipelinePending:
 		return "🔵", "blue", "running"
+	case store.PipelineSuperseded, store.JobSuperseded:
+		return "⚪", "grey", "superseded"
 	case store.PipelineCanceled, store.PipelineInterrupted:
 		return "⚪", "grey", "canceled"
 	default:

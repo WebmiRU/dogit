@@ -110,6 +110,10 @@ func TestPipelineStatusFollowsItsJobs(t *testing.T) {
 			store.PipelinePending, store.PipelineSuccess},
 		{"a skipped job is not a failure", []store.Job{{Status: store.JobSuccess}, {Status: store.JobSkipped}},
 			store.PipelinePending, store.PipelineSuccess},
+		{"a superseded deployment is not a passed pipeline", []store.Job{{Status: store.JobSuccess}, {Status: store.JobSuperseded}},
+			store.PipelinePending, store.PipelineSuperseded},
+		{"a real failure still wins over a superseded deployment", []store.Job{{Status: store.JobFailed}, {Status: store.JobSuperseded}},
+			store.PipelinePending, store.PipelineFailed},
 	}
 
 	for _, tc := range cases {
@@ -174,6 +178,59 @@ func TestFinishingTheLastJobClosesThePipeline(t *testing.T) {
 	}
 	if afterSecond.FinishedAt == nil {
 		t.Error("a finished pipeline has no finish time")
+	}
+}
+
+// The deploy can be overtaken while the build is still running. When that build ends,
+// the stored status must retain the deploy outcome rather than replacing it with success.
+func TestSupersededDeploymentStatusSurvivesBuildFinishingLater(t *testing.T) {
+	st := dbtest.Open(t)
+	ctx := context.Background()
+	project := dbtest.NewProject(t, st, "supersedestatus", nil)
+	pipeline, err := st.Pipelines().CreatePipeline(ctx, project.ID, "v1", "abc123", "tag",
+		nil, nil, store.Commit{}, []store.Job{
+			{Name: "build", Stage: "build", Script: []string{"true"}},
+			{Name: "deploy", Stage: "deploy", Deploy: map[string]any{"Target": "prod"}},
+		})
+	if err != nil {
+		t.Fatalf("create pipeline: %v", err)
+	}
+	jobs, err := st.Pipelines().JobsOfPipeline(ctx, pipeline.ID)
+	if err != nil {
+		t.Fatalf("read jobs: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("got %d jobs, want 2", len(jobs))
+	}
+
+	if err := st.Pipelines().FinishJob(ctx, jobs[1].ID, store.JobSuperseded, 0, "overtaken by a newer deployment"); err != nil {
+		t.Fatalf("supersede deployment: %v", err)
+	}
+	// The build is still pending, so the run must not be closed yet.
+	before, err := st.Pipelines().PipelineByID(ctx, pipeline.ID)
+	if err != nil {
+		t.Fatalf("read unfinished pipeline: %v", err)
+	}
+	if before.FinishedAt != nil {
+		t.Fatal("pipeline finished while its build was still pending")
+	}
+
+	if err := st.Pipelines().FinishJob(ctx, jobs[0].ID, store.JobSuccess, time.Second, ""); err != nil {
+		t.Fatalf("finish build: %v", err)
+	}
+	after, err := st.Pipelines().PipelineByID(ctx, pipeline.ID)
+	if err != nil {
+		t.Fatalf("read finished pipeline: %v", err)
+	}
+	if after.Status != store.PipelineSuperseded {
+		t.Errorf("stored pipeline status = %q, want %q", after.Status, store.PipelineSuperseded)
+	}
+	jobs, err = st.Pipelines().JobsOfPipeline(ctx, pipeline.ID)
+	if err != nil {
+		t.Fatalf("read finished jobs: %v", err)
+	}
+	if got := store.PipelineStatus(after, jobs); got != store.PipelineSuperseded {
+		t.Errorf("computed pipeline status = %q, want %q", got, store.PipelineSuperseded)
 	}
 }
 

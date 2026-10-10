@@ -140,9 +140,9 @@ func TestBeingSupersededDoesNotFailTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the jobs back: %v", err)
 	}
-	if status := store.PipelineStatus(run, jobs); status == store.PipelineFailed {
-		t.Errorf("the run is failed over a deployment that was never started, while the " +
-			"newest one — the one everybody was waiting for — reached the cluster")
+	if status := store.PipelineStatus(run, jobs); status != store.PipelineSuperseded {
+		t.Errorf("pipeline status = %q, want %q for a run whose deployment was overtaken",
+			status, store.PipelineSuperseded)
 	}
 }
 
