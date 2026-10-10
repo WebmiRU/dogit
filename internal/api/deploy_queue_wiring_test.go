@@ -338,3 +338,37 @@ func TestADeploymentThatStoppedWaitingHandsThePlaceOn(t *testing.T) {
 			"never release it")
 	}
 }
+
+
+// A concurrent caller can win the durable claim after the first caller took the place.
+// The loser must not free the slot underneath the deployment that is now running.
+func TestLosingAConcurrentClaimDoesNotReleaseTheRunningDeployPlace(t *testing.T) {
+	st := dbtest.Open(t)
+	s := deployQueueServer(t, st, t.TempDir())
+	ctx := context.Background()
+	job, waiting := supersededFixture(t, s)
+	place := deployPlace{project: "test/versions", cluster: "prod", namespace: "versions"}
+
+	mayStart, holder := s.deploys.take(place, job.ID, waiting.pipelineID)
+	if !mayStart || !holder {
+		t.Fatal("the first caller did not take the free place")
+	}
+
+	// Another caller won ClaimDeployJob for the same row. The first caller now sees a
+	// failed claim, but the job is running and must keep the place until it finishes.
+	claimed, err := st.Pipelines().ClaimDeployJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("claim the deployment from the concurrent caller: %v", err)
+	}
+	if !claimed {
+		t.Fatal("the competing caller did not claim the pending deployment")
+	}
+
+	s.releasePlaceAfterLostClaim(ctx, place, job.ID)
+
+	mayStart, _ = s.deploys.take(place, 999, 999)
+	if mayStart {
+		t.Error("a second deployment entered the place after the original holder lost its claim, "+
+			"even though the winning caller had already marked the deployment running")
+	}
+}
