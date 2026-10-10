@@ -12,10 +12,11 @@ import "sync"
 type deployPlace struct {
 	// project is for logs and display only. The queue is keyed by identity, the physical
 	// cluster endpoint/context and namespace, so aliases in different projects still meet.
-	project   string
-	cluster   string
-	namespace string
-	identity  string
+	project    string
+	cluster    string
+	namespace  string
+	identity   string   // stable local queue key for the complete target set
+	identities []string // each physical API-server/namespace pair that this job will mutate
 	logicalKey string
 }
 
@@ -32,14 +33,16 @@ func (p deployPlace) queueKey() string {
 // projects and aliases, while the logical identity also invalidates an unresolved target from
 // a newer pipeline instead of letting an older candidate sneak through.
 func (p deployPlace) candidateKeys() []string {
-	keys := []string{}
-	if p.identity != "" {
+	keys := append([]string(nil), p.identities...)
+	// Preserve direct queue tests and any older caller that represents a single physical
+	// target with identity but has not populated the identities slice.
+	if len(keys) == 0 && p.identity != "" {
 		keys = append(keys, p.identity)
 	}
 	if p.logicalKey != "" {
 		keys = append(keys, p.logicalKey)
 	}
-	return keys
+	return uniqueSorted(keys)
 }
 
 // queuedDeploy is a deployment that wants a place and is not getting it yet.
