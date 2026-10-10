@@ -36,6 +36,7 @@ jobs:
           --health-retries 20
     env:
       DOGIT_TEST_DATABASE_URL: postgres://dogit:dogit@127.0.0.1:5432/dogit_test?sslmode=disable
+    DOGIT_MODULE_TEST_DATABASE_URL: postgres://dogit:dogit@127.0.0.1:5432/dogit_module_test?sslmode=disable
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -46,6 +47,8 @@ jobs:
           cache: true
       - name: Download modules
         run: go mod download
+      - name: Create the Kubernetes module history test database
+        run: psql "$DOGIT_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE dogit_module_test"
       - name: Create the Docker network used by runner tests
         run: docker network inspect dogit_default >/dev/null 2>&1 || docker network create dogit_default
       - name: Test all packages
