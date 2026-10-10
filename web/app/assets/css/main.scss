@@ -530,6 +530,10 @@ label {
   font-size: 12.5px;
 }
 
+.repo-clone .muted {
+  white-space: nowrap;
+}
+
 .repo-tabs {
   display: flex;
   align-items: stretch;
