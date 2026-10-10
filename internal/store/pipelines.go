@@ -832,27 +832,29 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 		UPDATE pipelines
 		SET finished_at = now(),
 		    status = CASE
-		      WHEN pipelines.status = $2 OR $3 = $4 THEN $2
+		      WHEN pipelines.status = $2 OR EXISTS (
+		          SELECT 1 FROM jobs j WHERE j.id = $1 AND j.status = $3
+		      ) THEN $2
 		      WHEN EXISTS (
 		          SELECT 1 FROM jobs j
 		          WHERE j.pipeline_id = pipelines.id
-		            AND j.status = $5 AND NOT j.allow_failure
-		      ) THEN $6
+		            AND j.status = $4 AND NOT j.allow_failure
+		      ) THEN $5
 		      WHEN EXISTS (
 		          SELECT 1 FROM jobs j
-		          WHERE j.pipeline_id = pipelines.id AND j.status = $7
-		      ) THEN $8
+		          WHERE j.pipeline_id = pipelines.id AND j.status = $6
+		      ) THEN $7
 		      WHEN EXISTS (
 		          SELECT 1 FROM jobs j
-		          WHERE j.pipeline_id = pipelines.id AND j.status = $9
-		      ) THEN $10
-		      ELSE $11
+		          WHERE j.pipeline_id = pipelines.id AND j.status = $8
+		      ) THEN $9
+		      ELSE $10
 		    END
 		WHERE id = (SELECT pipeline_id FROM jobs WHERE id = $1)
 		  AND NOT EXISTS (
 		      SELECT 1 FROM jobs
-		      WHERE pipeline_id = pipelines.id AND status IN ($12, $13))`,
-		id, PipelineCanceled, status, JobCanceled, JobFailed, PipelineFailed,
+		      WHERE pipeline_id = pipelines.id AND status IN ($11, $12))`,
+		id, PipelineCanceled, JobCanceled, JobFailed, PipelineFailed,
 		JobInterrupted, PipelineInterrupted, JobSuperseded, PipelineSuperseded,
 		PipelineSuccess, JobPending, JobRunning); err != nil {
 		return fmt.Errorf("finish pipeline: %w", err)

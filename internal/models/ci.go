@@ -92,14 +92,14 @@ const (
 type PipelineStatus string
 
 const (
-	PipelinePending  PipelineStatus = "pending"
-	PipelineRunning  PipelineStatus = "running"
-	PipelineSuccess  PipelineStatus = "success"
-	PipelineFailed      PipelineStatus = "failed"
-	PipelineCanceled    PipelineStatus = "canceled"
-	PipelineSkipped     PipelineStatus = "skipped"
-	PipelineSuperseded  PipelineStatus = "superseded"
-	PipelineManual   PipelineStatus = "manual"
+	PipelinePending    PipelineStatus = "pending"
+	PipelineRunning    PipelineStatus = "running"
+	PipelineSuccess    PipelineStatus = "success"
+	PipelineFailed     PipelineStatus = "failed"
+	PipelineCanceled   PipelineStatus = "canceled"
+	PipelineSkipped    PipelineStatus = "skipped"
+	PipelineSuperseded PipelineStatus = "superseded"
+	PipelineManual     PipelineStatus = "manual"
 )
 
 type Pipeline struct {
