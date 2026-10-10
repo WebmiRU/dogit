@@ -59,13 +59,21 @@ func (s *Server) tryDeployLocks(ctx context.Context, identities []string) (*depl
 	unlockPartial := func() {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
+		broken := false
 		for index := len(acquired) - 1; index >= 0; index-- {
 			var released bool
 			if err := conn.QueryRow(cleanupCtx,
 				`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, acquired[index]).Scan(&released); err != nil {
+				broken = true
 				s.log.Error("release a partially acquired deployment lock",
 					"target", acquired[index], "error", err)
 			}
+		}
+		if broken {
+			// Never return a pooled session that may still hold advisory locks. Destroying
+			// the physical connection makes PostgreSQL release every lock owned by it.
+			s.discardDeployLockConnection(conn)
+			return
 		}
 		conn.Release()
 	}
@@ -94,16 +102,37 @@ func (s *Server) releaseDeployLock(ctx context.Context, lock *deployLock) {
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
+	broken := false
 	for index := len(lock.identities) - 1; index >= 0; index-- {
 		identity := lock.identities[index]
 		var released bool
 		if err := lock.conn.QueryRow(cleanupCtx,
 			`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, identity).Scan(&released); err != nil {
+			broken = true
 			s.log.Error("release the shared deployment lock", "target", identity, "error", err)
 		} else if !released {
 			s.log.Warn("the shared deployment lock was no longer held", "target", identity)
 		}
 	}
-	lock.conn.Release()
+	if broken {
+		s.discardDeployLockConnection(lock.conn)
+	} else {
+		lock.conn.Release()
+	}
 	lock.conn = nil
+}
+
+// discardDeployLockConnection removes a physical session from the pool when its advisory locks
+// could not all be released. PostgreSQL releases session advisory locks only when that session
+// disconnects, so returning it to the pool would let an unrelated request inherit a hidden lock.
+func (s *Server) discardDeployLockConnection(conn *pgxpool.Conn) {
+	if conn == nil {
+		return
+	}
+	pgConn := conn.Hijack()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pgConn.Close(ctx); err != nil {
+		s.log.Warn("close a database session with a possibly held deployment lock", "error", err)
+	}
 }
