@@ -114,6 +114,32 @@ func (q *deployQueue) takeWithStatus(place deployPlace, jobID, pipelineID int64)
 	}
 }
 
+// waitingFor says whether this job is standing in a queue right now.
+//
+// The queue's own answer rather than the row's, because the row cannot tell the two apart. A
+// deploy job that is still building its image and pushing it to the registry has not started,
+// and "has not started" is also what every queued deployment looks like from the table. Told
+// from there, a deployment that had not yet reached the queue was reported as waiting its turn
+// for as long as its build took — half a minute on an ordinary deploy, which is most of the
+// time anybody watches the page — and the page said so in the header while the run was plainly
+// under way.
+//
+// False after a restart, and that is right rather than a gap: the queue is emptied by the
+// restart, and a deployment this process was carrying out died with it.
+func (q *deployQueue) waitingFor(jobID int64) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for _, slot := range q.slots {
+		for _, waiting := range slot.waiting {
+			if waiting.jobID == jobID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // free hands the place back and says what becomes of the ones that were waiting.
 //
 // The newest waiting deployment is promoted, because the newest is the one somebody is

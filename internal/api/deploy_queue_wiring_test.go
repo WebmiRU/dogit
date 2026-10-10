@@ -372,3 +372,37 @@ func TestLosingAConcurrentClaimDoesNotReleaseTheRunningDeployPlace(t *testing.T)
 			"even though the winning caller had already marked the deployment running")
 	}
 }
+
+// A deployment that has not reached the queue is not waiting its turn.
+//
+// A deploy job sits pending from the moment it is created until it claims a place, and for
+// most of that time it is building its image and pushing it to the registry. From the row it
+// looks exactly like one standing in a queue, because both have not started, and the page
+// said the second about the first: the header read "a deployment is waiting its turn" while
+// the only deployment on the place was busy pushing an image, on every deploy, for as long as
+// the build took.
+//
+// Only the queue knows which of the two this is, so the answer comes from there.
+func TestADeploymentBeingBuiltIsNotSaidToBeWaitingItsTurn(t *testing.T) {
+	st := dbtest.Open(t)
+	s := deployQueueServer(t, st, t.TempDir())
+	job, waiting := supersededFixture(t, s)
+	place := deployPlace{project: "test/versions", cluster: "prod", namespace: "versions"}
+
+	// The row says pending, which is all a built-but-not-started deployment has to say.
+	operation := store.DeployOperation{JobID: job.ID, Status: store.JobPending}
+	if s.waitingItsTurn(operation) {
+		t.Fatal("a deployment that has not reached the queue was said to be waiting its turn")
+	}
+
+	if mayStart, holder, _ := s.deploys.takeWithStatus(place, 999, 999); !mayStart || !holder {
+		t.Fatalf("the place was not taken: mayStart=%v holder=%v", mayStart, holder)
+	}
+	if mayStart, _, enqueued := s.deploys.takeWithStatus(place, waiting.jobID, waiting.pipelineID); mayStart || !enqueued {
+		t.Fatalf("the second deployment did not join the queue: mayStart=%v enqueued=%v", mayStart, enqueued)
+	}
+
+	if !s.waitingItsTurn(operation) {
+		t.Error("a deployment standing in the queue was not said to be waiting its turn")
+	}
+}

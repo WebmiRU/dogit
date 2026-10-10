@@ -58,10 +58,19 @@ const error = ref('')
 const deployBusy = ref(false)
 const lastFailed = ref(false)
 /** The deployments the core last listed as under way or waiting. */
-const listed = ref<{ running?: boolean; queued?: boolean }[]>([])
+const listed = ref<{ running?: boolean; queued?: boolean; status?: string }[]>([])
 
 const deployWaiting = computed(
   () => !deployBusy.value && listed.value.some((one) => one.queued === true),
+)
+
+// Pending, and in neither of the two above: a deployment still building its image. The core
+// used to call this waiting, and the header with it, so for the whole of every build — the
+// half-minute before anything reaches the queue — a project that was plainly working said it
+// was queueing for its turn.
+const deployPreparing = computed(
+  () => !deployBusy.value && !deployWaiting.value &&
+    listed.value.some((one) => one.status === 'pending'),
 )
 
 function isFailedDeployStatus(status?: string): boolean {
@@ -73,6 +82,11 @@ function isFailedDeployStatus(status?: string): boolean {
 const headState = computed<'working' | 'waiting' | 'bad' | 'ok'>(() => {
   if (deployBusy.value) return 'working'
   if (deployWaiting.value) return 'waiting'
+  // A build is running even though no place has been claimed yet, and the lamp says so in
+  // the same colour as a rollout: nothing is wrong, but the project is not idle either, and
+  // "nothing is deploying" for the length of every build would be the same class of lie as
+  // the one this state was added to remove.
+  if (deployPreparing.value) return 'working'
   if (lastFailed.value) return 'bad'
   return 'ok'
 })
@@ -81,6 +95,7 @@ const headStateText = computed(() => {
   if (!modules.value.some((one) => one.kind.startsWith('deploy:'))) return 'no deploy module'
   if (deployBusy.value) return 'a deployment is under way'
   if (deployWaiting.value) return 'a deployment is waiting its turn'
+  if (deployPreparing.value) return 'a deployment is being prepared'
   if (lastFailed.value) return 'the last deployment did not finish'
   return 'nothing is deploying'
 })

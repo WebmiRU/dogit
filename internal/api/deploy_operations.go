@@ -52,14 +52,16 @@ func (s *Server) handleProjectDeployOperations(w http.ResponseWriter, r *http.Re
 	active := []map[string]any{}
 	complete := []map[string]any{}
 	for _, one := range operations {
-		// Three states and not two: a deploy step nobody has claimed has neither begun nor
-		// ended, and it belongs on neither list. The core knows it — the row exists — and a
-		// card for it would draw an empty step list and no end time.
+		// Two lists, and the line between them is "is it over" rather than "is it waiting":
+		// a deployment that is being built belongs on the first one, because it is under way
+		// in every sense a reader cares about, and calling it waiting is what made the page
+		// say a queue was forming while one deployment was pushing an image. Which of the
+		// active rows is actually queued is asked separately, below, from the queue itself.
 		switch {
 		case one.Running(), one.Queued():
-			active = append(active, deployOperationView(one))
+			active = append(active, s.deployOperationView(one))
 		case one.Finished():
-			complete = append(complete, deployOperationView(one))
+			complete = append(complete, s.deployOperationView(one))
 		}
 	}
 
@@ -75,7 +77,7 @@ func (s *Server) handleProjectDeployOperations(w http.ResponseWriter, r *http.Re
 // every event about this deployment carries it, and it is the only thing that tells two
 // deployments apart. Milliseconds are kept because two deployments in the same second are ordinary
 // and a page whose cards swap places between two loads cannot be read.
-func deployOperationView(one store.DeployOperation) map[string]any {
+func (s *Server) deployOperationView(one store.DeployOperation) map[string]any {
 	return map[string]any{
 		"job_id": one.JobID,
 		// The place by name, which is how a deploy step says it and how the page knows its
@@ -91,13 +93,27 @@ func deployOperationView(one store.DeployOperation) map[string]any {
 		"started_at":  millisOf(one.StartedAt),
 		"finished_at": millisOf(one.FinishedAt),
 		"running":     one.Running(),
-		"queued":      one.Queued(),
+		"queued":      s.waitingItsTurn(one),
 		// What the operation had last said about itself, so that a page opened halfway
 		// through it draws the step it is on rather than seven steps not yet reached. Absent
 		// rather than empty when nothing is known, because a page cannot tell an empty object
 		// from a deployment that has not said anything.
 		"progress": one.Progress,
 	}
+}
+
+// waitingItsTurn says whether this deployment is standing in a queue, as the queue itself
+// answers rather than as the row implies.
+//
+// Two questions the table gives the same answer to, and the page is built on telling them
+// apart: a deployment that is being built has not started, and a deployment waiting its turn
+// has not started. The first is not waiting for anything — it is working — and a header that
+// calls it waiting is wrong for the whole of its build, on every deploy, forever.
+func (s *Server) waitingItsTurn(one store.DeployOperation) bool {
+	if one.Running() || one.Finished() {
+		return false
+	}
+	return s.deploys.waitingFor(one.JobID)
 }
 
 // millisOf is a moment as a number, or nil when there was no such moment.

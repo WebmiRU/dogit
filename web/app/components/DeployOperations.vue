@@ -633,6 +633,11 @@ function verdictOf(operation: DeployOperation): string {
 function stateOf(operation: DeployOperation): string {
   if (operation.queued) return 'Waiting'
   if (operation.running) return 'Running'
+  // Pending, but neither queued nor running: the core has not been asked for a place yet,
+  // because this deployment is still building its image. That is work in progress, and it is
+  // not waiting for anything. It used to arrive here as the bare word 'pending' — the row's
+  // own name for itself — which is a column heading, not an answer to "what is this doing".
+  if (operation.status === 'pending') return 'Preparing'
   if (operation.status === 'refused') return 'Declined'
   if (operation.status === 'superseded') return 'Overtaken'
   if (operation.status === 'skipped') return 'Skipped'
@@ -652,6 +657,11 @@ function stateOf(operation: DeployOperation): string {
 function edgeOf(operation: DeployOperation): string {
   if (operation.queued) return 'queued'
   if (operation.running) return 'live'
+  // Dashed rather than solid, and in the waiting colour rather than the working one: this is
+  // a deployment on its way to the queue, and drawing it in the colour of a running rollout
+  // would put a second yellow bar on the page for something that is not deploying anything
+  // yet — which is the miscount this page spent a day being blamed for.
+  if (operation.status === 'pending') return 'preparing'
   if (operation.status === 'refused' || operation.status === 'superseded' ||
     operation.status === 'skipped') {
     return 'dismissed'
