@@ -38,7 +38,7 @@ const (
 	EventDeployHistory   EventKind = "deploy.history"
 	// A deployment joined the queue and still has not started. It changes the list
 	// without producing progress lines, so it needs a signal of its own.
-	EventDeployQueued EventKind = "deploy.queued"
+	EventDeployQueued    EventKind = "deploy.queued"
 
 	// Module events carry no project: a module belongs to the instance rather than
 	// to anything inside it, and the only page that watches them is the
