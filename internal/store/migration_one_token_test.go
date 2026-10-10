@@ -5,7 +5,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"net/url"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/golang-migrate/migrate/v4"
 	migratepgx "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -13,9 +17,49 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ewolf/dogit/internal/dbtest"
-	"github.com/ewolf/dogit/internal/store"
 	"github.com/ewolf/dogit/migrations"
 )
+
+// isolatedMigrationURL gives this destructive migration test its own schema. It deliberately
+// walks versions backwards and forwards; sharing public with ordinary repository tests means
+// another package can see a dirty intermediate version and try to recreate tables that still exist.
+func isolatedMigrationURL(t *testing.T, base string) string {
+	t.Helper()
+
+	schema := "dogit_migration_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	db, err := sql.Open("pgx", base)
+	if err != nil {
+		t.Fatalf("open database to create an isolated migration schema: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), "CREATE SCHEMA "+schema); err != nil {
+		_ = db.Close()
+		t.Fatalf("create isolated migration schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close schema-creation connection: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cleanup, err := sql.Open("pgx", base)
+		if err != nil {
+			t.Errorf("open database to remove isolated migration schema: %v", err)
+			return
+		}
+		defer cleanup.Close()
+		if _, err := cleanup.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE"); err != nil {
+			t.Errorf("drop isolated migration schema: %v", err)
+		}
+	})
+
+	parsed, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse test database URL: %v", err)
+	}
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
 
 // migrateTo applies migrations up to a version and stops there.
 //
@@ -68,17 +112,10 @@ func migrateTo(t *testing.T, url string, version uint) {
 // rather than reading the code — one token, four modules, zero matches.
 func TestAModuleRunningBeforeTheOneTokenChangeKeepsWorking(t *testing.T) {
 	ctx := context.Background()
-	url := dbtest.URL(t)
+	url := isolatedMigrationURL(t, dbtest.URL(t))
 
-	// The database is walked backwards and forwards here, so it is put back at the newest
-	// version whatever happens. A test that fails halfway through would otherwise leave every
-	// test after it failing about columns that are not there, which is a way of hiding one
-	// failure behind a dozen.
-	t.Cleanup(func() {
-		if err := store.Migrate(url); err != nil {
-			t.Errorf("put the database back at the newest version: %v", err)
-		}
-	})
+	// Migrations are applied only inside the schema made for this test, so a failed assertion
+	// cannot leave other tests with an intermediate or dirty version of the shared database.
 
 	migrateTo(t, url, 32)
 
