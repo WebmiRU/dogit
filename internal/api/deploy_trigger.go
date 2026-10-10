@@ -204,9 +204,15 @@ func (s *Server) waitForDeployPlace(ctx context.Context, job *store.Job,
 			return
 		}
 		if latestErr != nil {
-			s.log.Error("verify deployment candidate while waiting for the shared lock",
-				"job_id", job.ID, "error", latestErr)
-		} else if latest {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			s.failUnstartableDeploy(cleanup, job, run, project, place,
+				"Cannot verify the latest deployment candidate while waiting for the exclusive lock: "+latestErr.Error())
+			_ = s.store.Pipelines().SetDeployCandidateWaiting(cleanup, keys, job.ID, run.ID, false)
+			cancel()
+			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+			return
+		}
+		if latest {
 			lock, acquired, lockErr := s.tryDeployLocks(ctx, place.identities)
 			if lockErr != nil {
 				s.log.Error("acquire the shared deployment lock", "job_id", job.ID,
