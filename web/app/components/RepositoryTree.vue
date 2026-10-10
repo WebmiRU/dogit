@@ -92,7 +92,7 @@ function icon(entry: TreeEntry) {
       This directory is empty.
     </div>
     <div v-else class="repository-table-wrap">
-      <table class="admin-table repository-data-table repository-tree-table">
+      <table class="admin-table repository-tree-table">
         <thead>
           <tr><th>Name</th><th class="numeric">Size</th></tr>
         </thead>
