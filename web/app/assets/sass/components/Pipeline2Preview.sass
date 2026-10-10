@@ -354,6 +354,12 @@
 .p2-related-line a
   color: #78b6f3
   text-decoration: none
+.p2-related-line .p2-related-link
+  color: #78b6f3
+  text-decoration: none
+  cursor: pointer
+.p2-related-line .p2-related-link:hover
+  text-decoration: underline
 .p2-pipeline-meta
   display: flex
   align-items: center
@@ -412,6 +418,16 @@
 .p2-content-tabs > button.active
   border-bottom-color: #4f9de8
   color: #f4f4f6
+.p2-content-tabs > button.active::after
+  content: ""
+  position: absolute
+  right: 0
+  bottom: -1px
+  left: 0
+  height: 3px
+  border-radius: 0
+  background: #4f9de8
+  pointer-events: none
 .p2-content-tabs > button:focus-visible
   outline: 2px solid #4f9de8
   outline-offset: -3px
@@ -738,6 +754,12 @@
   color: #bdbdc6
   line-height: 1.3
   white-space: nowrap
+.p2-job-tags > span:first-child
+  background: #303136
+  color: var(--info, #8bbdff)
+.p2-job-tags > span:last-child
+  background: #262b36
+  color: var(--text-muted, #b6bdc8)
 .p2-job-tags svg
   width: 17px
   height: 17px
