@@ -6,11 +6,39 @@
 // The element attribute that made this scoped is gone with it: global styles are
 // selected by name, so a name used here has to mean one thing across the site.
 
-// Use the shared admin-table spacing and typography. Only the cell alignment is
-// specific to this module list; don't reintroduce a second table style here.
-.deploy-page-table th,
-.deploy-page-table td
-  vertical-align: middle
+// The module list uses the shared admin-table for its row and header rhythm.
+.deploy-module-list
+  width: 100%
+  margin-bottom: 18px
+.deploy-module-state
+  display: flex
+  align-items: center
+  padding: 10px 12px
+  margin-bottom: 12px
+  border: 1px solid var(--border)
+  border-radius: 6px
+.deploy-module-state-main
+  display: flex
+  align-items: center
+  gap: 9px
+.deploy-module-state-label
+  font-weight: 600
+  font-size: 13px
+.deploy-module-lamp
+  display: inline-flex
+  width: 14px
+  height: 14px
+  flex: 0 0 auto
+.deploy-module-lamp-dot
+  width: 100%
+  height: 100%
+  border-radius: 50%
+  background: var(--green)
+  box-shadow: 0 0 0 2px var(--bg-inset)
+.deploy-module-lamp.working .deploy-module-lamp-dot
+  background: var(--yellow)
+.deploy-module-lamp.bad .deploy-module-lamp-dot
+  background: var(--red)
 .module-name
   font-weight: 600
 .deploy-page-actions-col
@@ -27,31 +55,7 @@
   font-size: 12px
 .block
   display: block
-.head
-  padding: 12px
-  border-bottom: 1px solid var(--border)
-.head-main
-  display: flex
-  align-items: center
-  gap: 9px
-.head-state
-  font-weight: 600
-  font-size: 13px
-.lamp
-  display: inline-flex
-  width: 14px
-  height: 14px
-  flex: 0 0 auto
-.lamp-dot
-  width: 100%
-  height: 100%
-  border-radius: 50%
-  background: var(--green)
-  box-shadow: 0 0 0 2px var(--bg-inset)
-.lamp.working .lamp-dot
-  background: var(--yellow)
-.lamp.bad .lamp-dot
-  background: var(--red)
+/* The status lamp belongs to the deploy module summary, not a generic .head. */
 .deploy-page-places-fold
   padding: 0 12px
   border-bottom: 1px solid var(--border)
