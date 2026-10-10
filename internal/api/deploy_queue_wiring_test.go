@@ -208,6 +208,8 @@ func TestThePlaceAJobIsGoingToIsItsProjectItsPlaceAndItsNamespace(t *testing.T) 
 				Fields: []models.SettingSpec{
 					{Key: "name", Type: "string"},
 					{Key: "default_namespace", Type: "string"},
+					{Key: "kubeconfig", Type: "string"},
+					{Key: "context", Type: "string"},
 				},
 			},
 		}}})
@@ -215,7 +217,12 @@ func TestThePlaceAJobIsGoingToIsItsProjectItsPlaceAndItsNamespace(t *testing.T) 
 		t.Fatalf("register the module: %v", err)
 	}
 	places, err := json.Marshal([]map[string]any{
-		{"name": "prod", "default_namespace": "versions"},
+		{
+			"name": "prod", "default_namespace": "versions",
+			"kubeconfig": "apiVersion: v1\nkind: Config\ncurrent-context: prod-context\n" +
+				"clusters:\n- name: physical-prod\n  cluster:\n    server: https://kube.example.test:6443\n" +
+				"contexts:\n- name: prod-context\n  context:\n    cluster: physical-prod\n",
+		},
 	})
 	if err != nil {
 		t.Fatalf("describe the places: %v", err)
@@ -234,7 +241,10 @@ func TestThePlaceAJobIsGoingToIsItsProjectItsPlaceAndItsNamespace(t *testing.T) 
 		"Target": "prod", "Module": "kubernetes",
 	}}
 
-	place, ok := s.deployPlaceOf(context.Background(), project, job)
+	place, ok, placeErr := s.deployPlaceOf(context.Background(), project, job)
+	if placeErr != nil {
+		t.Fatalf("resolve a configured destination: %v", placeErr)
+	}
 	if !ok {
 		t.Fatal("no place was found for a job that names one, so deployments would not queue")
 	}
@@ -252,12 +262,12 @@ func TestThePlaceAJobIsGoingToIsItsProjectItsPlaceAndItsNamespace(t *testing.T) 
 
 	// And the two jobs that are not deployments at all get no place, rather than an empty
 	// one that every such job would share.
-	if _, ok := s.deployPlaceOf(context.Background(), project, &store.Job{}); ok {
+	if _, ok, err := s.deployPlaceOf(context.Background(), project, &store.Job{}); ok || err != nil {
 		t.Error("a job that is not a deployment was given a place to queue behind")
 	}
-	if _, ok := s.deployPlaceOf(context.Background(), project,
-		&store.Job{Deploy: map[string]any{}}); ok {
-		t.Error("a deployment naming no place was given one")
+	if _, ok, err := s.deployPlaceOf(context.Background(), project,
+		&store.Job{Deploy: map[string]any{}}); !ok || err == nil {
+		t.Error("a malformed deployment was not recognised and rejected for a missing target")
 	}
 }
 
