@@ -163,24 +163,16 @@ const cards = computed(() => [
 ])
 
 /**
- * The reader's own cards: what is under way, and what they caught and have not put away.
+ * The reader's live cards: work this page watched, plus any operation currently running.
  *
- * Above the list rather than instead of it. A deployment they watched is *also* down there,
- * with its own log — the card here is an extra thing to watch something while it happens, and it
- * was never meant to take the place of the record. It did, for as long as the two were the same
- * thing, and a page that stops listing what it has done the moment somebody starts watching it
- * is a page that forgets.
- *
- * A card here keeps the shape it had while it was running when it finishes: the steps, the log
- * under them, and the cross. A deployment that ends does not take its card down — the moment it
- * ended is usually the moment somebody starts reading why.
+ * A live operation has one full card, not a second history copy beside it. When it finishes,
+ * the same card remains while the reader has it caught; its record returns to the history list
+ * only if the reader puts this extra view away.
  */
 const live = computed(() =>
   cards.value.filter((one) => (one.running || caught.value[one.job_id]) && !putAway.value[one.job_id]))
 
-/** The record, as it always was: every operation, whether or not anybody watched it. */
-// A live card already is the record while it is visible. Drawing the same job again below
-// creates a second log snapshot beside the socket-driven log, and the snapshot then goes stale.
+/** Operations not represented by a visible live card: the concise history record. */
 const history = computed(() => {
   const liveIDs = new Set(live.value.map((one) => one.job_id))
   return cards.value.filter((one) => !liveIDs.has(one.job_id))
@@ -421,6 +413,10 @@ function note(payload: Record<string, unknown>) {
     else void askLog(jobID)
   } else if (wasQueued) {
     void refreshLog(jobID)
+  } else if (putAway.value[jobID] && expandedLogs.value[jobID]) {
+    // A hidden live card is presented as a folded history row. If it is open, keep that
+    // snapshot current too; its live progress is rendered from watching below.
+    void refreshLog(jobID)
   }
 }
 
@@ -457,8 +453,14 @@ async function refreshLog(jobID: number) {
 }
 
 /** Refresh only logs somebody has open when another operation changes the queue or finishes. */
-async function refreshExpandedLogs() {
-  await Promise.all(Object.keys(expandedLogs.value).map((jobID) => refreshLog(Number(jobID))))
+async function refreshOpenLogs() {
+  const ids = new Set<number>(Object.keys(expandedLogs.value).map(Number))
+  // A live card keeps a snapshot for the lines from before this page subscribed. Re-read it
+  // at completion so core-added closing lines are not missing from the visible account.
+  for (const operation of live.value) {
+    if (logs.value[operation.job_id]) ids.add(operation.job_id)
+  }
+  await Promise.all([...ids].map((jobID) => refreshLog(jobID)))
 }
 
 function toggleHistoryLog(jobID: number, event: Event) {
@@ -710,7 +712,7 @@ watchEvents({
     if (event.kind === 'deploy.history') {
       // A deployment ended, and this is the only line that says so. Refresh the list and any log
       // the reader already has open: a waiter may have been promoted or overtaken in the meantime.
-      void load().then(refreshExpandedLogs)
+      void load().then(refreshOpenLogs)
       return
     }
     if (event.kind !== 'deploy.operation') return
@@ -984,7 +986,25 @@ watchEvents({
 
         <details class="log" @toggle="toggleHistoryLog(operation.job_id, $event)">
           <summary class="muted small">{{ logLabel(operation.job_id) }}</summary>
-          <ul v-if="logOf(operation.job_id)?.length" class="operation-log">
+          <template v-if="watched(operation.job_id)">
+            <div v-if="earlierLogOf(operation.job_id).length" class="operation-log-wrap">
+              <ul class="operation-log">
+                <li
+                  v-for="(entry, index) in earlierLogOf(operation.job_id)"
+                  :key="index"
+                  :class="entry.stream"
+                >
+                  <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
+                  <span>{{ entry.text }}</span>
+                </li>
+              </ul>
+            </div>
+            <DeployLog
+              :lines="logLines(operation.job_id)"
+              :plan="planOf(operation.job_id)"
+            />
+          </template>
+          <ul v-else-if="logOf(operation.job_id)?.length" class="operation-log">
             <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
               <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
               <span>{{ entry.text }}</span>
