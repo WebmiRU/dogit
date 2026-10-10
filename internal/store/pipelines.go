@@ -177,10 +177,22 @@ type Job struct {
 // project.
 func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, ref, sha, source string,
 	variables map[string]string, createdBy *uuid.UUID, commit Commit, jobs []Job) (*Pipeline, error) {
+	pipeline, _, err := r.CreatePipelineWithCandidates(ctx, projectID, ref, sha, source,
+		variables, createdBy, commit, jobs, nil)
+	return pipeline, err
+}
+
+// CreatePipelineWithCandidates writes a pipeline and records its deploy candidates in the
+// same transaction. This is important: announcing a push before the candidate is recorded
+// would leave a window where an older build can finish and deploy just as the newer push
+// is being created.
+func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, projectID uuid.UUID,
+	ref, sha, source string, variables map[string]string, createdBy *uuid.UUID,
+	commit Commit, jobs []Job, candidateKeys map[int][]string) (*Pipeline, []DeployCandidateChange, error) {
 
 	tx, err := r.s.pool.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("create pipeline: %w", err)
+		return nil, nil, fmt.Errorf("create pipeline: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -191,14 +203,14 @@ func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, 
 	// project's, which is the thing being numbered anyway.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`,
 		"pipeline:"+projectID.String()); err != nil {
-		return nil, fmt.Errorf("lock the project: %w", err)
+		return nil, nil, fmt.Errorf("lock the project: %w", err)
 	}
 
 	var iid int
 	if err := tx.QueryRow(ctx,
 		`SELECT coalesce(max(iid), 0) + 1 FROM pipelines WHERE project_id = $1`,
 		projectID).Scan(&iid); err != nil {
-		return nil, fmt.Errorf("allocate pipeline number: %w", err)
+		return nil, nil, fmt.Errorf("allocate pipeline number: %w", err)
 	}
 
 	// An empty object rather than NULL: the column is not nullable, and "no
@@ -230,9 +242,10 @@ func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, 
 		pipeline.CommitTitle, pipeline.CommitAuthorName, pipeline.CommitAuthorEmail,
 	).Scan(&pipeline.ID, &pipeline.CreatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("create pipeline: %w", err)
+		return nil, nil, fmt.Errorf("create pipeline: %w", err)
 	}
 
+	changes := []DeployCandidateChange{}
 	for index, job := range jobs {
 		job.IID = index + 1
 		if job.Status == "" {
@@ -255,11 +268,11 @@ func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, 
 
 		build, err := jsonbOf(job.Build)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		deploy, err := jsonbOf(job.Deploy)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// RETURNING rather than a plain insert: the job's id is needed by whatever
@@ -273,14 +286,24 @@ func (r *PipelineRepo) CreatePipeline(ctx context.Context, projectID uuid.UUID, 
 			job.PipelineID, job.IID, job.Name, job.Stage, job.Status, job.Image,
 			job.Script, job.AllowFailure, job.Needs, build, deploy).Scan(&job.ID)
 		if err != nil {
-			return nil, fmt.Errorf("create job: %w", err)
+			return nil, nil, fmt.Errorf("create job: %w", err)
+		}
+
+		for _, key := range uniqueDeployCandidateKeys(candidateKeys[index]) {
+			change, err := registerDeployCandidateTx(ctx, tx, key, job.ID, pipeline.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if change != nil {
+				changes = append(changes, *change)
+			}
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("create pipeline: %w", err)
+		return nil, nil, fmt.Errorf("create pipeline: %w", err)
 	}
-	return pipeline, nil
+	return pipeline, changes, nil
 }
 
 // PipelineByID returns one pipeline by its internal id.
