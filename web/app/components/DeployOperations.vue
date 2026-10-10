@@ -696,18 +696,37 @@ function edgeOf(operation: DeployOperation): string {
 /**
  * What code this card is about, or nothing.
  *
- * The ref first, because that is the thing that was pushed — a tag or a branch, the same
- * field either way, and the answer to "which one is this" without the page having to know
- * which kind started it. The hash beside it because a ref alone does not say which commit
- * it pointed at: tags get moved, and two tags can point at one commit.
+ * All the names rather than one, because they answer different questions. The ref is what was
+ * pushed and is what started this deployment. The other tags are the rest of the names this
+ * same commit carries — one commit can be released as `v1.2.3`, `stable` and `latest`, and a
+ * card that showed only the first of them cannot be matched to somebody else's release. The
+ * hash closes it: a tag can be moved to another commit and two tags can point at one commit,
+ * so the names alone do not say which code went out.
+ *
+ * Ref once, not twice: the commit's own tag list includes the tag that started the run on
+ * most repositories, and a card that repeated it would read as two releases where there is
+ * one.
+ *
+ * The ref is a tag or a branch and the page does not have to know which — but it is worth
+ * saying why there is no separate branch to show: a tag push records no branch at all. All
+ * 84 runs started from a tag in this repository have an empty branch, because the repository
+ * says so — a tag is not "on" a branch — so a branch beside a tag would be a column of
+ * blanks. On a branch push the ref is the branch, and it is already shown.
  *
  * Seven characters of the hash rather than all of it: enough to tell two commits apart, which
  * is the whole of its job in a card head, and short enough not to push the badge off the row.
  */
-function whatOf(operation: DeployOperation): { ref: string; sha: string } {
+function whatOf(operation: DeployOperation): string {
   const ref = (operation.ref ?? '').trim()
   const sha = (operation.sha ?? '').trim()
-  return { ref, sha: ref && sha ? sha.slice(0, 7) : '' }
+
+  const said = (operation.progress?.deployment ?? null) as { tags?: unknown } | null
+  const tagged = Array.isArray(said?.tags)
+    ? said.tags.filter((one): one is string => typeof one === 'string')
+    : []
+  const others = tagged.map((one) => one.trim()).filter((one) => one !== '' && one !== ref)
+
+  return [...(ref ? [ref] : []), ...others, ...(sha ? [sha.slice(0, 7)] : [])].join(' · ')
 }
 
 /** The full hash, for the tooltip that has room for it. */
@@ -963,13 +982,10 @@ watchEvents({
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span
-            v-if="whatOf(operation).ref"
+            v-if="whatOf(operation)"
             class="what-chip mono"
             :title="fullOf(operation) ? `commit ${fullOf(operation)}` : undefined"
-          >{{ whatOf(operation).ref }}<span
-            v-if="whatOf(operation).sha"
-            class="sha"
-          >{{ whatOf(operation).sha }}</span></span>
+          >{{ whatOf(operation) }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
           <span class="deploy-spacer" />
@@ -1060,13 +1076,10 @@ watchEvents({
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span
-            v-if="whatOf(operation).ref"
+            v-if="whatOf(operation)"
             class="what-chip mono"
             :title="fullOf(operation) ? `commit ${fullOf(operation)}` : undefined"
-          >{{ whatOf(operation).ref }}<span
-            v-if="whatOf(operation).sha"
-            class="sha"
-          >{{ whatOf(operation).sha }}</span></span>
+          >{{ whatOf(operation) }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
           <span class="deploy-spacer" />
