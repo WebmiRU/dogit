@@ -113,6 +113,7 @@ func migrateTo(t *testing.T, url string, version uint) {
 func TestAModuleRunningBeforeTheOneTokenChangeKeepsWorking(t *testing.T) {
 	ctx := context.Background()
 	url := isolatedMigrationURL(t, dbtest.URL(t))
+	t.Setenv("DOGIT_TEST_DATABASE_URL", url)
 
 	// Migrations are applied only inside the schema made for this test, so a failed assertion
 	// cannot leave other tests with an intermediate or dirty version of the shared database.
