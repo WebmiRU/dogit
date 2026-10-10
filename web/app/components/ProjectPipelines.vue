@@ -623,16 +623,16 @@ watch(() => props.projectPath, () => load())
 
           <td class="col-stages" @mouseleave="closeStage">
             <div v-if="stageMarks(run).length" class="stages" :aria-label="`${stageMarks(run).length} stages`">
-              <button
-                v-for="stage in stageMarks(run)"
-                :key="stage.name"
-                type="button"
-                class="stage-mark"
-                :class="[statusClass[stage.status] ?? 'badge-neutral', { open: openStage === stageKey(run, stage.name) }]"
-                :aria-label="stage.title"
-                :aria-expanded="openStage === stageKey(run, stage.name)"
-                @click="toggleStage(run, stage.name)"
-              >
+              <template v-for="(stage, stageIndex) in stageMarks(run)" :key="stage.name">
+                <span v-if="stageIndex > 0" class="stage-arrow" aria-hidden="true">→</span>
+                <button
+                  type="button"
+                  class="stage-mark"
+                  :class="[statusClass[stage.status] ?? 'badge-neutral', { open: openStage === stageKey(run, stage.name) }]"
+                  :aria-label="stage.title"
+                  :aria-expanded="openStage === stageKey(run, stage.name)"
+                  @click="toggleStage(run, stage.name)"
+                >
                 <svg v-if="stage.status === 'success'" viewBox="0 0 20 20" aria-hidden="true">
                   <circle cx="10" cy="10" r="8.25" />
                   <path d="m6.2 10.1 2.5 2.5 5.1-5.2" />
@@ -653,7 +653,8 @@ watch(() => props.projectPath, () => load())
                   <circle cx="10" cy="10" r="8.25" />
                   <path d="M6.5 10h7" />
                 </svg>
-              </button>
+                </button>
+              </template>
 
               <!-- The stage's jobs. Kept out of the row because a pipeline of thirty
                    jobs would make the table unreadable; what a mark opens is the
