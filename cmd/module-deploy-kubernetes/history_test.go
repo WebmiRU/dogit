@@ -43,9 +43,16 @@ func age(t *testing.T, ctx context.Context, history History, id uuid.UUID, d tim
 func historyFor(t *testing.T) History {
 	t.Helper()
 
-	url := os.Getenv("DOGIT_TEST_DATABASE_URL")
+	// The module keeps its deployment history in a schema of its own. Its table is also
+	// named deployments, which is unrelated to dogit core\x27s deployments table, so CI gives
+	// this integration suite a separate database. Keep the old variable as a local fallback
+	// for people invoking this package\x27s tests manually.
+	url := os.Getenv("DOGIT_MODULE_TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("no DOGIT_TEST_DATABASE_URL; not testing against a database")
+		url = os.Getenv("DOGIT_TEST_DATABASE_URL")
+	}
+	if url == "" {
+		t.Skip("no DOGIT_MODULE_TEST_DATABASE_URL or DOGIT_TEST_DATABASE_URL; not testing against a database")
 	}
 
 	history, err := openHistory(context.Background(), url)
