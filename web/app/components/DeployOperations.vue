@@ -553,6 +553,10 @@ function logLabel(jobID: number): string {
   const found = logs.value[jobID]
   if (found === 'asked') return 'Looking…'
   if (found === 'failed') return 'Log unavailable — open to retry'
+  if (caught.value[jobID]) {
+    const count = earlierLogOf(jobID).length + (watching.value[jobID]?.seen.length ?? 0)
+    return count ? `What it said (${count})` : 'Nothing was recorded'
+  }
   if (!found) return 'What it said'
   return found.length ? `What it said (${found.length})` : 'Nothing was recorded'
 }
