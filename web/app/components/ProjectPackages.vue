@@ -456,8 +456,8 @@ function shortDigest(digest: string) {
       </div>
 
       <template v-else>
-        <div v-for="entry in shown" :key="entry.repository.name" class="card">
-          <div class="card-header repo-card-header">
+        <div v-for="entry in shown" :key="entry.repository.name" class="packages-repository">
+          <div class="packages-repository-header">
             <!-- The header folds the repository: a project with a hundred images
                  is read one repository at a time, and a hundred tables in a
                  column is a page nobody scrolls to the end of. -->
@@ -476,7 +476,8 @@ function shortDigest(digest: string) {
             <span class="badge">{{ formatBytes(entry.repository.size_bytes) }}</span>
           </div>
 
-          <table v-if="!isFolded(entry.repository.name)" class="admin-table packages-table">
+          <div v-if="!isFolded(entry.repository.name)" class="packages-table-wrap">
+            <table class="admin-table repository-flat-table packages-table">
             <thead>
               <tr>
                 <th>Tag</th>
@@ -514,7 +515,8 @@ function shortDigest(digest: string) {
                 </td>
               </tr>
             </tbody>
-          </table>
+            </table>
+          </div>
 
           <!-- The rest of the tags, as one decision rather than one scroll: a
                repository of three hundred tags keeps its first ten until the
