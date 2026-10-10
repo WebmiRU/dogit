@@ -94,7 +94,7 @@ const headStateText = computed(() => {
 async function loadHead() {
   try {
     const answer = await api.get<{
-      active?: unknown[]
+      active?: { running?: boolean; queued?: boolean }[]
       finished?: { status?: string }[]
     }>(`/projects/${props.projectId}/deploy-operations?finished=1`)
     listed.value = answer.active ?? []
@@ -118,17 +118,22 @@ const stopState = watchEvents({
   project: () => props.projectPath,
   onEvent: (event) => {
     if (event.kind === 'deploy.operation') {
-      deployBusy.value = true
-      // Whatever was listed is no longer what the page is drawing: something started.
-      listed.value = []
+      // Asked, not assumed. An event says that something happened for somebody; it
+      // does not say whether this project is now rolling something out — and saying so
+      // here lit the header over a deployment that was only standing in a queue, which
+      // is the claim the header exists not to make. The core knows; it is one request.
       if (event.payload?.failed === true) lastFailed.value = true
+      void loadHead()
       return
     }
     // The end of a deployment: whatever it ended as is the last word on it. And the
     // list is asked again rather than assumed, because the deployment that ended may
     // have handed its place to one that was waiting — which is a header reading
     // "under way" a moment later and cannot be worked out from here.
-    deployBusy.value = false
+    //
+    // Not cleared first: setting it false here would put "nothing is deploying" on the
+    // page for as long as the request takes, every time one ends, on a project that
+    // deploys several in a row. What it said a moment ago is more true than nothing.
     const status = String(event.payload?.status ?? '')
     if (status) lastFailed.value = status !== 'success'
     void loadHead()

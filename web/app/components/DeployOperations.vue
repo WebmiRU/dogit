@@ -182,9 +182,15 @@ function reorder(answer: OperationsAnswer) {
   // has not emitted deployment phases yet. Without reconciling these fields, a page refresh paints
   // an in-flight deployment blue ("Waiting") and lateProgress() discards its active arrows.
   const normalize = (operation: DeployOperation): DeployOperation => {
-    if (!operation.queued || !operation.progress || typeof operation.progress !== 'object') {
-      return operation
-    }
+    // What the core says about waiting is the core's answer, and a phase left in a
+    // deployment's progress from before it started waiting is not work happening now.
+    //
+    // Rewriting it here is how three queued deployments came to be drawn as three
+    // rollouts under way, on a page whose own header — asked the same question — said
+    // one was running and two were not. The page had the right answer in hand and
+    // overwrote it with an inference from a leftover field.
+    if (operation.queued) return operation
+    if (!operation.progress || typeof operation.progress !== 'object') return operation
     const progress = operation.progress
     const activePhases = Array.isArray(progress.active_phases)
       ? progress.active_phases.filter((phase) => typeof phase === 'string' && phase !== '')
