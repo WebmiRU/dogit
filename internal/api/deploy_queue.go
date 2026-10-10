@@ -72,6 +72,20 @@ func newDeployQueue() *deployQueue { return &deployQueue{} }
 // will have to give it back. Told otherwise, the second call would either queue the job
 // behind itself or release a place it never took.
 func (q *deployQueue) take(place deployPlace, jobID, pipelineID int64) (mayStart bool, holder bool) {
+	mayStart, holder, _ = q.takeWithStatus(place, jobID, pipelineID)
+	return mayStart, holder
+}
+
+// takeWithStatus also says whether this call actually added a new queue entry.
+//
+// A pipeline can ask whether its deployment may start after more than one job finishes.
+// Repeated calls for the same pending deployment must not append the same job several times:
+// when the place is freed, one copy could be promoted while another copy supersedes it, and
+// the promoted copy would then discover it had already been marked over. The flag also keeps
+// repeated calls from writing the same "waiting" line over and over.
+func (q *deployQueue) takeWithStatus(place deployPlace, jobID, pipelineID int64) (
+	mayStart bool, holder bool, enqueued bool,
+) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -86,12 +100,17 @@ func (q *deployQueue) take(place deployPlace, jobID, pipelineID int64) (mayStart
 	switch {
 	case slot.running == 0:
 		slot.running = jobID
-		return true, true
+		return true, true, false
 	case slot.running == jobID:
-		return true, false
+		return true, false, false
 	default:
+		for _, waiting := range slot.waiting {
+			if waiting.jobID == jobID {
+				return false, false, false
+			}
+		}
 		slot.waiting = append(slot.waiting, queuedDeploy{jobID: jobID, pipelineID: pipelineID})
-		return false, false
+		return false, false, true
 	}
 }
 
