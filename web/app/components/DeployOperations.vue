@@ -715,8 +715,12 @@ function edgeOf(operation: DeployOperation): string {
  *
  * Seven characters of the hash rather than all of it: enough to tell two commits apart, which
  * is the whole of its job in a card head, and short enough not to push the badge off the row.
+ *
+ * Names and hash kept apart rather than joined into one string, because they are different
+ * kinds of fact and a reader scanning a row of cards should be able to tell them apart
+ * without reading them: names in one style, the commit in another.
  */
-function whatOf(operation: DeployOperation): string {
+function whatOf(operation: DeployOperation): { names: string[]; sha: string } {
   const ref = (operation.ref ?? '').trim()
   const sha = (operation.sha ?? '').trim()
 
@@ -724,9 +728,10 @@ function whatOf(operation: DeployOperation): string {
   const tagged = Array.isArray(said?.tags)
     ? said.tags.filter((one): one is string => typeof one === 'string')
     : []
-  const others = tagged.map((one) => one.trim()).filter((one) => one !== '' && one !== ref)
+  const names = [ref, ...tagged.map((one) => one.trim())]
+    .filter((one, at, all) => one !== '' && all.indexOf(one) === at)
 
-  return [...(ref ? [ref] : []), ...others, ...(sha ? [sha.slice(0, 7)] : [])].join(' · ')
+  return { names, sha: sha.slice(0, 7) }
 }
 
 /** The full hash, for the tooltip that has room for it. */
@@ -982,10 +987,15 @@ watchEvents({
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span
-            v-if="whatOf(operation)"
+            v-for="one in whatOf(operation).names"
+            :key="`name-${one}`"
             class="what-chip mono"
+          >{{ one }}</span>
+          <span
+            v-if="whatOf(operation).sha"
+            class="what-chip what-sha mono"
             :title="fullOf(operation) ? `commit ${fullOf(operation)}` : undefined"
-          >{{ whatOf(operation) }}</span>
+          >{{ whatOf(operation).sha }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
           <span class="deploy-spacer" />
@@ -1076,10 +1086,15 @@ watchEvents({
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
           <span
-            v-if="whatOf(operation)"
+            v-for="one in whatOf(operation).names"
+            :key="`name-${one}`"
             class="what-chip mono"
+          >{{ one }}</span>
+          <span
+            v-if="whatOf(operation).sha"
+            class="what-chip what-sha mono"
             :title="fullOf(operation) ? `commit ${fullOf(operation)}` : undefined"
-          >{{ whatOf(operation) }}</span>
+          >{{ whatOf(operation).sha }}</span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
           <span class="deploy-spacer" />

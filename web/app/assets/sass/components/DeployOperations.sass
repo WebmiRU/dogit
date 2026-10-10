@@ -77,13 +77,28 @@
   border-radius: 3px
   background: var(--bg)
 // What is being deployed, and deliberately without a chip of its own border: this is the
-// fact the card exists to report, and the place it is going to is already chip-shaped next
-// to it. Two boxes of equal weight would make the identifier look like one more option.
+// fact the card exists to report, so it is chip-shaped like the place beside it — but a
+// different kind of chip, and the difference is the point. The place is a setting somebody
+// chose; what is being deployed is a fact about a commit, and two cards on one place with
+// two different commits is the ordinary case rather than a rare one.
+//
+// Each name its own chip rather than one string joined by dots: a commit can be released
+// under several tags, and a reader scanning a column of cards is counting chips, not
+// reading sentences.
 .what-chip
   font-size: 12px
-  padding: 1px 0
-  color: var(--text, inherit)
+  padding: 1px 7px
+  border: 1px solid var(--border)
+  border-radius: 3px
+  background: var(--bg)
   overflow-wrap: anywhere
+// The commit is not a name, and drawn like one it would read as a fourth release. Quieter,
+// and unboxed, so the eye takes it last — which is right, because it is the fact you check
+// only when the names do not tell you which code went out.
+.what-chip.what-sha
+  border-color: transparent
+  background: transparent
+  color: var(--muted, #6b6b70)
 .operation.live
   border-left: 3px solid var(--yellow)
 .operation.queued
