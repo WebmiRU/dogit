@@ -563,13 +563,13 @@ func (s *Server) carryOutRevertWithLock(ctx context.Context, identity string,
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		conn, acquired, err := s.tryDeployLock(workCtx, identity)
+		lock, acquired, err := s.tryDeployLock(workCtx, identity)
 		if err != nil {
 			s.log.Warn("could not acquire the shared lock for a rollback",
 				"project", project.Path, "target", identity, "error", err)
 		} else if acquired {
 			func() {
-				defer s.releaseDeployLock(context.Background(), conn, identity)
+				defer s.releaseDeployLock(context.Background(), lock)
 				s.carryOutRevert(workCtx, module, project, body, request, user)
 			}()
 			return
