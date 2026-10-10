@@ -119,7 +119,8 @@ func (q *deployQueue) takeWithStatus(place deployPlace, jobID, pipelineID int64)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	key := place.queueKey()\n\tslot, found := q.slots[key]
+	key := place.queueKey()
+	slot, found := q.slots[key]
 	if !found {
 		if q.slots == nil {
 			q.slots = map[string]*deploySlot{}
@@ -191,7 +192,8 @@ func (q *deployQueue) free(place deployPlace, jobID int64) (*queuedDeploy, []que
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	key := place.queueKey()\n\tslot, found := q.slots[key]
+	key := place.queueKey()
+	slot, found := q.slots[key]
 	if !found {
 		return nil, nil
 	}
