@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -108,7 +109,25 @@ func identityForPlaceRow(row map[string]json.RawMessage, target, namespace strin
 		return "", fmt.Errorf("selected cluster for target %q has no usable API server; refusing to deploy without a lock", target)
 	}
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	parsed.Host = strings.ToLower(parsed.Host)
+	hostname := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+	// An explicitly written default port and an omitted default port are the same
+	// Kubernetes API endpoint. If left different, two aliases could take different locks
+	// and mutate one namespace simultaneously.
+	if (parsed.Scheme == "https" && port == "443") ||
+		(parsed.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		parsed.Host = net.JoinHostPort(hostname, port)
+	} else if strings.Contains(hostname, ":") {
+		parsed.Host = "[" + hostname + "]"
+	} else {
+		parsed.Host = hostname
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
 	server = strings.TrimRight(parsed.String(), "/")
 
 	// The API server and namespace define the mutation boundary. Authentication and CA
