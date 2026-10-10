@@ -13,15 +13,9 @@ import (
 // DeployCandidateChange says which older pipeline stopped being the latest candidate
 // when a new pipeline was recorded for the same physical place.
 type DeployCandidateChange struct {
-	TargetKey         string
+	TargetKey          string
 	PreviousPipelineID int64
-}
-
-// DeployCandidateStatus is the shared, durable state of a target's newest candidate.
-type DeployCandidateStatus struct {
-	PipelineID  int64
-	JobID       int64
-	WaitingJobID int64
+	PreviousJobIDs     []int64
 }
 
 // uniqueDeployCandidateKeys is also the lock order. Every transaction that touches more
@@ -49,14 +43,15 @@ func uniqueDeployCandidateKeys(keys []string) []string {
 // Pipeline ids are allocated by PostgreSQL's sequence, so a delayed registration from an
 // older pipeline can never replace a newer candidate that has already been recorded.
 func registerDeployCandidateTx(ctx context.Context, tx pgx.Tx, key string,
-	jobID, pipelineID int64) (*DeployCandidateChange, error) {
-	_, err := tx.Exec(ctx, `
+	jobID, pipelineID int64, memberIDs []int64) (*DeployCandidateChange, error) {
+	inserted, err := tx.Exec(ctx, `
 		INSERT INTO deploy_candidates (target_key, latest_pipeline_id, latest_job_id)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (target_key) DO NOTHING`, key, pipelineID, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("create deployment candidate: %w", err)
 	}
+	created := inserted.RowsAffected() > 0
 
 	var previousPipelineID int64
 	if err := tx.QueryRow(ctx, `
@@ -67,10 +62,35 @@ func registerDeployCandidateTx(ctx context.Context, tx pgx.Tx, key string,
 		return nil, fmt.Errorf("read current deployment candidate: %w", err)
 	}
 
-	if previousPipelineID >= pipelineID {
-		// The same pipeline may contain ordered deployment steps to the same place.
-		// They are one candidate, not newer commits competing with one another.
+	if !created && previousPipelineID >= pipelineID {
+		// A delayed older pipeline cannot roll the candidate backwards. The same pipeline
+		// also registers each target only once, with all of its sequential jobs as members.
 		return nil, nil
+	}
+
+	var previousJobs []int64
+	if !created && previousPipelineID < pipelineID {
+		rows, err := tx.Query(ctx, `
+			SELECT job_id
+			FROM deploy_candidate_members
+			WHERE target_key = $1 AND pipeline_id = $2
+			ORDER BY job_id`, key, previousPipelineID)
+		if err != nil {
+			return nil, fmt.Errorf("read jobs of the previous deployment candidate: %w", err)
+		}
+		for rows.Next() {
+			var previousJobID int64
+			if err := rows.Scan(&previousJobID); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("read previous candidate job: %w", err)
+			}
+			previousJobs = append(previousJobs, previousJobID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read previous candidate jobs: %w", err)
+		}
+		rows.Close()
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -80,11 +100,24 @@ func registerDeployCandidateTx(ctx context.Context, tx pgx.Tx, key string,
 		WHERE target_key = $1`, key, pipelineID, jobID); err != nil {
 		return nil, fmt.Errorf("replace deployment candidate: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM deploy_candidate_members WHERE target_key = $1`, key); err != nil {
+		return nil, fmt.Errorf("replace deployment candidate membership: %w", err)
+	}
+	for _, memberID := range memberIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO deploy_candidate_members (target_key, pipeline_id, job_id)
+			VALUES ($1, $2, $3)`, key, pipelineID, memberID); err != nil {
+			return nil, fmt.Errorf("record deployment candidate member: %w", err)
+		}
+	}
 
-	if previousPipelineID == pipelineID {
+	if created || previousPipelineID == pipelineID {
 		return nil, nil
 	}
-	return &DeployCandidateChange{TargetKey: key, PreviousPipelineID: previousPipelineID}, nil
+	return &DeployCandidateChange{
+		TargetKey: key, PreviousPipelineID: previousPipelineID, PreviousJobIDs: previousJobs,
+	}, nil
 }
 
 // IsLatestDeployCandidate says whether this pipeline is still the newest candidate for every
@@ -139,7 +172,7 @@ func (r *PipelineRepo) ClaimDeployCandidate(ctx context.Context, keys []string,
 			WHERE target_key = $1
 			FOR UPDATE`, key).Scan(&current)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, false, nil
+			return false, false, fmt.Errorf("deployment candidate %q is not registered: %w", key, ErrNotFound)
 		}
 		if err != nil {
 			return false, false, fmt.Errorf("lock deployment candidate: %w", err)
