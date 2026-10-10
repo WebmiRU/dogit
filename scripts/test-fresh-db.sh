@@ -66,18 +66,33 @@ trap cleanup EXIT
 # times the baseline is a hang worth investigating; it is not slack. The baselines, measured on a
 # fresh database per package:
 #
-#   internal/api                              14s
-#   internal/store                            2s
-#   cmd/module-deploy-kubernetes/deploy      144s   <- the slow one: it stands up clusters
+#   internal/api                              15s
+#   internal/store                            3s
+#   cmd/module-deploy-kubernetes/deploy       30s   <- stands up real clusters
 #   everything else                          under 8s
 #
-# So 300s for the deploy package is about twice its normal, and twice is chosen rather than four
-# because four would be ten minutes: a hang is then worth waiting out, and the thing a timeout
-# buys is a failure that says so. The reasoning below — a machine under load is three or four
-# times slower than an idle one, and a timeout that fires on a busy afternoon teaches people to
-# re-run rather than to look — is why it was 150s once and why that was wrong: at 144s of baseline
-# it left six seconds, which is not a margin but a coincidence. It fired on a loaded afternoon and
-# looked exactly like a hang, because from outside a timeout and a hang are the same silence.
+# The deploy package was written down as 144s, and that number was the trap rather than the
+# safety: a run that quietly skipped its cluster tests took half a minute, and half a minute is
+# what "skipped" looks like next to a figure nobody re-measured. It has been re-measured, and
+# the way to tell the two apart is below rather than a number you have to trust.
+#
+# Those cluster tests read KCUBECONFIG — not KUBECONFIG, which is the same idea spelled
+# differently and is ignored here — and t.Skip without a word when it is unset. So this package
+# is only honest when KCUBECONFIG points at a cluster:
+#
+#   KCUBECONFIG=~/jabjab.yaml ./scripts/test-fresh-db.sh ./cmd/module-deploy-kubernetes/deploy
+#
+# To check rather than assume: run with -v and count `--- PASS`. Skipped tests still print a
+# summary line and the package still says `ok`, which is the whole difficulty — green and
+# untested look identical from the outside.
+#
+# So 300s for the deploy package is about ten times its normal, which is slack on purpose: the
+# thing a timeout buys is a failure that says so, and a slack number costs nothing when the tests
+# pass. The reasoning below — a machine under load is three or four times slower than an idle one,
+# and a timeout that fires on a busy afternoon teaches people to re-run rather than to look — is
+# why it was 150s once and why that was wrong: against a 144s figure it left six seconds, which is
+# not a margin but a coincidence. It fired on a loaded afternoon and looked exactly like a hang,
+# because from outside a timeout and a hang are the same silence.
 #
 # DOGIT_TEST_TIMEOUT overrides it for a package that is genuinely slower — on a laptop, or with a
 # cold cache.
