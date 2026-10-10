@@ -107,29 +107,30 @@
   font-size: 11px
 .pipeline-toolbar
   overflow: visible
-  margin-bottom: 0
-  border: 1px solid var(--pipeline-line)
-  border-bottom: 0
-  border-radius: 11px 11px 0 0
-  background: var(--bg-elevated)
+  margin-bottom: 12px
+  border: 0
+  border-radius: 0
+  background: transparent
 .toolbar-heading
   display: flex
   align-items: center
   gap: 10px
-  padding: 15px 16px 2px
+  padding: 0 0 8px
 .toolbar-title
   font-size: 13px
   font-weight: 650
 .toolbar-count
   color: var(--text-muted)
   font-size: 11px
-.pipeline-toolbar .toolbar
+.pipeline-toolbar .pipeline-filters
   display: flex
   align-items: center
   gap: 9px
-  padding: 12px 16px 15px
+  padding: 10px 12px
   margin: 0
-  border: 0
+  border: 1px solid var(--border)
+  border-radius: 8px
+  background: var(--bg-elevated)
 .search-wrap
   position: relative
   display: block
@@ -212,7 +213,7 @@
   .summary-label
     max-width: 88px
     font-size: 10px
-  .pipeline-toolbar .toolbar
+  .pipeline-toolbar .pipeline-filters
     align-items: stretch
   .pipeline-toolbar .search-wrap
     flex: 1 1 100%
@@ -224,7 +225,7 @@
     max-width: none
   .summary-context
     display: none
-  .pipeline-toolbar .toolbar
+  .pipeline-toolbar .pipeline-filters
     gap: 8px
   .th-hint
     display: none
@@ -547,13 +548,15 @@
 
 /* Pipeline history follows the same flat toolbar/table boundary as other lists. */
 .pipelines-page .pipeline-toolbar
-  margin-bottom: 0
+  margin-bottom: 12px
   border: 0
-  border-bottom: 1px solid var(--border)
   border-radius: 0
   background: transparent
 
 .pipelines-page .pipeline-table-wrap
+  width: 100%
+  margin: 0
+  overflow-x: auto
   border: 0
   border-radius: 0
   background: transparent
@@ -577,10 +580,13 @@
 .pipelines-page .pipeline-toolbar
   width: 100%
   box-sizing: border-box
-.pipelines-page .pipeline-toolbar > .toolbar
+.pipelines-page .pipeline-toolbar > .pipeline-filters
   width: 100%
   max-width: none
   box-sizing: border-box
+  background: var(--bg-elevated)
+  border: 1px solid var(--border)
+  border-radius: 8px
 .pipeline-toolbar .search-wrap
   flex: 1 1 420px
   min-width: 220px
