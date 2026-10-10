@@ -46,5 +46,7 @@ jobs:
           cache: true
       - name: Download modules
         run: go mod download
+      - name: Create the Docker network used by runner tests
+        run: docker network inspect dogit_default >/dev/null 2>&1 || docker network create dogit_default
       - name: Test all packages
         run: go test -p 1 ./...
