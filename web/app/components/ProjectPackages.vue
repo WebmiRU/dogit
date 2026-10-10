@@ -478,43 +478,43 @@ function shortDigest(digest: string) {
 
           <div v-if="!isFolded(entry.repository.name)" class="packages-table-wrap">
             <table class="admin-table repository-flat-table packages-table">
-            <thead>
-              <tr>
-                <th>Tag</th>
-                <th>Digest</th>
-                <th>Built</th>
-                <th>Size</th>
-                <th v-if="answer.can_delete" class="right">
-                  <span class="visually-hidden">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="tag in visibleTags(entry.repository.name, entry.tags)" :key="tag.name">
-                <td class="mono">{{ tag.name }}</td>
-                <td class="mono muted small">{{ shortDigest(tag.digest) }}</td>
-                <!-- A relative date with the exact one behind it: this column is
-                     the one that is sorted, and a full date on every row was
-                     the widest thing on the page. -->
-                <td class="muted small">
-                  <span v-if="tag.created_at" :title="builtAt(tag)">{{ timeAgo(tag.created_at) }}</span>
-                  <span v-else>{{ builtAt(tag) }}</span>
-                </td>
-                <td class="small">{{ formatBytes(tag.size_bytes) }}</td>
-                <td v-if="answer.can_delete" class="right">
-                  <button
-                    class="row-menu"
-                    type="button"
-                    aria-haspopup="menu"
-                    :aria-expanded="open?.repository === entry.repository.name && open?.tag === tag.name"
-                    :aria-label="`Actions for ${fullTag(entry.repository.name, tag.name)}`"
-                    @click="showMenu(entry.repository.name, tag.name, $event)"
-                  >
-                    ⋯
-                  </button>
-                </td>
-              </tr>
-            </tbody>
+              <thead>
+                <tr>
+                  <th>Tag</th>
+                  <th>Digest</th>
+                  <th>Built</th>
+                  <th>Size</th>
+                  <th v-if="answer.can_delete" class="right">
+                    <span class="visually-hidden">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="tag in visibleTags(entry.repository.name, entry.tags)" :key="tag.name">
+                  <td class="mono">{{ tag.name }}</td>
+                  <td class="mono muted small">{{ shortDigest(tag.digest) }}</td>
+                  <!-- A relative date with the exact one behind it: this column is
+                       the one that is sorted, and a full date on every row was
+                       the widest thing on the page. -->
+                  <td class="muted small">
+                    <span v-if="tag.created_at" :title="builtAt(tag)">{{ timeAgo(tag.created_at) }}</span>
+                    <span v-else>{{ builtAt(tag) }}</span>
+                  </td>
+                  <td class="small">{{ formatBytes(tag.size_bytes) }}</td>
+                  <td v-if="answer.can_delete" class="right">
+                    <button
+                      class="row-menu"
+                      type="button"
+                      aria-haspopup="menu"
+                      :aria-expanded="open?.repository === entry.repository.name && open?.tag === tag.name"
+                      :aria-label="`Actions for ${fullTag(entry.repository.name, tag.name)}`"
+                      @click="showMenu(entry.repository.name, tag.name, $event)"
+                    >
+                      ⋯
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
             </table>
           </div>
 
