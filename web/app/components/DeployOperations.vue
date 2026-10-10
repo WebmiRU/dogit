@@ -865,6 +865,8 @@ function hide(operation: DeployOperation): void {
 
 /** The core announcing a plan on the socket, which it does as well as over HTTP. */
 watchEvents({
+  kinds: ['deploy.plan'],
+  project: () => props.projectPath,
   onEvent: (event) => {
     if (event.kind !== 'deploy.plan') return
     const steps = event.payload?.steps
