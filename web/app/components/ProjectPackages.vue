@@ -485,7 +485,7 @@ function shortDigest(digest: string) {
                   <th>Digest</th>
                   <th>Built</th>
                   <th>Size</th>
-                  <th v-if="answer.can_delete" class="right">
+                  <th class="right">
                     <span class="visually-hidden">Actions</span>
                   </th>
                 </tr>
@@ -506,7 +506,7 @@ function shortDigest(digest: string) {
                     <span v-else>{{ builtAt(tag) }}</span>
                   </td>
                   <td class="small">{{ formatBytes(tag.size_bytes) }}</td>
-                  <td v-if="answer.can_delete" class="right">
+                  <td class="right">
                     <button
                       class="row-menu"
                       type="button"
@@ -559,6 +559,7 @@ function shortDigest(digest: string) {
             Open record
           </NuxtLink>
           <button
+            v-if="answer?.can_delete"
             class="row-menu-danger"
             type="button"
             :disabled="busyTag === fullTag(openedTag.repository, openedTag.tag.name)"
