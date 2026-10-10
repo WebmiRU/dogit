@@ -125,12 +125,18 @@
 .pipeline-toolbar .pipeline-filters
   display: flex
   align-items: center
+  flex-wrap: wrap
   gap: 9px
-  padding: 10px 12px
+  padding: 0
   margin: 0
-  border: 1px solid var(--border)
-  border-radius: 8px
-  background: var(--bg-elevated)
+  border: 0
+  border-radius: 0
+  background: transparent
+.pipeline-toolbar .pipeline-filters select
+  flex: 0 1 200px
+  width: auto
+  min-width: 160px
+  margin: 0
 .search-wrap
   position: relative
   display: block
@@ -584,9 +590,10 @@
   width: 100%
   max-width: none
   box-sizing: border-box
-  background: var(--bg-elevated)
-  border: 1px solid var(--border)
-  border-radius: 8px
+  padding: 0
+  background: transparent
+  border: 0
+  border-radius: 0
 .pipeline-toolbar .search-wrap
   flex: 1 1 420px
   min-width: 220px
@@ -639,14 +646,14 @@
   align-items: center
   gap: 9px
   flex-wrap: wrap
-  min-height: 24px
+  min-height: 0
 .pipeline-table .result-link
   display: flex
   flex-direction: column
   align-items: flex-start
   justify-content: center
-  gap: 5px
-  min-height: 58px
+  gap: 4px
+  min-height: 0
 .pipeline-table .duration
   margin: 0
   color: var(--text-muted)
@@ -655,9 +662,34 @@
   white-space: nowrap
 .pipeline-table .commit-title
   max-width: min(46vw, 620px)
-.pipeline-table .cell-link
-  min-height: 56px
+.pipeline-table td.col-pipeline .cell-link
+  display: grid
+  grid-template-columns: max-content minmax(0, 1fr)
+  grid-template-rows: auto auto
   align-items: center
+  column-gap: 10px
+  row-gap: 4px
+  min-width: 0
+  min-height: 0
+  width: 100%
+.pipeline-table td.col-pipeline .cell-link > .number
+  grid-column: 1
+  grid-row: 1
+  white-space: nowrap
+.pipeline-table td.col-pipeline .cell-link > .commit-title
+  grid-column: 2
+  grid-row: 1
+  min-width: 0
+  max-width: none
+.pipeline-table td.col-pipeline .cell-link > .meta
+  grid-column: 1 / -1
+  grid-row: 2
+  min-width: 0
+  margin-top: 0
+.pipeline-table td.col-by .cell-link
+  display: flex
+  align-items: center
+  min-height: 0
 .pipeline-table .stages
   display: flex
   align-items: center
