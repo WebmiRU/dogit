@@ -140,91 +140,115 @@ async function save() {
 </script>
 
 <template>
-  <div class="card">
-    <div class="card-header"><strong>Settings</strong></div>
-    <div class="card-body">
-      <div v-if="!canManage" class="alert">
-        Only a project owner or maintainer can change these.
-      </div>
+  <div class="repository-settings">
+    <div v-if="!canManage" class="alert alert-info repository-settings-access">
+      Only a project owner or maintainer can change these.
+    </div>
 
-      <form v-else @submit.prevent="save">
-        <div class="field">
-          <label for="project-name">Name</label>
-          <input id="project-name" v-model="form.name" />
+    <div class="repository-settings-grid">
+      <section class="repository-settings-section">
+        <header class="repository-settings-heading">
+          <div>
+            <h2>General settings</h2>
+            <p>Project identity, visibility and the default branch.</p>
+          </div>
+        </header>
+
+        <form v-if="canManage" class="repository-settings-form" @submit.prevent="save">
+          <div class="repository-settings-fields">
+            <div class="field">
+              <label for="project-name">Name</label>
+              <input id="project-name" v-model="form.name" />
+            </div>
+            <div class="field">
+              <label for="default-branch">Default branch</label>
+              <input id="default-branch" v-model="form.default_branch" />
+            </div>
+            <div class="field repository-settings-field-wide">
+              <label for="project-description">Description</label>
+              <textarea
+                id="project-description"
+                v-model="form.description"
+                rows="3"
+                placeholder="What is this project for?"
+              />
+            </div>
+            <div class="field">
+              <label for="project-visibility">Visibility</label>
+              <select id="project-visibility" v-model="form.visibility">
+                <option value="private">Private</option>
+                <option value="internal">Internal</option>
+                <option value="public">Public</option>
+              </select>
+            </div>
+          </div>
+
+          <div v-if="saveError" class="alert alert-error repository-settings-message">
+            {{ saveError }}
+          </div>
+          <div v-else-if="saved" class="alert alert-info repository-settings-message">
+            Saved.
+          </div>
+
+          <footer class="repository-settings-form-footer">
+            <span class="muted small">Changes apply to this project.</span>
+            <button class="btn btn-primary" type="submit" :disabled="saving">
+              {{ saving ? 'Saving…' : 'Save changes' }}
+            </button>
+          </footer>
+        </form>
+      </section>
+
+      <section class="repository-settings-section repository-settings-move">
+        <header class="repository-settings-heading">
+          <div>
+            <h2>Move project</h2>
+            <p>Change its namespace and address.</p>
+          </div>
+        </header>
+
+        <p class="muted repository-settings-section-note">
+          A project inside a group is reached at
+          <span class="mono">{{ currentGroup }}/{{ project.path.split('/').pop() }}</span>.
+          Members of the destination group gain access. Moving is an owner's decision on both
+          the project and the group it goes into.
+        </p>
+
+        <div class="repository-settings-fields">
+          <div class="field">
+            <label for="move-group">Namespace</label>
+            <select id="move-group" v-model="targetGroup">
+              <option value="">— no group —</option>
+              <option v-for="group in groups" :key="group.id" :value="group.full_path">
+                {{ group.full_path }}
+              </option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="move-name">Name</label>
+            <input id="move-name" v-model="newName" />
+          </div>
         </div>
 
-        <div class="field">
-          <label for="project-description">Description</label>
-          <textarea
-            id="project-description"
-            v-model="form.description"
-            rows="3"
-            placeholder="What is this project for?"
-          />
+        <div v-if="moveError" class="alert alert-error repository-settings-message">
+          {{ moveError }}
         </div>
 
-        <div class="field">
-          <label for="project-visibility">Visibility</label>
-          <select id="project-visibility" v-model="form.visibility">
-            <option value="private">Private</option>
-            <option value="internal">Internal</option>
-            <option value="public">Public</option>
-          </select>
+        <div class="repository-settings-move-footer">
+          <button
+            class="btn btn-primary"
+            type="button"
+            :disabled="!canMove || !canManage"
+            @click="move"
+          >
+            {{ moving ? 'Moving…' : 'Move project' }}
+          </button>
+          <p class="repository-settings-move-note">
+            This changes the project's address and where its repository is stored.
+            Existing clone URLs stop working.
+          </p>
         </div>
-
-        <div class="field">
-          <label for="default-branch">Default branch</label>
-          <input id="default-branch" v-model="form.default_branch" />
-        </div>
-
-        <div v-if="saveError" class="alert alert-error">{{ saveError }}</div>
-        <div v-else-if="saved" class="alert">Saved.</div>
-
-        <button class="btn btn-primary" type="submit" :disabled="saving">
-          {{ saving ? 'Saving…' : 'Save changes' }}
-        </button>
-      </form>
-
-      <hr class="divider" />
-
-      <h3 class="settings-section-title">Move to a group</h3>
-      <p class="muted section-note">
-        A project inside a group is reached at
-        <span class="mono">{{ currentGroup }}/{{ project.path.split('/').pop() }}</span
-        >, and its members gain access. Moving is an owner's decision on both the
-        project and the group it goes into.
-      </p>
-
-      <div class="field">
-        <label for="move-group">Namespace</label>
-        <select id="move-group" v-model="targetGroup">
-          <option value="">— no group —</option>
-          <option v-for="group in groups" :key="group.id" :value="group.full_path">
-            {{ group.full_path }}
-          </option>
-        </select>
-      </div>
-
-      <div class="field">
-        <label for="move-name">Name</label>
-        <input id="move-name" v-model="newName" />
-      </div>
-
-      <div v-if="moveError" class="alert alert-error">{{ moveError }}</div>
-
-      <button
-        class="btn btn-primary"
-        type="button"
-        :disabled="!canMove || !canManage"
-        @click="move"
-      >
-        {{ moving ? 'Moving…' : 'Move project' }}
-      </button>
-
-      <p class="muted move-note">
-        This changes the project's address and where its repository is stored.
-        Existing clone URLs stop working.
-      </p>
+      </section>
     </div>
   </div>
 </template>
