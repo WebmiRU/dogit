@@ -149,3 +149,33 @@ func TestAFreedPlaceIsForgotten(t *testing.T) {
 		t.Errorf("%d places are still held after everything finished", left)
 	}
 }
+
+
+// A repeated readiness check must not put the same pending job in the queue twice.
+// Otherwise one copy can be promoted while the other copy supersedes that same job.
+func TestADeploymentJoinsAPlaceQueueOnlyOnce(t *testing.T) {
+	q := newDeployQueue()
+	place := queuePlace()
+	q.take(place, 1, 10)
+
+	mayStart, holder, enqueued := q.takeWithStatus(place, 2, 20)
+	if mayStart || holder || !enqueued {
+		t.Fatalf("first queue entry: got mayStart=%v holder=%v enqueued=%v, want false/false/true",
+			mayStart, holder, enqueued)
+	}
+
+	mayStart, holder, enqueued = q.takeWithStatus(place, 2, 20)
+	if mayStart || holder || enqueued {
+		t.Fatalf("repeated queue entry: got mayStart=%v holder=%v enqueued=%v, want false/false/false",
+			mayStart, holder, enqueued)
+	}
+
+	q.take(place, 3, 30)
+	promoted, superseded := q.free(place, 1)
+	if promoted == nil || promoted.jobID != 3 {
+		t.Fatalf("promoted %v, want the newest distinct deployment (job 3)", promoted)
+	}
+	if len(superseded) != 1 || superseded[0].jobID != 2 {
+		t.Errorf("superseded %v, want only the older distinct job 2", superseded)
+	}
+}
