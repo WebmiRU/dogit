@@ -43,12 +43,9 @@ const filter = ref('')
  * The one row whose menu is open, and where its panel goes.
  *
  * The panel is teleported to the body and placed in fixed coordinates rather
- * than drawn inside the row: the card clips its children — its corners are
- * rounded and the lists inside it are square — so a panel belonging to a row
- * near the bottom of the card would be cut in half by the card itself. In the
- * body nothing clips it. The price is that the panel does not follow the row
- * when the page scrolls, so a scroll closes it: a menu hanging next to the
- * wrong row is worse than no menu at all.
+ * than drawn inside the row, so it can layer above the surrounding page content.
+ * It does not follow the row when the page scrolls, so a scroll closes it: a
+ * menu hanging next to the wrong row is worse than no menu at all.
  */
 const open = ref<string | null>(null)
 const panel = ref({ top: 0, left: 0, up: false })
@@ -159,8 +156,8 @@ async function remove(name: string) {
   <div>
     <div v-if="error" class="alert alert-error">{{ error }}</div>
 
-    <div class="card">
-      <div class="toolbar repository-toolbar">
+    <div>
+      <div class="toolbar repository-toolbar repository-page-toolbar">
         <strong>Tags ({{ allTags.length }})</strong>
         <div class="spacer" />
         <div class="field" style="max-width: 260px; margin: 0">
@@ -173,7 +170,7 @@ async function remove(name: string) {
       </div>
       <div v-else-if="tags.length === 0" class="empty">No tag matches “{{ filter }}”.</div>
       <div v-else class="repository-table-wrap">
-        <table class="admin-table repository-data-table tag-list">
+        <table class="admin-table repository-flat-table tag-list">
           <thead><tr><th>Name</th><th>Commit</th><th>Created</th><th class="numeric">Actions</th></tr></thead>
           <tbody>
             <tr v-for="tag in tags" :key="tag.name">
@@ -193,10 +190,9 @@ async function remove(name: string) {
         </table>
       </div>
 
-      <!-- In the body, not in the row: the card clips whatever is inside it, and a
-           menu that belongs to the last row would be cut off by that clip. Fixed
-           coordinates also mean the panel cannot outlive the page moving under
-           it — a scroll closes it. -->
+      <!-- The menu is teleported out of the table so it layers above nearby rows. Fixed
+           coordinates mean it cannot outlive the page moving under it — scrolling closes
+           it instead of misplacing it. -->
       <Teleport to="#teleports">
         <div
           v-if="openedTag"
