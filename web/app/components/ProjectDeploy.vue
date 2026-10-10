@@ -155,19 +155,17 @@ onMounted(async () => {
       </p>
     </div>
 
-    <div v-else-if="!loading && !error && deployModules.length" class="card">
-      <!-- The head of the card: whether anything is happening. One lamp and one
-           sentence. Everything else about the modules is a row of the table below, and
-           the switch that decides whether the next push deploys anything is in it. -->
-      <div class="head">
-        <div class="head-main">
+    <div v-else-if="!loading && !error && deployModules.length" class="deploy-module-list">
+      <!-- The live status is a separate summary; the module table below stays flat. -->
+      <div class="deploy-module-state">
+        <div class="deploy-module-state-main">
           <!-- The state of the whole thing, in one place.
                The badge in the table below says whether the module is answering, which
                is true while a deployment is failing as steadily as it is while one is
                succeeding — so this says what is actually happening, and it is the only
                indicator on the page that does. -->
-          <span class="lamp" :class="headState" />
-          <span class="head-state">{{ headStateText }}</span>
+          <span class="deploy-module-lamp" :class="headState"><span class="deploy-module-lamp-dot" /></span>
+          <span class="deploy-module-state-label">{{ headStateText }}</span>
         </div>
 
         </div>
