@@ -297,19 +297,14 @@ const deployTimeoutLimit = time.Hour
 
 // carryOutDeploy is the deployment itself, off the request that led to it.
 func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.Pipeline,
-	project *models.Project) {
+	project *models.Project, place deployPlace, lockConn *pgxpool.Conn) {
 
 	started := time.Now()
 
-	// The place is released on every path out of this function, including the ones that
-	// ended without touching a cluster — including a deployment that could not even be
-	// described. A place released only on success is a place a single failure closes for
-	// as long as this process lives, and the next push to it is refused for a reason
-	// nobody can see. Deferred rather than put in `finish`, because `finish` is not
-	// reached by every way out of here.
-	if place, placed := s.deployPlaceOf(ctx, project, job); placed {
-		defer s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
-	}
+	// Unlock the shared PostgreSQL session before passing the in-process slot to the next
+	// waiter. Both are released on every exit path, including a failed module call.
+	defer s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+	defer s.releaseDeployLock(context.WithoutCancel(ctx), lockConn, place.identity)
 
 	finish := func(status string, reason string) {
 		elapsed := time.Since(started)
@@ -382,40 +377,53 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 	}
 }
 
-// deployPlaceOf is where this deployment is going, as the thing the queue holds a place
-// for.
-//
-// The same three the module holds: the project, the place, and the namespace inside it.
-// Read here rather than carried in the job because the namespace is not written on the job
-// — it lives in the module's list of places and can change between one run and the next —
-// and a queue keyed on yesterday's namespace would be keyed on nothing.
-//
-// False means there is no place to speak of: a job that names none, a project whose
-// module is gone, a place whose row cannot be read. Those deploy as they always did,
-// unqueued, because refusing to deploy anything the core cannot place would be a worse
-// failure than two deployments at once — and the module's own check still stands behind it.
+// deployPlaceOf describes a target and refuses to pretend it is safe when its identity cannot
+// be resolved. A deploy job with a broken or missing target still returns a logical candidate
+// key, so it can invalidate an older build for that target; the caller must handle the error
+// and must never send the job to a module without a physical lock identity.
 func (s *Server) deployPlaceOf(ctx context.Context, project *models.Project,
-	job *store.Job) (deployPlace, bool) {
+	job *store.Job) (deployPlace, bool, error) {
 
-	if project == nil || job == nil || job.Deploy == nil {
-		return deployPlace{}, false
+	if job == nil || job.Deploy == nil {
+		return deployPlace{}, false, nil
 	}
-	place := strings.TrimSpace(asString(job.Deploy["Target"]))
-	if place == "" {
-		return deployPlace{}, false
+	target := strings.TrimSpace(asString(job.Deploy["Target"]))
+	moduleName := strings.TrimSpace(asString(job.Deploy["Module"]))
+	place := deployPlace{cluster: target}
+	if project != nil {
+		place.project = project.Path
+		place.logicalKey = logicalDeployCandidateKey(project, moduleName, target)
+	}
+	if target == "" {
+		return place, true, fmt.Errorf("the deploy job has no target")
+	}
+	if moduleName == "" {
+		return place, true, fmt.Errorf("the deploy job has no module")
+	}
+	if project == nil {
+		return place, true, fmt.Errorf("the project for the deploy job could not be resolved")
 	}
 
-	module, err := s.deployModuleForPlace(ctx, project, place,
-		strings.TrimSpace(asString(job.Deploy["Module"])))
-	if err != nil || module == nil {
-		return deployPlace{}, false
+	module, err := s.deployModuleForPlace(ctx, project, target, moduleName)
+	if err != nil {
+		return place, true, fmt.Errorf("resolve module %q for target %q: %w", moduleName, target, err)
+	}
+	if module == nil {
+		return place, true, fmt.Errorf("module %q for target %q is unavailable", moduleName, target)
 	}
 
-	return deployPlace{
-		project:   project.Path,
-		cluster:   place,
-		namespace: placeNamespaceIn(s.placeRows(ctx, project, module), place),
-	}, true
+	rows := s.placeRows(ctx, project, module)
+	namespace := placeNamespaceIn(rows, target)
+	if namespace == "" {
+		return place, true, fmt.Errorf("target %q has no explicit default_namespace; refusing to guess the namespace for its lock", target)
+	}
+	identity, err := physicalDeployIdentity(rows, target, namespace)
+	if err != nil {
+		return place, true, err
+	}
+	place.namespace = namespace
+	place.identity = identity
+	return place, true, nil
 }
 
 // releaseDeployPlace gives a place back, and deals with whoever was behind it.
