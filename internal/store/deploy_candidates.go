@@ -141,8 +141,16 @@ func (r *PipelineRepo) IsLatestDeployCandidate(ctx context.Context, keys []strin
 		if err != nil {
 			return false, fmt.Errorf("read latest deployment candidate: %w", err)
 		}
-		if latest != pipelineID {
+		if latest > pipelineID {
+			// A later candidate exists. This job has been overtaken and must not run.
 			return false, nil
+		}
+		if latest < pipelineID {
+			// The row was not advanced when this pipeline was created, usually because
+			// the physical destination could not be resolved then. Do not mistake that
+			// missing registration for a newer candidate or deploy without a global claim.
+			return false, fmt.Errorf("deployment candidate %q is still registered to older pipeline %d, not %d",
+				key, latest, pipelineID)
 		}
 	}
 	return true, nil
