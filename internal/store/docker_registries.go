@@ -30,6 +30,15 @@ type DockerRegistry struct {
 	URL      string
 	Login    string
 	Password string
+	// CredentialSource says whose account a build authenticates with at this address:
+	// "static" is the one on this row, "user" is a dogit account of its own. Empty is
+	// read as "static", because a record that has never been told otherwise has always
+	// pushed with the login written beside it.
+	//
+	// The instance-level answer. A group or a project may say otherwise for itself in
+	// the credentials table, which is the only place that can carry that: this row is
+	// one statement about the whole installation.
+	CredentialSource string
 	// InsecureTLS accepts a certificate that does not verify. False is the ordinary
 	// case and the only correct default; a registry behind a self-signed certificate
 	// says so here rather than being quietly unreachable.
@@ -44,8 +53,8 @@ type DockerRegistry struct {
 	UpdatedAt time.Time
 }
 
-const dockerRegistryColumns = `id, name, url, login, password, insecure_tls, read_only,
-	note, enabled, created_at, updated_at`
+const dockerRegistryColumns = `id, name, url, login, password, credential_source,
+	insecure_tls, read_only, note, enabled, created_at, updated_at`
 
 // dockerRegistryRows is one round trip for a page of the list and for the size of the
 // whole list: a page that says "3 of 47" counts 47 rows and reads 10 of them, and two
@@ -95,7 +104,7 @@ func (r *DockerRegistryRepo) List(ctx context.Context, f DockerRegistryListFilte
 	for rows.Next() {
 		var reg DockerRegistry
 		if err := rows.Scan(&total, &reg.ID, &reg.Name, &reg.URL, &reg.Login, &reg.Password,
-			&reg.InsecureTLS, &reg.ReadOnly, &reg.Note, &reg.Enabled,
+			&reg.CredentialSource, &reg.InsecureTLS, &reg.ReadOnly, &reg.Note, &reg.Enabled,
 			&reg.CreatedAt, &reg.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("read a docker registry: %w", err)
 		}
@@ -126,10 +135,10 @@ func (r *DockerRegistryRepo) Create(ctx context.Context, reg *DockerRegistry) er
 	reg.URL = cleanDockerURL(reg.URL)
 	err := r.s.pool.QueryRow(ctx, `
 		INSERT INTO docker_registries
-			(name, url, login, password, insecure_tls, read_only, note, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			(name, url, login, password, credential_source, insecure_tls, read_only, note, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, created_at, updated_at`,
-		reg.Name, reg.URL, reg.Login, reg.Password,
+		reg.Name, reg.URL, reg.Login, reg.Password, registryCredentialSource(reg.CredentialSource),
 		reg.InsecureTLS, reg.ReadOnly, reg.Note, reg.Enabled,
 	).Scan(&reg.ID, &reg.CreatedAt, &reg.UpdatedAt)
 	if err != nil {
@@ -153,11 +162,12 @@ func (r *DockerRegistryRepo) Update(ctx context.Context, reg *DockerRegistry) er
 	err := r.s.pool.QueryRow(ctx, `
 		UPDATE docker_registries SET
 			name = $2, url = $3, login = $4, password = $5,
-			insecure_tls = $6, read_only = $7,
-			note = $8, enabled = $9, updated_at = now()
+			credential_source = $6,
+			insecure_tls = $7, read_only = $8,
+			note = $9, enabled = $10, updated_at = now()
 		WHERE id = $1
 		RETURNING updated_at`, reg.ID,
-		reg.Name, reg.URL, reg.Login, reg.Password,
+		reg.Name, reg.URL, reg.Login, reg.Password, registryCredentialSource(reg.CredentialSource),
 		reg.InsecureTLS, reg.ReadOnly, reg.Note, reg.Enabled,
 	).Scan(&reg.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -236,7 +246,7 @@ func (r *DockerRegistryRepo) Delete(ctx context.Context, id uuid.UUID) error {
 func scanDockerRegistry(row interface{ Scan(...any) error }) (*DockerRegistry, error) {
 	var reg DockerRegistry
 	err := row.Scan(&reg.ID, &reg.Name, &reg.URL, &reg.Login, &reg.Password,
-		&reg.InsecureTLS, &reg.ReadOnly, &reg.Note, &reg.Enabled,
+		&reg.CredentialSource, &reg.InsecureTLS, &reg.ReadOnly, &reg.Note, &reg.Enabled,
 		&reg.CreatedAt, &reg.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("read a docker registry: %w", err)
@@ -250,6 +260,29 @@ func scanDockerRegistry(row interface{ Scan(...any) error }) (*DockerRegistry, e
 // "registry.example.com" are one address written two ways and a list that holds both is a
 // list with a duplicate on it that no constraint can see. The scheme is left off when
 // there is none, and kept when there is: a record may say https:// and mean it.
+// registryCredentialSource is the source as this repository stores it.
+//
+// "static" rather than the empty string, because a record written before this column
+// existed has already been pushing with the login beside it, and reading that back as
+// "no source, inherit one" would ask a question about a registry whose answer is
+// already on the row.
+func registryCredentialSource(source string) string {
+	if strings.TrimSpace(source) == "" {
+		return CredentialSourceStatic
+	}
+	return strings.TrimSpace(source)
+}
+
+// Credential sources: whose account a build authenticates with at a written-down address.
+const (
+	// CredentialSourceStatic is the login and password on the registry's own row.
+	CredentialSourceStatic = "static"
+	// CredentialSourceUser is a dogit account of its own, reused at the registry. It
+	// works where dogit and the registry share an account — the same directory behind
+	// both, or the same people holding the same credentials — and not otherwise.
+	CredentialSourceUser = "user"
+)
+
 func cleanDockerURL(url string) string {
 	url = strings.TrimSpace(url)
 	for strings.HasSuffix(url, "/") {

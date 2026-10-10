@@ -745,12 +745,27 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	if len(job.Build) > 0 {
 		credentials, err := s.registryCredentialsFor(r, job)
 		if err != nil {
-			// The job is already marked as this runner's, and the runner never heard
-			// about it: nothing will ever report on it. It goes back into the queue
-			// rather than staying "running" on a machine that is not running it,
-			// which is a pipeline that hangs for ever over a problem another attempt
-			// may not even have.
-			if releaseErr := s.store.Pipelines().ReleaseJob(r.Context(), job.ID); releaseErr != nil {
+			// Whether this job is worth retrying at all is decided by what went wrong.
+			//
+			// An apiError is an answer about this configuration — there is no registry to
+			// push to, a place names an address nothing publishes — and no further attempt
+			// of the same job against the same configuration can produce a different one.
+			// Returning it to the queue in that case only makes the job go round for ever:
+			// the runner asks again three seconds later, is refused the same way, and the
+			// pipeline sits "pending" with the reason in a log nobody is reading. It is
+			// finished instead, with the reason attached, so the run ends and a page can
+			// say why.
+			//
+			// Anything else is a failure of this attempt rather than of the setup — a
+			// database that did not answer — and the job goes back to wait, which is what
+			// the queue is for.
+			var refused *apiError
+			if errors.As(err, &refused) {
+				if finishErr := s.store.Pipelines().FinishJob(r.Context(), job.ID,
+					store.JobFailed, 0, refused.Error()); finishErr != nil {
+					s.log.Error("could not finish a refused job", "job", job.ID, "error", finishErr)
+				}
+			} else if releaseErr := s.store.Pipelines().ReleaseJob(r.Context(), job.ID); releaseErr != nil {
 				s.log.Error("could not put a claimed job back", "job", job.ID, "error", releaseErr)
 			}
 			s.writeError(w, r, err)
@@ -786,12 +801,33 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, answer)
 }
 
-// pushRegistryFor is the registry module a job pushes to.
+// pushTarget is where a build pushes and what it authenticates with.
+//
+// Two shapes, because a registry can be two things. A module of this instance mints its
+// own tokens and names its own images, and an address an administrator wrote down
+// authenticates with an account this instance already holds and names an image by host
+// and project path. Both are a registry, and treating only the first as one is what left
+// an instance with a perfectly good address unable to build anything.
+//
+// Exactly one field is set. A method would be nicer if the two were more alike, and they
+// are not: one is a program answering for itself, the other is a row in a table.
+type pushTarget struct {
+	module   *models.Integration
+	external *store.DockerRegistry
+}
+
+// pushRegistryFor is the registry a job pushes to.
 //
 // The cluster decides, and this is how: a place names the registry it pulls from, and a build
 // pushes where the cluster will pull from, or the deployment fails on the cluster's side with a
 // pull error that says nothing about the push. The same field already chooses what a deployment
 // pulls with, so push and pull read one thing and cannot disagree.
+//
+// The address a place names is looked up twice, and in that order: among the registry
+// modules of this instance, and then among the addresses an administrator wrote down. A
+// module is preferred because it is the one that can mint a scoped token rather than hand
+// the runner a general account, and because an address that happens to match one is the
+// same registry seen twice.
 //
 // A place that names no registry falls back to "the one registry on this instance", which is the
 // whole of what the old code ever did — it took whichever module was oldest. With several and
@@ -801,7 +837,7 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 // A job with no deploy target at all — a library, a test run, anything that builds and never
 // deploys — is in the same position, and gets the same answer.
 func (s *Server) pushRegistryFor(ctx context.Context, project *models.Project,
-	job *store.Job) (*models.Integration, error) {
+	job *store.Job) (*pushTarget, error) {
 
 	place := strings.TrimSpace(asString(job.Deploy["Target"]))
 	if place != "" {
@@ -813,13 +849,26 @@ func (s *Server) pushRegistryFor(ctx context.Context, project *models.Project,
 			// nothing to match on and the fallback below is the right answer.
 			if address := s.placesRegistry(ctx, project, module, place, nil); address != "" {
 				if registry, _, err := s.registryServing(ctx, address); err == nil {
-					return registry, nil
+					return &pushTarget{module: registry}, nil
 				} else if !errors.Is(err, store.ErrNotFound) {
 					return nil, err
 				}
+
+				// Nothing of this instance publishes that address, but an address an
+				// administrator wrote down does not need to be published by us to be
+				// somewhere to push.
+				written, err := s.store.DockerRegistries().ByURL(ctx, address)
+				if err == nil {
+					return &pushTarget{external: written}, nil
+				}
+				if !errors.Is(err, store.ErrNotFound) {
+					return nil, err
+				}
+
 				return nil, errBadRequestf(
-					"cluster %q names the registry %s, and no registry module on this instance "+
-						"publishes that address, so there is nowhere to push", place, address)
+					"cluster %q names the registry %s, and nothing on this instance serves that "+
+						"address, so there is nowhere to push. Add it under Registries, or point the "+
+						"place at an address this instance has", place, address)
 			}
 		}
 	}
@@ -839,14 +888,55 @@ func (s *Server) pushRegistryFor(ctx context.Context, project *models.Project,
 		if len(registries) > 0 {
 			return nil, errBadRequest("the registry module has been forbidden")
 		}
-		return nil, errBadRequest("no registry is installed on this instance, so nothing can be pushed")
+		// No module of this instance, but an address somebody wrote down is still
+		// somewhere to push. Refusing here on the strength of a module being absent
+		// is what made an instance with a perfectly good registry unable to build.
+		return s.writtenRegistryTarget(ctx, project, job)
 	case 1:
-		return usable[0], nil
+		return &pushTarget{module: usable[0]}, nil
 	default:
 		return nil, errBadRequestf(
 			"this instance has %d registry modules (%s) and this build does not say which cluster "+
 				"it is for, so there is no way to tell where its image should go",
 			len(usable), s.moduleNames(usable))
+	}
+}
+
+// writtenRegistryTarget is the one address an administrator wrote down that a build can
+// push to, for a job that names no place.
+//
+// The same rule as for modules: one is an answer, none is an answer, and several is a
+// question the configuration has not answered. Read-only registries are left out of the
+// count, because a registry an image may only be pulled from is not a candidate for
+// pushing and counting it would make "no registry module installed" look like a choice
+// between three.
+func (s *Server) writtenRegistryTarget(ctx context.Context, project *models.Project,
+	job *store.Job) (*pushTarget, error) {
+
+	written, _, err := s.store.DockerRegistries().List(ctx, store.DockerRegistryListFilter{Limit: 100})
+	if err != nil {
+		return nil, err
+	}
+	pushable := make([]*store.DockerRegistry, 0, len(written))
+	for i := range written {
+		reg := &written[i]
+		if reg.Enabled && !reg.ReadOnly {
+			pushable = append(pushable, reg)
+		}
+	}
+	switch len(pushable) {
+	case 0:
+		return nil, errBadRequest(
+			"this instance has no registry to push to: no registry module is installed, and " +
+				"nothing is on the Registries list that a build may push to. Add one, or name " +
+				"the registry on the place this build deploys to")
+	case 1:
+		return &pushTarget{external: pushable[0]}, nil
+	default:
+		return nil, errBadRequestf(
+			"this instance has %d registries a build may push to (%s) and this build says which "+
+				"cluster it is for in none of them, so there is no way to tell where its image "+
+				"should go", len(pushable), s.writtenRegistryNames(pushable))
 	}
 }
 
@@ -857,10 +947,17 @@ func (s *Server) registryCredentialsFor(r *http.Request, job *store.Job) (map[st
 		return nil, errBadRequestf("project %q no longer exists", job.ProjectPath)
 	}
 
-	registry, err := s.pushRegistryFor(r.Context(), project, job)
+	target, err := s.pushRegistryFor(r.Context(), project, job)
 	if err != nil {
 		return nil, err
 	}
+
+	// An address somebody wrote down is not a module and is not asked to mint anything:
+	// it takes the account this instance already holds.
+	if target.external != nil {
+		return s.writtenRegistryCredentials(r.Context(), project, job, target.external)
+	}
+	registry := target.module
 
 	// The credential belongs to the project, not to the person who pressed the
 	// button: a job runs at three in the morning, and it runs the project's work,

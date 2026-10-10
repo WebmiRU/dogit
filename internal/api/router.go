@@ -335,6 +335,10 @@ func (s *Server) Register(r chi.Router) {
 			registries.Post("/docker", s.handleCreateDockerRegistry)
 			registries.Patch("/docker/{registryID}", s.handleUpdateDockerRegistry)
 			registries.Delete("/docker/{registryID}", s.handleDeleteDockerRegistry)
+			// Who pushes to a written-down registry, at the scope this request names:
+			// the instance, a group, or one project. Scoped like module settings, and
+			// for the same reason.
+			registries.Put("/docker/{registryID}/credentials", s.handleRegistryCredentials)
 		})
 
 		authenticated.Get("/groups", s.handleListGroups)

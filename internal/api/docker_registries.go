@@ -36,14 +36,19 @@ const dockerRegistriesPerPage = 10
 // halves of its life: what a form sends in, and the empty string that means "clear it".
 // It is never what comes back out.
 type dockerRegistryInput struct {
-	Name        *string `json:"name"`
-	URL         *string `json:"url"`
-	Login       *string `json:"login"`
-	Password    *string `json:"password"`
-	InsecureTLS *bool   `json:"insecure_tls"`
-	ReadOnly    *bool   `json:"read_only"`
-	Note        *string `json:"note"`
-	Enabled     *bool   `json:"enabled"`
+	Name     *string `json:"name"`
+	URL      *string `json:"url"`
+	Login    *string `json:"login"`
+	Password *string `json:"password"`
+	// CredentialSource says whose account a build pushes with, and is the instance-wide
+	// answer: a group or a project overrides it through the credentials endpoint, which
+	// is where a narrower arrangement belongs. Empty means the pair on this row, which
+	// is what a record that has never been told otherwise has always done.
+	CredentialSource *string `json:"credential_source"`
+	InsecureTLS      *bool   `json:"insecure_tls"`
+	ReadOnly         *bool   `json:"read_only"`
+	Note             *string `json:"note"`
+	Enabled          *bool   `json:"enabled"`
 }
 
 // handleListDockerRegistries is the administrator's list of Docker registries.
@@ -328,18 +333,19 @@ func (s *Server) handleDeleteDockerRegistry(w http.ResponseWriter, r *http.Reque
 // showing a value nobody should be shown.
 func dockerRegistryView(reg store.DockerRegistry) map[string]any {
 	return map[string]any{
-		"source":       registrySourceWritten,
-		"id":           reg.ID,
-		"name":         reg.Name,
-		"url":          reg.URL,
-		"login":        reg.Login,
-		"has_password": reg.Password != "",
-		"insecure_tls": reg.InsecureTLS,
-		"read_only":    reg.ReadOnly,
-		"note":         reg.Note,
-		"enabled":      reg.Enabled,
-		"created_at":   reg.CreatedAt,
-		"updated_at":   reg.UpdatedAt,
+		"source":            registrySourceWritten,
+		"id":                reg.ID,
+		"name":              reg.Name,
+		"url":               reg.URL,
+		"login":             reg.Login,
+		"has_password":      reg.Password != "",
+		"credential_source": reg.CredentialSource,
+		"insecure_tls":      reg.InsecureTLS,
+		"read_only":         reg.ReadOnly,
+		"note":              reg.Note,
+		"enabled":           reg.Enabled,
+		"created_at":        reg.CreatedAt,
+		"updated_at":        reg.UpdatedAt,
 	}
 }
 
@@ -362,6 +368,17 @@ func applyDockerRegistryInput(reg *store.DockerRegistry, body dockerRegistryInpu
 		reg.URL = url
 	} else if required {
 		return errBadRequest("a registry needs an address")
+	}
+
+	if body.CredentialSource != nil {
+		source := strings.TrimSpace(*body.CredentialSource)
+		switch source {
+		case "", store.CredentialSourceStatic, store.CredentialSourceUser:
+			reg.CredentialSource = source
+		default:
+			return errBadRequestf("a credential source is either %q or %q",
+				store.CredentialSourceStatic, store.CredentialSourceUser)
+		}
 	}
 
 	if body.Name != nil {
