@@ -483,7 +483,8 @@ function clockOf(at: number): string {
  * wrote it either way, and the two differ in what they mean rather than in who said it.
  */
 function verdictOf(operation: DeployOperation): string {
-  if (operation.status === 'refused' || operation.status === 'skipped') {
+  if (operation.status === 'refused' || operation.status === 'superseded' ||
+    operation.status === 'skipped') {
     return operation.error || 'nothing was deployed here'
   }
   if (operation.status === 'failed') {
@@ -503,6 +504,7 @@ function stateOf(operation: DeployOperation): string {
   if (operation.queued) return 'Waiting'
   if (operation.running) return 'Running'
   if (operation.status === 'refused') return 'Declined'
+  if (operation.status === 'superseded') return 'Overtaken'
   if (operation.status === 'skipped') return 'Skipped'
   if (operation.status === 'canceled') return 'Cancelled'
   if (operation.status === 'interrupted') return 'Interrupted'
@@ -520,7 +522,10 @@ function stateOf(operation: DeployOperation): string {
 function edgeOf(operation: DeployOperation): string {
   if (operation.queued) return 'queued'
   if (operation.running) return 'live'
-  if (operation.status === 'refused' || operation.status === 'skipped') return 'dismissed'
+  if (operation.status === 'refused' || operation.status === 'superseded' ||
+    operation.status === 'skipped') {
+    return 'dismissed'
+  }
   return ''
 }
 
@@ -564,6 +569,7 @@ const tone: Record<string, string> = {
   running: 'badge-warning',
   pending: 'badge-blue',
   refused: 'badge-neutral',
+  superseded: 'badge-neutral',
   skipped: 'badge-neutral',
   interrupted: 'badge-neutral',
   failed: 'badge-danger',

@@ -230,7 +230,7 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 // exactly what happened: the page knew a declined step was over, and the query that chose what
 // to show did not.
 var finishedStatuses = []string{
-	JobSuccess, JobFailed, JobRefused, JobSkipped, JobCanceled, JobAbandoned, JobInterrupted,
+	JobSuccess, JobFailed, JobRefused, JobSkipped, JobSuperseded, JobCanceled, JobAbandoned, JobInterrupted,
 }
 
 func placeOf(record map[string]any, cluster string) string {

@@ -15,30 +15,30 @@ const (
 )
 
 type MergeRequest struct {
-	ID             int64             `json:"id"`
-	IID            int               `json:"iid"`
-	ProjectID      uuid.UUID         `json:"project_id"`
-	AuthorID       uuid.UUID         `json:"author_id"`
-	SourceBranch   string            `json:"source_branch"`
-	TargetBranch   string            `json:"target_branch"`
-	Title          string            `json:"title"`
-	Description    string            `json:"description"`
-	State          MergeRequestState `json:"state"`
-	MergeCommitSHA *string           `json:"merge_commit_sha,omitempty"`
-	SHA            string            `json:"sha"`
-	MergedAt       *time.Time        `json:"merged_at,omitempty"`
-	MergedByID     *uuid.UUID        `json:"merged_by_id,omitempty"`
-	ClosedAt       *time.Time        `json:"closed_at,omitempty"`
-	Squash         bool              `json:"squash"`
-	IsDraft        bool              `json:"is_draft"`
-	AssigneeID     *uuid.UUID        `json:"assignee_id,omitempty"`
-	ReviewerID     *uuid.UUID        `json:"reviewer_id,omitempty"`
-	Milestone      string            `json:"milestone,omitempty"`
-	Labels         []string          `json:"labels"`
-	RemoveSourceBranch bool          `json:"remove_source_branch"`
-	PipelineRequired bool            `json:"pipeline_required"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
+	ID                 int64             `json:"id"`
+	IID                int               `json:"iid"`
+	ProjectID          uuid.UUID         `json:"project_id"`
+	AuthorID           uuid.UUID         `json:"author_id"`
+	SourceBranch       string            `json:"source_branch"`
+	TargetBranch       string            `json:"target_branch"`
+	Title              string            `json:"title"`
+	Description        string            `json:"description"`
+	State              MergeRequestState `json:"state"`
+	MergeCommitSHA     *string           `json:"merge_commit_sha,omitempty"`
+	SHA                string            `json:"sha"`
+	MergedAt           *time.Time        `json:"merged_at,omitempty"`
+	MergedByID         *uuid.UUID        `json:"merged_by_id,omitempty"`
+	ClosedAt           *time.Time        `json:"closed_at,omitempty"`
+	Squash             bool              `json:"squash"`
+	IsDraft            bool              `json:"is_draft"`
+	AssigneeID         *uuid.UUID        `json:"assignee_id,omitempty"`
+	ReviewerID         *uuid.UUID        `json:"reviewer_id,omitempty"`
+	Milestone          string            `json:"milestone,omitempty"`
+	Labels             []string          `json:"labels"`
+	RemoveSourceBranch bool              `json:"remove_source_branch"`
+	PipelineRequired   bool              `json:"pipeline_required"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
 
 	// Joined in for display, so a list of requests does not need a query per row
 	// to know who opened one or where it lives.
@@ -133,7 +133,11 @@ const (
 	// means something different for it — a grey card rather than a red one, a run that carries
 	// on rather than one that fails and takes the places after it down with it.
 	JobRefused JobStatus = "refused"
-	JobManual  JobStatus = "manual"
+	// JobSuperseded is a deployment that waited its turn for a place and was overtaken by a
+	// newer one before that turn came. Never started, so nothing was touched: grey rather
+	// than red, like a refusal, but for a different reason — nothing was asked at all.
+	JobSuperseded JobStatus = "superseded"
+	JobManual     JobStatus = "manual"
 )
 
 type Job struct {

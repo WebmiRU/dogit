@@ -50,16 +50,47 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 		return
 	}
 
+	// The place first, and before the claim: a deployment that has to wait must not have
+	// been claimed to wait, because a claimed job is one that has been started, and the
+	// run would sit on a job that says it is running and is not.
+	//
+	// Nothing has happened yet at this point, so saying so is free and reversible. What
+	// replaces this is the module refusing a second rollout into one namespace — which
+	// loses a deployment somebody pushed for, over a conflict that resolved itself in a
+	// minute, and which nobody re-tried because the push was already done.
+	place, placed := s.deployPlaceOf(ctx, project, job)
+	mayStart, holder := true, false
+	if placed {
+		mayStart, holder = s.deploys.take(place, job.ID, run.ID)
+	}
+	if !mayStart {
+		s.writeDeployLog(ctx, job, fmt.Sprintf(
+			"Another deployment is already under way in %s, so this one is waiting its turn "+
+				"rather than being refused. It will be deployed when that one is finished, "+
+				"unless a newer deployment of this project arrives first — in which case this "+
+				"one will be superseded and will not be deployed at all.\n", place.cluster))
+		s.log.Info("the deployment is waiting for its place",
+			"job_id", job.ID, "project", project.Path,
+			"place", place.cluster, "namespace", place.namespace)
+		return
+	}
+
 	// Claimed before any work is done, so two calls that arrive together cannot both
 	// start one. The store does the claiming, because that is where the state lives:
 	// reading the row and then writing it would be a race with anything else asking
 	// at the same moment.
 	claimed, err := s.store.Pipelines().ClaimDeployJob(ctx, job.ID)
 	if err != nil {
+		if holder {
+			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+		}
 		s.log.Error("claim the deployment", "job_id", job.ID, "error", err)
 		return
 	}
 	if !claimed {
+		if holder {
+			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+		}
 		return
 	}
 
@@ -93,6 +124,16 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 	project *models.Project) {
 
 	started := time.Now()
+
+	// The place is released on every path out of this function, including the ones that
+	// ended without touching a cluster — including a deployment that could not even be
+	// described. A place released only on success is a place a single failure closes for
+	// as long as this process lives, and the next push to it is refused for a reason
+	// nobody can see. Deferred rather than put in `finish`, because `finish` is not
+	// reached by every way out of here.
+	if place, placed := s.deployPlaceOf(ctx, project, job); placed {
+		defer s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+	}
 
 	finish := func(status string, reason string) {
 		elapsed := time.Since(started)
@@ -165,6 +206,157 @@ func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.
 	}
 }
 
+// deployPlaceOf is where this deployment is going, as the thing the queue holds a place
+// for.
+//
+// The same three the module holds: the project, the place, and the namespace inside it.
+// Read here rather than carried in the job because the namespace is not written on the job
+// — it lives in the module's list of places and can change between one run and the next —
+// and a queue keyed on yesterday's namespace would be keyed on nothing.
+//
+// False means there is no place to speak of: a job that names none, a project whose
+// module is gone, a place whose row cannot be read. Those deploy as they always did,
+// unqueued, because refusing to deploy anything the core cannot place would be a worse
+// failure than two deployments at once — and the module's own check still stands behind it.
+func (s *Server) deployPlaceOf(ctx context.Context, project *models.Project,
+	job *store.Job) (deployPlace, bool) {
+
+	if project == nil || job == nil || job.Deploy == nil {
+		return deployPlace{}, false
+	}
+	place := strings.TrimSpace(asString(job.Deploy["Target"]))
+	if place == "" {
+		return deployPlace{}, false
+	}
+
+	module, err := s.deployModuleForPlace(ctx, project, place,
+		strings.TrimSpace(asString(job.Deploy["Module"])))
+	if err != nil || module == nil {
+		return deployPlace{}, false
+	}
+
+	return deployPlace{
+		project:   project.Path,
+		cluster:   place,
+		namespace: placeNamespaceIn(s.placeRows(ctx, project, module), place),
+	}, true
+}
+
+// releaseDeployPlace gives a place back, and deals with whoever was behind it.
+//
+// Called once, at the end of the deployment, on every path — including the ones that ended
+// without touching a cluster. A place has to be released whether the deployment worked or
+// not, or a single failure would close the place for as long as the process lives, which
+// is the whole failure this replaces.
+//
+// The place is given back before anything is started from it. The promoted deployment does
+// not ask again — it is already holding the place — so the gap between giving it back and
+// it actually starting has to stay closed, and starting it from here rather than from the
+// next caller is what closes it.
+//
+// A superseded deployment is not a failure and does not fail its run: nothing broke,
+// nothing was attempted, and the code that reaches the cluster is the newest one rather
+// than this one. Its own status because everything that reads a job's outcome means
+// something different for it, and it is still recorded — a deployment that did not happen
+// is a fact somebody will want to read later.
+func (s *Server) releaseDeployPlace(ctx context.Context, place deployPlace, jobID int64) {
+	promoted, superseded := s.deploys.free(place, jobID)
+	for _, one := range superseded {
+		s.supersedeDeploy(ctx, one, place)
+	}
+	if promoted != nil {
+		s.startQueuedDeploy(ctx, promoted, place)
+	}
+}
+
+// supersedeDeploy records a deployment that was waiting and will not run.
+func (s *Server) supersedeDeploy(ctx context.Context, one queuedDeploy, place deployPlace) {
+	job, err := s.store.Pipelines().JobByID(ctx, one.jobID)
+	if err != nil {
+		s.log.Error("read the superseded deployment", "job_id", one.jobID, "error", err)
+		return
+	}
+	// One that has already stopped waiting — cancelled, say — has nothing to supersede.
+	// It was never in the race, and marking a cancelled run as superseded would say it
+	// lost one. Its place in the queue is gone either way: this is the only list of
+	// waiters, and it is being walked.
+	if job.Status != store.JobPending {
+		return
+	}
+
+	reason := fmt.Sprintf("a newer deployment of this project was waiting for %s, so this one was not deployed",
+		place.cluster)
+	s.writeDeployLog(ctx, job, "Waiting for "+place.cluster+" was overtaken: "+reason+
+		". Nothing was deployed and nothing broke — the newest deployment of this project is the one "+
+		"that reached the cluster.\n")
+
+	if err := s.store.Pipelines().FinishJob(ctx, job.ID, store.JobSuperseded, 0, reason); err != nil {
+		s.log.Error("finish the superseded deployment", "job_id", job.ID, "error", err)
+		return
+	}
+
+	run, err := s.store.Pipelines().PipelineByID(ctx, one.pipelineID)
+	if err != nil {
+		s.log.Error("read the run of the superseded deployment", "job_id", job.ID, "error", err)
+		return
+	}
+	project, err := s.store.Projects().ByID(ctx, run.ProjectID)
+	if err != nil {
+		s.log.Error("read the project of the superseded deployment", "job_id", job.ID, "error", err)
+		return
+	}
+	s.reportDeployFinished(ctx, job, run, project, store.JobSuperseded, reason)
+
+	// The run may have another place after this one, and a run that stops here is a run
+	// that says it went somewhere it did not go.
+	s.startDeployIfReady(context.WithoutCancel(ctx), run.ID)
+}
+
+// startQueuedDeploy begins the deployment that was promoted, which already holds its place.
+func (s *Server) startQueuedDeploy(ctx context.Context, one *queuedDeploy, place deployPlace) {
+	run, err := s.store.Pipelines().PipelineByID(ctx, one.pipelineID)
+	if err != nil {
+		s.log.Error("read the run to deploy", "job_id", one.jobID, "error", err)
+		return
+	}
+	job, err := s.store.Pipelines().JobByID(ctx, one.jobID)
+	if err != nil {
+		s.log.Error("read the deployment waiting to run", "job_id", one.jobID, "error", err)
+		return
+	}
+	if job.Status != store.JobPending {
+		// It stopped waiting while the place was held — cancelled, most likely.
+		//
+		// The place was handed to it, and nothing else will ever give it back: it is not
+		// running, so it will never finish and so it will never release. Handing it to
+		// the next one is the only way it is ever free again, and it is safe to do so
+		// because this job never started and so nothing of it is in the cluster.
+		s.log.Info("a deployment stopped waiting before its turn came",
+			"job_id", one.jobID, "status", job.Status)
+		s.releaseDeployPlace(context.WithoutCancel(ctx), place, one.jobID)
+		return
+	}
+	project, err := s.store.Projects().ByID(ctx, run.ProjectID)
+	if err != nil {
+		s.log.Error("read the project to deploy", "project_id", run.ProjectID, "error", err)
+		return
+	}
+
+	claimed, err := s.store.Pipelines().ClaimDeployJob(ctx, job.ID)
+	if err != nil || !claimed {
+		if err != nil {
+			s.log.Error("claim the queued deployment", "job_id", job.ID, "error", err)
+		}
+		return
+	}
+
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeoutLimit)
+	go func() {
+		defer cancel()
+		s.carryOutDeploy(detached, job, run, project)
+	}()
+}
+
 // pendingDeploy is the deployment waiting to run, and whether the run has earned it.
 func (s *Server) pendingDeploy(ctx context.Context, pipelineID int64) (*store.Job, bool, error) {
 	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, pipelineID)
@@ -195,7 +387,7 @@ func (s *Server) pendingDeploy(ctx context.Context, pipelineID int64) (*store.Jo
 		switch job.Status {
 		case store.JobPending, store.JobRunning:
 			unfinished++
-		case store.JobRefused, store.JobSkipped:
+		case store.JobRefused, store.JobSkipped, store.JobSuperseded:
 			// Neither blocks anything. A place that was busy, or switched off, is a
 			// deployment that did not happen, and the places after it in the same run are
 			// not waiting on it. Counting it as a blocker would fail the run over a

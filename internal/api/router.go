@@ -43,6 +43,12 @@ type Server struct {
 	// written in the clear.
 	sealer *secrets.Sealer
 
+	// deploys says which deployment has each place, so that a second one into the same
+	// place waits rather than being refused. A value, and ready as it stands: a server
+	// assembled by a test never has to know about it, and one that forgot would queue
+	// nothing and refuse nothing, which is how this looked before it existed.
+	deploys deployQueue
+
 	// channel is the core's half of the connection modules keep open, and channelOnce makes
 	// it. Built on first use rather than in New so that a server assembled by a test — which
 	// is most of them — does not have to know about a thing it never opens.

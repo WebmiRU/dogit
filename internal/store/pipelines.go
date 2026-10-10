@@ -57,6 +57,17 @@ const (
 	// cluster, and the next attempt may well work. Recording it as a failure is the same
 	// mistake as painting it red — a decision, reported as a fault.
 	JobRefused = "refused"
+	// JobSuperseded is a deployment that was waiting its turn and was overtaken by a newer
+	// one before that turn came. Never started, so nothing in the cluster was touched, and
+	// nothing broke.
+	//
+	// Its own status because "refused" would be a lie and "failed" would be a worse one. A
+	// refusal says the module was asked and declined; nothing was asked here. A failure is a
+	// red card and a notification to somebody whose afternoon has just been interrupted, over
+	// a deployment that was never attempted and whose code is not the code anybody is waiting
+	// for. This is grey: the run carries on, the log says what overtook it, and the newest
+	// deployment is the one that reached the cluster.
+	JobSuperseded = "superseded"
 	// JobInterrupted is a job whose runner stopped answering while it was running.
 	// It is neither a failure nor a success, because neither is known: the machine
 	// went away mid-build, and saying the build failed would be a claim nobody can
@@ -925,7 +936,7 @@ func pipelineStatusFor(jobStatus string) string {
 		// failed: what is known is that it is no longer running, and that is the
 		// part anybody waiting needs.
 		return PipelineInterrupted
-	case JobSuccess, JobSkipped, JobRefused:
+	case JobSuccess, JobSkipped, JobRefused, JobSuperseded:
 		// A refused deployment does not fail the run. Nothing broke, and the places after
 		// it in the same run are waiting on it — a run failed over a busy cluster is a run
 		// that took every other place down with it for no reason at all.
@@ -956,7 +967,7 @@ func pipelineStatusOf(status string, jobs []Job) string {
 			interrupted++
 		// A skipped job is one that will never run, and a pipeline waiting for
 		// something that will never happen is a pipeline that never finishes.
-		case JobSkipped, JobRefused:
+		case JobSkipped, JobRefused, JobSuperseded:
 		case JobPending:
 			pending++
 		case JobRunning:
@@ -999,7 +1010,7 @@ func StageStatus(jobs []Job) string {
 			if !job.AllowFailure {
 				failed++
 			}
-		case JobSkipped, JobRefused:
+		case JobSkipped, JobRefused, JobSuperseded:
 			// Counted with the skipped, and for the same reason: work that did not
 			// happen is work that did not happen, whether a rule passed it over or a
 			// module declined it. Counting it as passed would put a green tick on a
