@@ -218,13 +218,13 @@ func (s *Server) waitForDeployPlace(ctx context.Context, job *store.Job,
 					s.releaseDeployLock(context.WithoutCancel(ctx), lock)
 					s.log.Error("claim the latest deployment candidate", "job_id", job.ID, "error", claimErr)
 				} else if !stillLatest {
-					s.releaseDeployLock(context.WithoutCancel(ctx), conn, place.identity)
+					s.releaseDeployLock(context.WithoutCancel(ctx), lock)
 					s.supersedeDeploy(context.WithoutCancel(ctx),
 						queuedDeploy{jobID: job.ID, pipelineID: run.ID}, place)
 					s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
 					return
 				} else if !claimed {
-					s.releaseDeployLock(context.WithoutCancel(ctx), conn, place.identity)
+					s.releaseDeployLock(context.WithoutCancel(ctx), lock)
 					now, readErr := s.store.Pipelines().JobByID(context.WithoutCancel(ctx), job.ID)
 					if readErr == nil && now.Status != store.JobPending {
 						_ = s.store.Pipelines().SetDeployCandidateWaiting(
