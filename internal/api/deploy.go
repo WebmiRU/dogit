@@ -771,8 +771,15 @@ func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.
 		// A tag that cannot be resolved is reported and the tag is used, because the
 		// alternative is refusing to deploy something that is perfectly deployable.
 		// What was deployed is said plainly, so nobody believes it was pinned.
-		log("  image:     %s (could not be pinned to a digest: %v)\n", image, err)
-		return image, nil
+		//
+		// The tag is part of the name, and leaving it off is not a fallback to the same
+		// thing: a manifest that says "registry.example.com/team/app" is not that image,
+		// it is the same repository under a name that does not exist. The cluster is
+		// asked for :latest, the tag this run pushed under is not :latest, and the pod
+		// sits in ErrImagePull while the log above says the image was deployed. The
+		// sentence this branch exists to write has to name the tag.
+		log("  image:     %s:%s (could not be pinned to a digest: %v)\n", image, tag, err)
+		return image + ":" + tag, nil
 	}
 	return digest, nil
 }
