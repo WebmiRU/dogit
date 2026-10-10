@@ -64,6 +64,12 @@ const deployWaiting = computed(
   () => !deployBusy.value && listed.value.some((one) => one.queued === true),
 )
 
+function isFailedDeployStatus(status?: string): boolean {
+  // A refusal, cancellation, skip or superseded waiter is not a failed rollout. Match the
+  // card colours below: only an actual error should turn the project-wide lamp red.
+  return status === 'failed' || status === 'error' || status === 'abandoned'
+}
+
 const headState = computed<'working' | 'waiting' | 'bad' | 'ok'>(() => {
   if (deployBusy.value) return 'working'
   if (deployWaiting.value) return 'waiting'
@@ -103,8 +109,7 @@ async function loadHead() {
     // Both are "not finished", and treating them as one thing is what made this header
     // say a deployment was under way while a queue stood still.
     deployBusy.value = listed.value.some((one) => one.running === true)
-    lastFailed.value = answer.finished?.[0]?.status !== undefined &&
-      answer.finished[0].status !== 'success'
+    lastFailed.value = isFailedDeployStatus(answer.finished?.[0]?.status)
   } catch {
     // Left as it is. A header that cannot be fetched says what it last knew, and a header that
     // says "nothing is deploying" because a request failed is a page making a claim it has no
@@ -135,7 +140,7 @@ const stopState = watchEvents({
     // page for as long as the request takes, every time one ends, on a project that
     // deploys several in a row. What it said a moment ago is more true than nothing.
     const status = String(event.payload?.status ?? '')
-    if (status) lastFailed.value = status !== 'success'
+    if (status) lastFailed.value = isFailedDeployStatus(status)
     void loadHead()
   },
 })
