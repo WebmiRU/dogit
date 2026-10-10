@@ -170,8 +170,20 @@ func (s *Server) placePullFrom(ctx context.Context, project *models.Project,
 	// The registry this instance runs needs no lookup: the image already carries its
 	// address, and the credential for it is a token minted for this project and nothing
 	// else.
+	//
+	// Only when a module of this instance actually publishes that address, though. The
+	// test used to be "does the place name the same registry as the image", and that is
+	// not the same question: a place may name a registry somebody wrote down, and then the
+	// two do match while neither of them is ours. Taking the shortcut anyway sent the
+	// deployment at a module that does not exist, so it found no credential and wrote no
+	// pull secret, and the pods went to ImagePullBackOff — with the log saying the image
+	// needs no credential, beside a registry that serves nothing to anyone without one.
 	if sameRegistry(chosen, address) {
-		return s.instanceRegistryPull(ctx, project, "", address)
+		if _, _, err := s.registryServing(ctx, address); err == nil {
+			return s.instanceRegistryPull(ctx, project, "", address)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
 	}
 	return s.registryCredentialFor(ctx, project, place, chosen)
 }

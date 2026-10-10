@@ -52,6 +52,12 @@ namespace=dogit
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# Stops the run, and says what was being done when it stopped.
+fail() {
+  printf '\n\033[1;31m%s\033[0m\n\n' "$*" >&2
+  exit 1
+}
+
 # The Docker network a job's container is put on, created on the node.
 #
 # The runner asks for "dogit_default" by name — the name the compose stack gives its own
@@ -293,18 +299,34 @@ report_running() {
 # what was just built. Everything else — where the node's store is, whether it has ever
 # heard of this tag, whether the node is up at all — stops being this script's problem.
 push() {
-  local image
+  local image sent served
   for image in "$app_image" "$web_image"; do
     say "pushing ${image} and $(commit_tag "$image")"
-    docker push "$image"
-    docker push "$(commit_tag "$image")"
-  done
+    # What the push says it left on the registry, read out of its own output.
+    sent="$(docker push "$image" 2>&1 | sed -n 's/^.*digest: \(sha256:[0-9a-f]*\).*$/\1/p' | head -1)"
+    docker push "$(commit_tag "$image")" >/dev/null
 
-  # The digests, said once and here, because they are what the manifests get pinned to two
-  # lines later and whoever reads the output afterwards should not have to go asking the
-  # registry again to find out what was deployed.
-  for image in "$app_image" "$web_image"; do
-    say "  ${image} is now $(registry_digest "$image")"
+    # What the registry now answers, which is the only one of the two a pod pulling from
+    # the internet will ever meet.
+    served="$(registry_digest "$image")"
+
+    # This check is not the digest comparison the note below registry_digest warns about.
+    # That one compared a cluster's record of what it pulled against a source of truth and
+    # restarted healthy deployments over nothing; this compares two answers from the same
+    # registry about the same name. There is no third opinion to disagree with.
+    #
+    # It is here because a push that does not happen is not a loud failure: the layers
+    # are already on the registry from a previous build, the connection gives up part way
+    # through, docker exits zero, and everything after this point carries on perfectly
+    # happily against an image that is not the one that was built. It was found by a pod
+    # running yesterday's code, which is the worst way to find it.
+    if [ -n "$sent" ] && [ "$sent" != "$served" ]; then
+      fail "${image}: pushed ${sent}, but the registry serves ${served}.
+The push did not complete and everything after this point would have been
+done against an image that is not the one that was just built. Retry; if it
+keeps failing the network to the registry is the thing to look at."
+    fi
+    say "  ${image} is now ${served}"
   done
 }
 

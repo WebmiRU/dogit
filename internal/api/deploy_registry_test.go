@@ -192,6 +192,49 @@ func TestAPlaceNobodyConfiguredIsRefusedAsWell(t *testing.T) {
 	}
 }
 
+// A place that names the same registry as the image is not thereby naming a registry
+// module of this instance.
+//
+// The two answers look identical and are not: "the place says harbor.example.com and the
+// image is at harbor.example.com" and "that is ours, take a token". The second is true
+// only of a module of this instance, and reading the first as the second sent the
+// deployment after a module that does not exist. It found no credential, wrote no pull
+// secret, and the pods went to ImagePullBackOff — beside a log line saying the image needs
+// no credential, on a registry that serves nothing to anyone without one.
+func TestAPlaceMatchingTheImagesRegistryStillGetsItsCredential(t *testing.T) {
+	f := newPlaceRegistryFixture(t)
+
+	harbor := dbtest.Unique("harbor.example.com")
+	written := store.DockerRegistry{URL: harbor, Login: "robot$ci", Password: "s3cret"}
+	if err := f.store.DockerRegistries().Create(t.Context(), &written); err != nil {
+		t.Fatalf("write the registry down: %v", err)
+	}
+	f.setPlace(t, "local-k3s", map[string]string{"registry": harbor})
+
+	// The image carries the same address, which is the ordinary case: a build pushed
+	// where the deployment will pull from, and the place says so.
+	pull, err := f.placePull(t, "local-k3s", harbor+"/team/app@sha256:abc", nil)
+	if err != nil {
+		t.Fatalf("working out where to pull from: %v", err)
+	}
+	if pull == nil {
+		t.Fatal("no answer at all, so the deployment would have been sent without a registry")
+	}
+
+	credential := pull.credential()
+	if credential == nil {
+		t.Fatal("no credential, so nothing would be written into the namespace and the pods " +
+			"cannot pull from a registry that requires one")
+	}
+	if credential.Address != harbor {
+		t.Errorf("credential is for %q, want %q", credential.Address, harbor)
+	}
+	if credential.Username != "robot$ci" || credential.Token != "s3cret" {
+		t.Errorf("credential is %q/%q, want the pair written down for the registry",
+			credential.Username, credential.Token)
+	}
+}
+
 // The credential a rollback is given is the place's registry, under the same rule a
 // deployment is held to — so a place that names none cannot be rolled back at all.
 func TestARollbackIsToldItsPlacesRegistryOrRefusedWithoutOne(t *testing.T) {
