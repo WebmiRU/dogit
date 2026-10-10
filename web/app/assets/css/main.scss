@@ -1802,7 +1802,7 @@ select:focus-visible {
 }
 
 .project-page-head {
-  margin: 10px 8px 0;
+  margin: 10px 0 0;
   padding: 22px 20px 24px;
   border: 1px solid var(--border);
   border-radius: 10px 10px 0 0;
@@ -1810,7 +1810,7 @@ select:focus-visible {
 }
 
 .project-page-head + .repo-tabs {
-  margin: 0 8px 18px;
+  margin: 0 0 18px;
   padding: 0 8px;
   border: 1px solid var(--border);
   border-top: 0;
@@ -1839,7 +1839,7 @@ select:focus-visible {
 
 /* Flat repository tabs override the older framed-header variant. */
 .project-page-head + .repo-tabs {
-  margin: 0 8px 18px;
+  margin: 0 0 18px;
   padding: 0;
   border: 0;
   border-bottom: 1px solid var(--border);
@@ -1898,6 +1898,30 @@ select:focus-visible {
 .repository-data-table {
   width: 100%;
   min-width: 680px;
+}
+
+.repository-tree-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+.repository-tree-table th:last-child {
+  width: 112px;
+}
+.repository-tree-table .cell-name {
+  align-items: center;
+  min-width: 0;
+}
+.repository-tree-table .cell-name .tree-entry-icon {
+  flex: 0 0 16px;
+  width: 16px;
+  text-align: center;
+}
+.repository-tree-table .cell-name .name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .repository-data-table th {
   white-space: nowrap;
