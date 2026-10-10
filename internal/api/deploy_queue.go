@@ -10,9 +10,36 @@ import "sync"
 // anything finer would let two rollouts into one namespace overlap and leave the cluster
 // somewhere neither of them was asked for.
 type deployPlace struct {
+	// project is for logs and display only. The queue is keyed by identity, the physical
+	// cluster endpoint/context and namespace, so aliases in different projects still meet.
 	project   string
 	cluster   string
 	namespace string
+	identity  string
+	logicalKey string
+}
+
+// queueKey is the shared physical identity within this process. Tests and older callers may
+// construct a place without a resolved identity; those use the old tuple, never a blank key.
+func (p deployPlace) queueKey() string {
+	if p.identity != "" {
+		return p.identity
+	}
+	return p.project + "\x00" + p.cluster + "\x00" + p.namespace
+}
+
+// candidateKeys are checked together in PostgreSQL: the physical identity arbitrates across
+// projects and aliases, while the logical identity also invalidates an unresolved target from
+// a newer pipeline instead of letting an older candidate sneak through.
+func (p deployPlace) candidateKeys() []string {
+	keys := []string{}
+	if p.identity != "" {
+		keys = append(keys, p.identity)
+	}
+	if p.logicalKey != "" {
+		keys = append(keys, p.logicalKey)
+	}
+	return keys
 }
 
 // queuedDeploy is a deployment that wants a place and is not getting it yet.
@@ -41,7 +68,7 @@ type queuedDeploy struct {
 // nothing — which is the old behaviour, and would pass every test that does not ask.
 type deployQueue struct {
 	mu    sync.Mutex
-	slots map[deployPlace]*deploySlot
+	slots map[string]*deploySlot
 }
 
 // deploySlot is one place: who has it, and who is behind them.
@@ -89,13 +116,13 @@ func (q *deployQueue) takeWithStatus(place deployPlace, jobID, pipelineID int64)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	slot, found := q.slots[place]
+	key := place.queueKey()\n\tslot, found := q.slots[key]
 	if !found {
 		if q.slots == nil {
-			q.slots = map[deployPlace]*deploySlot{}
+			q.slots = map[string]*deploySlot{}
 		}
 		slot = &deploySlot{}
-		q.slots[place] = slot
+		q.slots[key] = slot
 	}
 	switch {
 	case slot.running == 0:
@@ -161,7 +188,7 @@ func (q *deployQueue) free(place deployPlace, jobID int64) (*queuedDeploy, []que
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	slot, found := q.slots[place]
+	key := place.queueKey()\n\tslot, found := q.slots[key]
 	if !found {
 		return nil, nil
 	}
@@ -170,7 +197,7 @@ func (q *deployQueue) free(place deployPlace, jobID int64) (*queuedDeploy, []que
 	}
 	if len(slot.waiting) == 0 {
 		slot.running = 0
-		delete(q.slots, place)
+		delete(q.slots, key)
 		return nil, nil
 	}
 
