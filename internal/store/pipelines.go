@@ -245,7 +245,7 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 		return nil, nil, fmt.Errorf("create pipeline: %w", err)
 	}
 
-	changes := []DeployCandidateChange{}
+	candidateJobs := map[string]int64{}
 	for index, job := range jobs {
 		job.IID = index + 1
 		if job.Status == "" {
@@ -290,13 +290,27 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 		}
 
 		for _, key := range uniqueDeployCandidateKeys(candidateKeys[index]) {
-			change, err := registerDeployCandidateTx(ctx, tx, key, job.ID, pipeline.ID)
-			if err != nil {
-				return nil, nil, err
+			if _, exists := candidateJobs[key]; !exists {
+				candidateJobs[key] = job.ID
 			}
-			if change != nil {
-				changes = append(changes, *change)
-			}
+		}
+	}
+
+	// Candidate rows are locked in one globally sorted order, rather than job order.
+	// Two multi-target pipelines can otherwise deadlock if their manifests list the
+	// same targets in opposite orders.
+	changes := []DeployCandidateChange{}
+	keys := make([]string, 0, len(candidateJobs))
+	for key := range candidateJobs {
+		keys = append(keys, key)
+	}
+	for _, key := range uniqueDeployCandidateKeys(keys) {
+		change, err := registerDeployCandidateTx(ctx, tx, key, candidateJobs[key], pipeline.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if change != nil {
+			changes = append(changes, *change)
 		}
 	}
 
