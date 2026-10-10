@@ -33,3 +33,13 @@
 
 .admin-table .numeric
   text-align: right
+
+/* Row actions stay quiet until their row is under the pointer or keyboard focus. */
+.admin-table tr:hover .row-menu,
+.admin-table tr:focus-within .row-menu,
+.admin-table .row-menu[aria-expanded="true"]
+  opacity: 1
+
+@media (hover: none) and (pointer: coarse)
+  .admin-table .row-menu
+    opacity: 1
