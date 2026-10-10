@@ -453,6 +453,62 @@ func (s *Server) releaseDeployPlace(ctx context.Context, place deployPlace, jobI
 	}
 }
 
+// supersedeReplacedDeployCandidates marks the previous candidate's pending deployment jobs
+// over as soon as the new pipeline is committed. It uses the durable membership captured when
+// the old pipeline was created, rather than resolving its target again: settings may have
+// changed since then, and a rename must not leave an old candidate eligible.
+func (s *Server) supersedeReplacedDeployCandidates(ctx context.Context,
+	changes []store.DeployCandidateChange) {
+	seen := map[int64]struct{}{}
+	for _, change := range changes {
+		for _, jobID := range change.PreviousJobIDs {
+			if _, exists := seen[jobID]; exists {
+				continue
+			}
+			seen[jobID] = struct{}{}
+
+			job, err := s.store.Pipelines().JobByID(ctx, jobID)
+			if err != nil {
+				s.log.Error("read the deploy job replaced by a newer candidate",
+					"job_id", jobID, "target_key", change.TargetKey, "error", err)
+				continue
+			}
+			if job.Status != store.JobPending || job.Deploy == nil {
+				// In particular, an active rollout is never superseded. It keeps its
+				// lock and finishes; only work that has not started can be displaced.
+				continue
+			}
+			run, err := s.store.Pipelines().PipelineByID(ctx, job.PipelineID)
+			if err != nil {
+				s.log.Error("read the previous deploy pipeline", "job_id", jobID, "error", err)
+				continue
+			}
+			project, err := s.store.Projects().ByID(ctx, run.ProjectID)
+			if err != nil {
+				s.log.Error("read the project of the previous deploy candidate",
+					"job_id", jobID, "error", err)
+				continue
+			}
+			place, placed, placeErr := s.deployPlaceOf(ctx, project, job)
+			if !placed {
+				target := strings.TrimSpace(asString(job.Deploy["Target"]))
+				module := strings.TrimSpace(asString(job.Deploy["Module"]))
+				place = deployPlace{
+					project: project.Path, cluster: target,
+					logicalKey: logicalDeployCandidateKey(project, module, target),
+				}
+			}
+			if placeErr != nil {
+				// The new candidate is still authoritative even if its settings moved;
+				// the recorded membership is the proof that this pending job was replaced.
+				s.log.Warn("the previous deploy target no longer resolves while superseding it",
+					"job_id", jobID, "target_key", change.TargetKey, "error", placeErr)
+			}
+			s.supersedeDeploy(ctx, queuedDeploy{jobID: job.ID, pipelineID: run.ID}, place)
+		}
+	}
+}
+
 // supersedeDeploy records a deployment that was waiting and will not run.
 func (s *Server) supersedeDeploy(ctx context.Context, one queuedDeploy, place deployPlace) {
 	job, err := s.store.Pipelines().JobByID(ctx, one.jobID)
@@ -468,11 +524,13 @@ func (s *Server) supersedeDeploy(ctx context.Context, one queuedDeploy, place de
 		return
 	}
 
-	reason := fmt.Sprintf("a newer deployment of this project was waiting for %s, so this one was not deployed",
-		place.cluster)
-	s.writeDeployInfo(ctx, job, "Waiting for "+place.cluster+" was overtaken: "+reason+
-		". Nothing was deployed and nothing broke — the newest deployment of this project is the one "+
-		"that reached the cluster.\n")
+	destination := strings.TrimSpace(place.cluster)
+	if destination == "" {
+		destination = "its target"
+	}
+	reason := fmt.Sprintf("a newer deployment candidate replaced this one for %s", destination)
+	s.writeDeployInfo(ctx, job, "This deployment was overtaken: "+reason+
+		". It will not be used as a fallback if the newer candidate fails. Nothing was deployed.\n")
 
 	if err := s.store.Pipelines().FinishJob(ctx, job.ID, store.JobSuperseded, 0, reason); err != nil {
 		s.log.Error("finish the superseded deployment", "job_id", job.ID, "error", err)
