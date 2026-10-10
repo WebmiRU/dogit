@@ -59,19 +59,28 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 	// loses a deployment somebody pushed for, over a conflict that resolved itself in a
 	// minute, and which nobody re-tried because the push was already done.
 	place, placed := s.deployPlaceOf(ctx, project, job)
-	mayStart, holder := true, false
+	mayStart, holder, enqueued := true, false, false
 	if placed {
-		mayStart, holder = s.deploys.take(place, job.ID, run.ID)
+		mayStart, holder, enqueued = s.deploys.takeWithStatus(place, job.ID, run.ID)
 	}
 	if !mayStart {
-		s.writeDeployLog(ctx, job, fmt.Sprintf(
-			"Another deployment is already under way in %s, so this one is waiting its turn "+
-				"rather than being refused. It will be deployed when that one is finished, "+
-				"unless a newer deployment of this project arrives first — in which case this "+
-				"one will be superseded and will not be deployed at all.\n", place.cluster))
-		s.log.Info("the deployment is waiting for its place",
-			"job_id", job.ID, "project", project.Path,
-			"place", place.cluster, "namespace", place.namespace)
+		// Readiness can be checked more than once for the same pending job. Only the call
+		// that actually added it to the queue writes the waiting line and announces the
+		// change to the page; repeats are not another event or another log entry.
+		if enqueued {
+			s.writeDeployLog(ctx, job, fmt.Sprintf(
+				"Another deployment is already under way in %s, so this one is waiting its turn "+
+					"rather than being refused. It will be deployed when that one is finished, "+
+					"unless a newer deployment of this project arrives first — in which case this "+
+					"one will be superseded and will not be deployed at all.\n", place.cluster))
+			s.publishPipeline(ctx, project.ID, nil, models.EventDeployQueued, map[string]any{
+				"job_id": job.ID,
+				"place":  place.cluster,
+			})
+			s.log.Info("the deployment is waiting for its place",
+				"job_id", job.ID, "project", project.Path,
+				"place", place.cluster, "namespace", place.namespace)
+		}
 		return
 	}
 
