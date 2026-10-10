@@ -261,6 +261,20 @@ spec:
               cp /run/runner-certs/client.key /run/live/client.key
               chown 1000:100 /run/live/registration.token /run/live/ca.pem /run/live/client.crt /run/live/client.key
               chmod 0400 /run/live/registration.token /run/live/ca.pem /run/live/client.crt /run/live/client.key
+              # And no further. That mask is for the four copies above and for nothing
+              # else, but `su -p` carries the environment into the runner's own process,
+              # so without this the mask outlives the moment it was wanted: git clones a
+              # checkout whose every file is 0600, the builder passes those modes to
+              # buildkit faithfully, and COPY puts a 0600 file into the image. Nothing
+              # says so — the build succeeds and the image is intact — and the image is
+              # wrong in the one way that only shows up later, when a process in the
+              # container that is not root opens a file that a developer can read and
+              # gets permission denied. An nginx serving static files is that image.
+              #
+              # Nothing here needs the mask to be kept: every credential above is closed
+              # with an explicit chmod, and the one secret the runner writes for itself,
+              # the clone key, it closes the same way.
+              umask 022
               export HOME=/home/runner USER=runner LOGNAME=runner
               exec /bin/busybox su -p -s /bin/sh -c 'exec /usr/local/bin/runner' runner
           env:
