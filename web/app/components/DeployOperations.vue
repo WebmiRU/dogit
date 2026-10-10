@@ -137,6 +137,8 @@ const logs = ref<Record<number, LogEntry[] | 'asked'>>({})
 const expandedLogs = ref<Record<number, true>>({})
 /** Superseded requests cannot overwrite a newer snapshot fetched after a state change. */
 const logRequest = ref<Record<number, number>>({})
+/** Older list requests cannot overwrite the result of a newer queue/progress event. */
+let listRequest = 0
 
 /** When this page subscribed, so that a line older than this says a hole was missed. */
 let subscribedAt = Date.now()
@@ -259,10 +261,12 @@ function reorder(answer: OperationsAnswer) {
 }
 
 async function load() {
+  const request = ++listRequest
   loading.value = true
   try {
     const answer = await api.get<OperationsAnswer>(
       `/projects/${props.projectId}/deploy-operations?${query.value}`)
+    if (request !== listRequest) return
     reason.value = answer.reason ?? ''
     reorder(answer)
     error.value = ''
@@ -274,9 +278,10 @@ async function load() {
       if (one.running && !caught.value[one.job_id]) void askLog(one.job_id)
     }
   } catch (caught) {
+    if (request !== listRequest) return
     error.value = caught instanceof ApiError ? caught.message : 'the request failed'
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
@@ -418,6 +423,7 @@ function note(payload: Record<string, unknown>) {
     // snapshot current too; its live progress is rendered from watching below.
     void refreshLog(jobID)
   }
+  if (!existingOperation) void load()
 }
 
 /**
