@@ -38,8 +38,8 @@ const commits = computed<CommitInfo[]>(() => response.value?.commits ?? [])
 </script>
 
 <template>
-  <div class="card">
-    <div class="toolbar repository-toolbar">
+  <div>
+    <div class="toolbar repository-toolbar repository-page-toolbar">
       <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
       <div class="spacer" />
       <span v-if="response" class="muted">{{ response.total }} commits</span>
@@ -49,7 +49,7 @@ const commits = computed<CommitInfo[]>(() => response.value?.commits ?? [])
     <div v-else-if="loadError" class="alert alert-error" style="margin: 16px">{{ loadError }}</div>
     <div v-else-if="commits.length === 0" class="empty">No commits on this branch yet.</div>
     <div v-else class="repository-table-wrap">
-      <table class="admin-table repository-data-table commits-table">
+      <table class="admin-table repository-flat-table commits-table">
         <thead>
           <tr><th>Commit</th><th>Author</th><th>Committed</th><th>SHA</th></tr>
         </thead>
@@ -64,7 +64,7 @@ const commits = computed<CommitInfo[]>(() => response.value?.commits ?? [])
       </table>
     </div>
 
-    <div v-if="response" class="toolbar repository-toolbar repository-pager">
+    <div v-if="response" class="toolbar repository-toolbar repository-page-toolbar repository-pager">
       <button class="btn" type="button" :disabled="page === 1" @click="page -= 1">Newer</button>
       <span class="muted">Page {{ response.page }}</span>
       <button class="btn" type="button" :disabled="!response.has_more" @click="page += 1">Older</button>
