@@ -646,6 +646,24 @@ function retiringImage(): string {
   return liveSplit.value?.previous || (props.replacing ?? '')
 }
 
+/**
+ * What colour the count of pods is drawn in.
+ *
+ * Green once every pod that was asked for is up and serving, because that is the state the
+ * word success belongs to and a reader who has to squint at whether a colour means "fine"
+ * is reading the fraction instead.
+ *
+ * Amber while the rest are still coming, and this is the whole of the condition. A rollout
+ * reading "Running 1/3" in green is a page claiming a place is fine over one with two pods
+ * missing, and the moment that matters is the moment it goes wrong — which is the same
+ * moment the colour said everything was well. So the colour follows what is true rather
+ * than what is in progress, and being in progress is not what is true.
+ */
+function podBadgeTone(): string {
+  const pods = runningPods()
+  return pods.of > 0 && pods.on >= pods.of ? 'badge-green' : 'badge-warning'
+}
+
 /** The digest the run is applying, for the title attribute on the rows. */
 const activeImage = computed(() => {
   const applied = [...activeSeen.value].reverse().find((one) => one.phase === 'apply' || one.phase === 'rollout')
@@ -1748,7 +1766,8 @@ watch(() => props.module.id, load)
                          claims the answer before there is one. -->
                     <span
                       v-if="isRunningImage(image.name)"
-                      class="badge badge-warning"
+                      class="badge"
+                      :class="podBadgeTone()"
                       :title="`${runningPods().on} of ${runningPods().of} pods are on this image right now`"
                     >
                       <!-- Without the fraction when there is none to give: a line that

@@ -225,7 +225,7 @@ func TestTheTwoCountsCannotDisagree(t *testing.T) {
 			pod := list.Items[index]
 			remember(cache, &pod, "")
 		}
-		watched := tally(cache, counts.Desired, newImage)
+		watched := tally(cache, counts.Desired, newImage, "")
 
 		if counts.Ready != watched.Ready || counts.OldUp != watched.OldUp {
 			t.Errorf("with %d new pods: the deployment is judged on %d ready/%d old, the card is drawn from %d ready/%d old",

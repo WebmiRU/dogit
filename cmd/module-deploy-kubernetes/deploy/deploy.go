@@ -494,6 +494,14 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 			request.Image); cerr == nil {
 			wanted, ready = final.Desired, final.Ready
 		}
+		// Onto the record as well as into the table, because the page is told about this
+		// deployment by reading the record and not by reading the table. Writing only to
+		// the table leaves the page with the zeros this record was created with, for ever:
+		// a card that says "Success" above "0 of 3 running the new image" for a rollout
+		// that brought three pods up, and no way to tell that page apart from a rollout
+		// that brought none. Found by watching a real one and then reading its numbers,
+		// which were right in one place and zero in the other.
+		record.PodsWanted, record.PodsReady, record.PodsRetired = wanted, ready, retired
 		if err := d.history.Counts(ctx, record.ID, wanted, ready, retired); err != nil {
 			d.logf("record what the rollout did: %v", err)
 		}
@@ -889,6 +897,10 @@ func (d *Deployer) Revert(ctx context.Context, request RevertRequest) (Deploymen
 	if final, cerr := d.client.Counts(ctx, namespace, workload, image); cerr == nil {
 		wanted, ready = final.Desired, final.Ready
 	}
+	// Onto the record too, for the same reason as a deployment's: the page reads the
+	// record, and a rollback written only to the table is a rollback the page shows as
+	// having touched no pods.
+	reverted.PodsWanted, reverted.PodsReady, reverted.PodsRetired = wanted, ready, retired
 	if err != nil {
 		failed, finishErr := d.finish(ctx, reverted, PhaseApply, StateFailed, err.Error())
 		if finishErr != nil {

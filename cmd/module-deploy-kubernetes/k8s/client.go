@@ -1117,7 +1117,7 @@ func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image 
 		for index := range fresh.Items {
 			remember(pods, &fresh.Items[index], revision)
 		}
-		counts := tally(pods, desired, image)
+		counts := tally(pods, desired, image, revision)
 
 		// A frame is only worth sending if it says something new. Silence every five
 		// seconds would fill the log with the same numbers and teach whoever reads it
@@ -1161,7 +1161,7 @@ func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image 
 		for index := range current.Items {
 			remember(pods, &current.Items[index], revision)
 		}
-		counts := tally(pods, desired, image)
+		counts := tally(pods, desired, image, revision)
 		if !said || counts != last {
 			last, said = counts, true
 			onChange(counts)
@@ -1240,7 +1240,7 @@ func (c *clusterClient) WatchCounts(ctx context.Context, namespace, name, image 
 				// Two changes that happen to leave the counts equal are still two
 				// things that happened, and the person watching wants the path, not
 				// the compressions of it.
-				counts := tally(pods, desired, image)
+				counts := tally(pods, desired, image, revision)
 				if counts != last {
 					last = counts
 					onChange(counts)
@@ -1293,8 +1293,24 @@ func remember(pods map[string]podSeen, pod *corev1.Pod, revision string) {
 // any earlier revision — the ones this rollout is replacing — and deliberately not
 // every pod that is not yet ready: a new pod still starting is not an old pod, and
 // counting it as one makes the number climb while nothing is draining.
-func tally(pods map[string]podSeen, desired int, image string) RolloutCounts {
+// tally says how many of the pods are the new ones and how many are on their way out.
+//
+// Which question is asked of each pod depends on whether the cluster has told us which
+// ReplicaSet is being rolled to. Where it has, that is the answer, because it is the only
+// one that can be had: a pod reports the digest it is actually running, while the name it
+// is deployed under is a tag for anything this instance cannot pin — and a tag and a
+// digest can never be equal, so asking by name marks every pod as one being replaced. The
+// count then never moves off zero on a rollout that is working perfectly, and the page
+// says "0 of 3 running the new image" above a card that ends in Success. Found by watching
+// one, on a place that pulls from a registry outside this instance, which is every
+// deployment whose image cannot be pinned.
+//
+// Where the cluster has not said — no revision to compare against, which is a deployment
+// that has only ever had one — the name is asked instead, because a digest-pinned image is
+// still able to answer by name.
+func tally(pods map[string]podSeen, desired int, image, revision string) RolloutCounts {
 	counts := RolloutCounts{Desired: desired}
+	byRevision := revision != ""
 	oldImage, mixed := "", false
 	for _, pod := range pods {
 		// What is on the pods, not which revision they belong to.
@@ -1310,7 +1326,24 @@ func tally(pods map[string]podSeen, desired int, image string) RolloutCounts {
 			// as saying it is on the old one.
 			continue
 		}
-		if SameImage(image, pod.image) {
+		// Whether this is one of the new pods.
+		//
+		// By revision where the cluster has named one for this pod, and by image where it
+		// has not — a pod in its first instants carries no owner yet, and falling back to
+		// its image is what keeps the drain from going up and down by one every rollout.
+		//
+		// Asking by name alone is what was wrong: a pod reports the digest it is running
+		// while the name it is deployed under is a tag for anything this instance cannot
+		// pin, so the two can never be equal and every pod is marked as one being
+		// replaced. The count never leaves zero on a rollout that is working, under a
+		// card that ends in Success, which is how this was found — on a place pulling
+		// from a registry outside this instance, which is every deployment whose image
+		// cannot be pinned.
+		isNew := SameImage(image, pod.image)
+		if pod.revision != "" && byRevision {
+			isNew = pod.new
+		}
+		if isNew {
 			if pod.ready {
 				counts.Ready++
 			}
