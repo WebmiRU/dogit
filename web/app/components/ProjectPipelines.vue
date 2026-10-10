@@ -884,11 +884,10 @@ watch(() => props.projectPath, () => load())
 
 .pipeline-toolbar {
   overflow: visible;
-  margin-bottom: 0;
-  border: 1px solid var(--pipeline-line);
-  border-bottom: 0;
-  border-radius: 11px 11px 0 0;
-  background: var(--bg-elevated);
+  margin-bottom: 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .toolbar-heading {
@@ -900,13 +899,22 @@ watch(() => props.projectPath, () => load())
 .toolbar-title { font-size: 13px; font-weight: 650; }
 .toolbar-count { color: var(--text-muted); font-size: 11px; }
 
- .pipeline-toolbar .toolbar {
+.pipeline-toolbar .pipeline-filters {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 9px;
-  padding: 12px 16px 15px;
+  padding: 0;
   margin: 0;
   border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.pipeline-toolbar .pipeline-filters select {
+  flex: 0 1 200px;
+  width: auto;
+  min-width: 160px;
+  margin: 0;
 }
 
  .search-wrap {
@@ -946,11 +954,13 @@ watch(() => props.projectPath, () => load())
   border-color: var(--pipeline-line);
 }
 
- .pipeline-table-wrap {
+.pipeline-table-wrap {
+  width: 100%;
+  margin: 0;
   overflow-x: auto;
-  border: 1px solid var(--pipeline-line);
-  border-radius: 0 0 11px 11px;
-  background: var(--bg-elevated);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
  .pipelines-loading {
@@ -993,11 +1003,10 @@ watch(() => props.projectPath, () => load())
   .summary-context { display: none; }
   .summary-value { font-size: 18px; }
   .summary-label { max-width: 88px; font-size: 10px; }
-  .pipeline-toolbar .toolbar { align-items: stretch; }
+  .pipeline-toolbar .pipeline-filters { align-items: stretch; gap: 8px; }
   .pipeline-toolbar .search-wrap { flex: 1 1 100%; min-width: 0; max-width: none; }
-  .pipeline-toolbar select { flex: 1 1 calc(50% - 8px); min-width: 0; max-width: none; }
+  .pipeline-toolbar .pipeline-filters select { flex: 1 1 calc(50% - 8px); min-width: 0; max-width: none; }
   .summary-context { display: none; }
-  .pipeline-toolbar .toolbar { gap: 8px; }
   .th-hint { display: none; }
   .stage-legend { gap: 10px; }
   .pipeline-table td.col-pipeline { min-width: 280px; }
@@ -1421,14 +1430,45 @@ td a:hover {
 .pipeline-table th.col-actions,
 .pipeline-table td.col-actions { width: 92px; min-width: 92px; text-align: right; white-space: nowrap; }
 .pipeline-table td.col-stages { width: 190px; min-width: 190px; vertical-align: middle; }
-.pipeline-table .result-primary { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-height: 24px; }
+.pipeline-table .result-primary { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-height: 0; }
 .pipeline-table .result-link {
   display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
-  gap: 5px; min-height: 58px;
+  gap: 4px; min-height: 0;
 }
 .pipeline-table .duration { margin: 0; color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.pipeline-table .commit-title { max-width: min(46vw, 620px); }
-.pipeline-table .cell-link { min-height: 56px; align-items: center; }
+.pipeline-table td.col-pipeline .cell-link {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+}
+.pipeline-table td.col-pipeline .cell-link > .number {
+  grid-column: 1;
+  grid-row: 1;
+  white-space: nowrap;
+}
+.pipeline-table td.col-pipeline .cell-link > .commit-title {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  max-width: none;
+}
+.pipeline-table td.col-pipeline .cell-link > .meta {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+  margin-top: 0;
+}
+.pipeline-table td.col-by .cell-link {
+  display: flex;
+  align-items: center;
+  min-height: 0;
+}
 .pipeline-table .stages { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .pipeline-table .stage-mark {
   display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 28px;
