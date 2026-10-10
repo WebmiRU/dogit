@@ -42,17 +42,31 @@ const error = ref('')
 /**
  * What is happening here, in one word and one lamp.
  *
- * Three states, because there are three things worth knowing and a page that shows two
- * of them at once is showing neither: something is being deployed right now, the last
- * thing that was deployed went well or went badly, or nothing has happened yet. The
- * module's own badge cannot answer this — it says whether the module is answering, and
+ * Four states, because there are four things worth knowing and a page that shows three of
+ * them at once is showing none: something is being deployed right now, something is waiting
+ * its turn, the last thing that was deployed went well or went badly, or nothing has
+ * happened yet.
+ *
+ * Waiting was folded into "under way" until a deployment could actually wait — which the
+ * queue made true — and the header then claimed work was happening over a deployment that
+ * was only standing in a queue, while the card right below it said "Waiting". Two answers to
+ * one question, and the one higher up was the one that was wrong.
+ *
+ * The module's own badge cannot answer this — it says whether the module is answering, and
  * a module answers perfectly well while a rollout is failing.
  */
 const deployBusy = ref(false)
 const lastFailed = ref(false)
+/** The deployments the core last listed as under way or waiting. */
+const listed = ref<{ running?: boolean; queued?: boolean }[]>([])
 
-const headState = computed<'working' | 'bad' | 'ok'>(() => {
+const deployWaiting = computed(
+  () => !deployBusy.value && listed.value.some((one) => one.queued === true),
+)
+
+const headState = computed<'working' | 'waiting' | 'bad' | 'ok'>(() => {
   if (deployBusy.value) return 'working'
+  if (deployWaiting.value) return 'waiting'
   if (lastFailed.value) return 'bad'
   return 'ok'
 })
@@ -60,6 +74,7 @@ const headState = computed<'working' | 'bad' | 'ok'>(() => {
 const headStateText = computed(() => {
   if (!modules.value.some((one) => one.kind.startsWith('deploy:'))) return 'no deploy module'
   if (deployBusy.value) return 'a deployment is under way'
+  if (deployWaiting.value) return 'a deployment is waiting its turn'
   if (lastFailed.value) return 'the last deployment did not finish'
   return 'nothing is deploying'
 })
@@ -82,7 +97,12 @@ async function loadHead() {
       active?: unknown[]
       finished?: { status?: string }[]
     }>(`/projects/${props.projectId}/deploy-operations?finished=1`)
-    deployBusy.value = (answer.active?.length ?? 0) > 0
+    listed.value = answer.active ?? []
+    // Read off the list rather than off its length: the list holds deployments that are
+    // under way and deployments that are waiting, and only the first is work happening.
+    // Both are "not finished", and treating them as one thing is what made this header
+    // say a deployment was under way while a queue stood still.
+    deployBusy.value = listed.value.some((one) => one.running === true)
     lastFailed.value = answer.finished?.[0]?.status !== undefined &&
       answer.finished[0].status !== 'success'
   } catch {
@@ -92,20 +112,26 @@ async function loadHead() {
   }
 }
 
-/** Follows deployments only as far as "is one happening, and did the last one work". */
+/** Follows deployments only as far as "is one happening, is one waiting, did the last one work". */
 const stopState = watchEvents({
   kinds: ['deploy.operation', 'deploy.history'],
   project: () => props.projectPath,
   onEvent: (event) => {
     if (event.kind === 'deploy.operation') {
       deployBusy.value = true
+      // Whatever was listed is no longer what the page is drawing: something started.
+      listed.value = []
       if (event.payload?.failed === true) lastFailed.value = true
       return
     }
-    // The end of a deployment: whatever it ended as is the last word on it.
+    // The end of a deployment: whatever it ended as is the last word on it. And the
+    // list is asked again rather than assumed, because the deployment that ended may
+    // have handed its place to one that was waiting — which is a header reading
+    // "under way" a moment later and cannot be worked out from here.
     deployBusy.value = false
     const status = String(event.payload?.status ?? '')
     if (status) lastFailed.value = status !== 'success'
+    void loadHead()
   },
 })
 

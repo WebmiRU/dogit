@@ -37,6 +37,11 @@
   box-shadow: 0 0 0 2px var(--bg-inset)
 .deploy-module-lamp.working .deploy-module-lamp-dot
   background: var(--yellow)
+// Waiting is neutral, for the reason the badges give: it is neither a success nor a
+// failure. Yellow would say something is happening now, which is exactly what a queue is
+// not, and it is the state a header most needs to stop over-claiming.
+.deploy-module-lamp.waiting .deploy-module-lamp-dot
+  background: var(--info)
 .deploy-module-lamp.bad .deploy-module-lamp-dot
   background: var(--red)
 .module-name
