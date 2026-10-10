@@ -1908,7 +1908,9 @@ select:focus-visible {
   width: 112px;
 }
 .repository-tree-table .cell-name {
+  display: flex;
   align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 .repository-tree-table .cell-name .tree-entry-icon {
