@@ -22,6 +22,41 @@ const emit = defineEmits<{
 
 const error = ref('')
 const pending = ref<string | null>(null)
+const open = ref<string | null>(null)
+const panel = ref({ top: 0, left: 0, up: false })
+
+const openedBranch = computed(() =>
+  open.value ? branches.value.find((branch) => branch.name === open.value) ?? null : null,
+)
+
+function showMenu(name: string, event: MouseEvent) {
+  if (open.value === name) {
+    closeMenu()
+    return
+  }
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  panel.value = {
+    top: box.bottom + 6,
+    left: box.right - 190,
+    up: window.innerHeight - box.bottom < 150,
+  }
+  open.value = name
+}
+
+function closeMenu() {
+  open.value = null
+}
+
+function onPointerAway(event: PointerEvent) {
+  if (!open.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.row-menu-panel') || target?.closest('.row-menu')) return
+  closeMenu()
+}
+
+function onKeyAway(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeMenu()
+}
 
 const allBranches = computed(() => props.refs?.branches ?? [])
 const filter = ref('')
@@ -37,7 +72,20 @@ function isDefault(name: string) {
   return name === props.defaultBranch
 }
 
+onMounted(() => {
+  window.addEventListener('pointerdown', onPointerAway, true)
+  window.addEventListener('keydown', onKeyAway)
+  window.addEventListener('scroll', closeMenu, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', onPointerAway, true)
+  window.removeEventListener('keydown', onKeyAway)
+  window.removeEventListener('scroll', closeMenu, true)
+})
+
 async function remove(name: string) {
+  closeMenu()
   if (!confirm(`Delete branch ${name}?`)) return
   pending.value = name
   error.value = ''
@@ -84,15 +132,37 @@ async function remove(name: string) {
               <td class="mono small">{{ branch.target.slice(0, 10) }}</td>
               <td class="muted small">{{ branch.created_at ? timeAgo(branch.created_at) : '—' }}</td>
               <td class="numeric">
-                <button v-if="!isDefault(branch.name)" class="btn btn-small" type="button" :disabled="pending === branch.name" @click="remove(branch.name)">
-                  {{ pending === branch.name ? 'Deleting…' : 'Delete' }}
-                </button>
+                <button
+                  v-if="!isDefault(branch.name)"
+                  class="row-menu"
+                  type="button"
+                  aria-haspopup="menu"
+                  :aria-expanded="open === branch.name"
+                  :aria-label="`Actions for branch ${branch.name}`"
+                  @click="showMenu(branch.name, $event)"
+                >⋯</button>
                 <span v-else class="muted small">—</span>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <Teleport to="#teleports">
+        <div
+          v-if="openedBranch"
+          class="row-menu-panel"
+          :class="{ up: panel.up }"
+          :style="{ top: `${panel.top}px`, left: `${panel.left}px` }"
+        >
+          <NuxtLink :to="repoViewUrl(projectPath, 'tree', openedBranch.name)" @click="closeMenu">
+            Open record
+          </NuxtLink>
+          <button class="row-menu-danger" type="button" :disabled="pending === openedBranch.name" @click="remove(openedBranch.name)">
+            {{ pending === openedBranch.name ? 'Deleting…' : 'Delete' }}
+          </button>
+        </div>
+      </Teleport>
     </div>
   </div>
 </template>
