@@ -684,6 +684,10 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 			FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
 		)
+		-- Recheck eligibility on the UPDATE target too. If concurrent statements
+		-- selected the same pending row before one acquired its lock, the loser must
+		-- not update the winner's now-running row after it wakes.
+		AND status = $3
 		RETURNING id`, JobRunning, runnerID, JobPending).Scan(&id)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
