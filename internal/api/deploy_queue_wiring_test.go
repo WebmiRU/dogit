@@ -401,7 +401,7 @@ func TestADeploymentBeingBuiltIsNotSaidToBeWaitingItsTurn(t *testing.T) {
 
 	// The row says pending, which is all a built-but-not-started deployment has to say.
 	operation := store.DeployOperation{JobID: job.ID, Status: store.JobPending}
-	if s.waitingItsTurn(operation) {
+	if s.waitingItsTurn(context.Background(), operation) {
 		t.Fatal("a deployment that has not reached the queue was said to be waiting its turn")
 	}
 
@@ -412,7 +412,7 @@ func TestADeploymentBeingBuiltIsNotSaidToBeWaitingItsTurn(t *testing.T) {
 		t.Fatalf("the second deployment did not join the queue: mayStart=%v enqueued=%v", mayStart, enqueued)
 	}
 
-	if !s.waitingItsTurn(operation) {
+	if !s.waitingItsTurn(context.Background(), operation) {
 		t.Error("a deployment standing in the queue was not said to be waiting its turn")
 	}
 }
