@@ -339,6 +339,7 @@ func (s *Server) Register(r chi.Router) {
 			// the instance, a group, or one project. Scoped like module settings, and
 			// for the same reason.
 			registries.Put("/docker/{registryID}/credentials", s.handleRegistryCredentials)
+			registries.Get("/docker/{registryID}/credentials", s.handleRegistryCredentialsRead)
 		})
 
 		authenticated.Get("/groups", s.handleListGroups)

@@ -37,6 +37,29 @@ func seedRegistry(t *testing.T, st *store.Store, login, password, source string)
 	return reg
 }
 
+// credentialChange is a whole credential for one scope, which is what most of these tests
+// write. The store takes pointers because it has to tell "not mentioned" from "nothing",
+// and a test that means all three fields says so here instead of three times over.
+func credentialChange(reg *store.DockerRegistry, scopeType string, scopeID *uuid.UUID,
+	source, login, password string) store.RegistryCredentialChange {
+
+	change := store.RegistryCredentialChange{
+		RegistryID: reg.ID,
+		ScopeType:  scopeType,
+		ScopeID:    scopeID,
+	}
+	if source != "" {
+		change.CredentialSource = &source
+	}
+	if login != "" {
+		change.Login = &login
+	}
+	if password != "" {
+		change.Password = &password
+	}
+	return change
+}
+
 func TestARegistryPushesWithTheAccountOnItsOwnRow(t *testing.T) {
 	st := dbtest.Open(t)
 	ctx := context.Background()
@@ -81,21 +104,13 @@ func TestAGroupOverridesTheInstanceAndAProjectOverridesTheGroup(t *testing.T) {
 	reg := seedRegistry(t, st, "instance-login", "instance-password", store.CredentialSourceStatic)
 	groupID, projectID := uuid.New(), uuid.New()
 
-	if err := st.RegistryCredentials().Set(ctx, store.RegistryCredential{
-		RegistryID: reg.ID,
-		ScopeType:  store.ScopeGroup,
-		ScopeID:    &groupID,
-		Login:      "group-login",
-	}); err != nil {
+	if err := st.RegistryCredentials().Set(ctx,
+		credentialChange(reg, store.ScopeGroup, &groupID, "", "group-login", "")); err != nil {
 		t.Fatalf("set group: %v", err)
 	}
-	if err := st.RegistryCredentials().Set(ctx, store.RegistryCredential{
-		RegistryID:       reg.ID,
-		ScopeType:        store.ScopeProject,
-		ScopeID:          &projectID,
-		CredentialSource: store.CredentialSourceUser,
-		Login:            "project-login",
-	}); err != nil {
+	if err := st.RegistryCredentials().Set(ctx,
+		credentialChange(reg, store.ScopeProject, &projectID,
+			store.CredentialSourceUser, "project-login", "")); err != nil {
 		t.Fatalf("set project: %v", err)
 	}
 
@@ -138,13 +153,8 @@ func TestAGroupOutsideTheRegistryDoesNotChangeIt(t *testing.T) {
 	groupID, otherGroup := uuid.New(), uuid.New()
 	projectID := uuid.New()
 
-	if err := st.RegistryCredentials().Set(ctx, store.RegistryCredential{
-		RegistryID: reg.ID,
-		ScopeType:  store.ScopeGroup,
-		ScopeID:    &groupID,
-		Login:      "group-login",
-		Password:   "group-password",
-	}); err != nil {
+	if err := st.RegistryCredentials().Set(ctx,
+		credentialChange(reg, store.ScopeGroup, &groupID, "", "group-login", "group-password")); err != nil {
 		t.Fatalf("set group: %v", err)
 	}
 
@@ -193,12 +203,8 @@ func TestSettingTheSameScopeTwiceReplacesRatherThanFails(t *testing.T) {
 	groupID := uuid.New()
 
 	for _, login := range []string{"first", "second"} {
-		if err := st.RegistryCredentials().Set(ctx, store.RegistryCredential{
-			RegistryID: reg.ID,
-			ScopeType:  store.ScopeGroup,
-			ScopeID:    &groupID,
-			Login:      login,
-		}); err != nil {
+		if err := st.RegistryCredentials().Set(ctx,
+			credentialChange(reg, store.ScopeGroup, &groupID, "", login, "")); err != nil {
 			t.Fatalf("set %q: %v", login, err)
 		}
 	}

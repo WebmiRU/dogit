@@ -87,3 +87,47 @@ export interface DockerRegistryInput {
   note?: string
   enabled?: boolean
 }
+
+/**
+ * What one scope has written down about a registry, and what a build for that scope
+ * would use.
+ *
+ * Two answers because a form needs both, and they are not the same. `credential_source`,
+ * `login` and `has_password` are what *this* scope has set: an empty one here means
+ * inherited, not cleared. `resolved` is the whole chain applied — what a build would
+ * actually push with.
+ *
+ * A form shown only the second would offer to save an inherited login as though the
+ * group had chosen it, and saving would turn an inheritance into a copy. That looks
+ * right, works, and silently stops following the thing it was inheriting from: somebody
+ * changes the instance's login, and this group quietly stays on the old account.
+ */
+export interface RegistryCredentials {
+  scope_type: 'instance' | 'group' | 'project'
+  scope_id?: string
+  /** False when this scope has written nothing at all. */
+  written: boolean
+  /** Empty when this scope set none, whatever the chain resolves to. */
+  credential_source: string
+  login: string
+  has_password: boolean
+  resolved: {
+    credential_source: string
+    login: string
+    has_password: boolean
+  }
+  /**
+   * Set when this registry cannot be pushed to at all. Said here rather than as an
+   * error, because the question asked was what this scope has written and that is
+   * answerable whatever the registry will do with a build.
+   */
+  resolved_error?: string
+}
+
+/** What a form sends when saving one scope's credential. */
+export interface RegistryCredentialsInput {
+  credential_source?: string
+  login?: string
+  /** Undefined leaves it alone; an empty string removes this scope's own password. */
+  password?: string
+}

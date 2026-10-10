@@ -12,4 +12,5 @@ useHead({ title: 'Registry' })
 
 <template>
   <RegistryDockerForm :registry-id="String(route.params.id)" />
+  <RegistryDockerCredentials :registry-id="String(route.params.id)" />
 </template>

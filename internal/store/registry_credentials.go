@@ -54,19 +54,62 @@ type ResolvedCredential struct {
 	Password string
 }
 
-// Set writes one scope's answer down, replacing what was there for that scope.
+// RegistryCredentialChange is one scope's answer on its way in, with what was not said
+// kept apart from what was said to be nothing.
 //
-// An upsert rather than an insert-or-error: this is a form somebody saves twice, and a
-// form that fails the second time is a form that makes people reload the page first.
-// The instance scope is matched on its null scope_id rather than through the unique
+// The distinction is the whole reason this is not RegistryCredential. A scope's row is a
+// set of overrides: an empty field means "inherit from above", so a write that arrived
+// with an empty field could mean either "leave that one alone" or "inherit that one". The
+// two are opposites, and a store that cannot tell them apart will do whichever it was
+// written to do to everybody — which is how setting a login for a group quietly threw away
+// the password that group had set, and the page then reported the password as inherited
+// while a build carried on failing against it. Found by using the page.
+type RegistryCredentialChange struct {
+	RegistryID uuid.UUID
+	ScopeType  string
+	ScopeID    *uuid.UUID
+	// Nil leaves the stored value alone. A pointer to an empty string clears it, which is
+	// how a scope says "inherit this one from above".
+	CredentialSource *string
+	Login            *string
+	Password         *string
+}
+
+// Set writes one scope's answer down, changing only what the change names.
+//
+// Not a replacement, and that is the point of the pointers. A scope's row is a set of
+// overrides rather than a copy of the credential, so a form that sets a password and a
+// form that later sets a login are two halves of the same arrangement — and replacing the
+// row on the second would leave the arrangement as one half, having said nothing about
+// removing it. Reading what was there and changing only what was named is also why the
+// instance scope is matched on its null scope_id rather than through the unique
 // constraint, which cannot see a null and so cannot enforce it.
-func (r *RegistryCredentialRepo) Set(ctx context.Context, c RegistryCredential) error {
+func (r *RegistryCredentialRepo) Set(ctx context.Context, c RegistryCredentialChange) error {
 	scopeID := c.ScopeID
 	if c.ScopeType == ScopeInstance {
 		scopeID = nil
 	}
 
-	_, err := r.s.pool.Exec(ctx, `
+	kept, found, err := r.one(ctx, c.RegistryID, c.ScopeType, scopeID)
+	if err != nil {
+		return err
+	}
+
+	row := RegistryCredential{}
+	if found {
+		row = *kept
+	}
+	if c.CredentialSource != nil {
+		row.CredentialSource = strings.TrimSpace(*c.CredentialSource)
+	}
+	if c.Login != nil {
+		row.Login = *c.Login
+	}
+	if c.Password != nil {
+		row.Password = *c.Password
+	}
+
+	_, err = r.s.pool.Exec(ctx, `
 		DELETE FROM docker_registry_credentials
 		WHERE registry_id = $1 AND scope_type = $2 AND scope_id IS NOT DISTINCT FROM $3`,
 		c.RegistryID, c.ScopeType, scopeID)
@@ -79,7 +122,7 @@ func (r *RegistryCredentialRepo) Set(ctx context.Context, c RegistryCredential) 
 			(registry_id, scope_type, scope_id, credential_source, login, password)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
 		c.RegistryID, c.ScopeType, scopeID,
-		strings.TrimSpace(c.CredentialSource), c.Login, c.Password)
+		row.CredentialSource, row.Login, row.Password)
 	if err != nil {
 		return fmt.Errorf("write a registry credential: %w", err)
 	}
@@ -139,6 +182,23 @@ func (r *RegistryCredentialRepo) Resolve(ctx context.Context, reg *DockerRegistr
 		}
 	}
 	return resolved, nil
+}
+
+// Scoped is what one scope has written down about one registry, and whether it wrote
+// anything at all.
+//
+// Read by scope rather than resolved, because the two answer different questions and a
+// form needs both: "what does this group have written" is what it can edit, and "what
+// would a build for it use" is what the answer has to keep meaning. A form given only
+// the second would show a login inherited from the instance as though the group had set
+// it, and saving it back would turn an inheritance into a copy — which looks the same
+// right up until the instance's login is changed and this group's quietly does not.
+func (r *RegistryCredentialRepo) Scoped(ctx context.Context, registryID uuid.UUID,
+	scopeType string, scopeID *uuid.UUID) (*RegistryCredential, bool, error) {
+	if scopeType == ScopeInstance {
+		scopeID = nil
+	}
+	return r.one(ctx, registryID, scopeType, scopeID)
 }
 
 // one is a single scope's row, and whether there was one.

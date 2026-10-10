@@ -163,7 +163,13 @@ func (s *Server) handleRegistryCredentials(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	credential := store.RegistryCredential{
+	// Passed on as pointers because every one of these is optional and the difference
+	// between the two empties is the whole of the form: not mentioned means this scope
+	// says nothing about it, and an empty string means this scope inherits it. Handing
+	// the store three plain strings would lose that, and the store would then have to
+	// choose for everybody — it chose to replace the row, and setting a login quietly
+	// threw away the password beside it.
+	change := store.RegistryCredentialChange{
 		RegistryID: reg.ID,
 		ScopeType:  scopeType,
 		ScopeID:    scopeID,
@@ -176,16 +182,16 @@ func (s *Server) handleRegistryCredentials(w http.ResponseWriter, r *http.Reques
 				store.CredentialSourceStatic, store.CredentialSourceUser))
 			return
 		}
-		credential.CredentialSource = source
+		change.CredentialSource = &source
 	}
 	if body.Login != nil {
-		credential.Login = *body.Login
+		change.Login = body.Login
 	}
 	if body.Password != nil {
-		credential.Password = *body.Password
+		change.Password = body.Password
 	}
 
-	if err := s.store.RegistryCredentials().Set(r.Context(), credential); err != nil {
+	if err := s.store.RegistryCredentials().Set(r.Context(), change); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -207,6 +213,92 @@ func (s *Server) handleRegistryCredentials(w http.ResponseWriter, r *http.Reques
 			"has_password":      resolved.Password != "",
 		},
 	})
+}
+
+// registryCredentialView is what one scope says, and what it comes to.
+//
+// Two answers because a form needs both. `written` is what this scope has set down, and it
+// is empty where this scope said nothing — an empty login here means "inherited", not
+// "cleared". `resolved` is what a build for this scope would actually push with, which is
+// the whole chain applied. A form shown only the second would offer to save an inherited
+// login as though the group had chosen it, and saving would turn an inheritance into a
+// copy that no longer follows the thing it was inheriting from.
+type registryCredentialView struct {
+	ScopeType        string     `json:"scope_type"`
+	ScopeID          *uuid.UUID `json:"scope_id,omitempty"`
+	Written          bool       `json:"written"`
+	CredentialSource string     `json:"credential_source"`
+	Login            string     `json:"login"`
+	HasPassword      bool       `json:"has_password"`
+	Resolved         struct {
+		CredentialSource string `json:"credential_source"`
+		Login            string `json:"login"`
+		HasPassword      bool   `json:"has_password"`
+	} `json:"resolved"`
+	// Set when this registry cannot be pushed to at all — marked read-only — so the page
+	// can say so where it is being edited rather than only at the moment a build fails.
+	ResolvedError string `json:"resolved_error,omitempty"`
+}
+
+// handleRegistryCredentialsRead is what one scope has written down about one registry, and
+// what a build for that scope would use.
+//
+// The read side of the same route the write side uses, and answering about one scope per
+// request rather than all three at once: a page asking for every group on the instance
+// would be a page asking for every credential on it, which is not a page anybody opened
+// a registry to see.
+func (s *Server) handleRegistryCredentialsRead(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).IsAdmin {
+		s.writeError(w, r, errForbidden("administrator rights are required"))
+		return
+	}
+
+	id, err := uuid.Parse(pathParam(r, "registryID"))
+	if err != nil {
+		s.writeError(w, r, errBadRequest("a registry id is required"))
+		return
+	}
+	reg, err := s.store.DockerRegistries().ByID(r.Context(), id)
+	if err != nil {
+		s.writeError(w, r, dockerRegistryError(err))
+		return
+	}
+
+	scopeType, scopeID, err := s.settingScope(r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+
+	view := registryCredentialView{ScopeType: scopeType, ScopeID: scopeID}
+
+	row, written, err := s.store.RegistryCredentials().Scoped(r.Context(), reg.ID, scopeType, scopeID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if written {
+		view.Written = true
+		view.CredentialSource = strings.TrimSpace(row.CredentialSource)
+		view.Login = row.Login
+		view.HasPassword = row.Password != ""
+	}
+
+	resolved, err := s.store.RegistryCredentials().Resolve(r.Context(), reg,
+		groupOf(scopeType, scopeID), projectOf(scopeType, scopeID))
+	if err != nil {
+		// Reported and not refused. The question asked here is what this scope has
+		// written, and that is answerable whatever this registry will or will not do
+		// with a build; refusing the whole answer over it would hide the form behind a
+		// fact about the registry that the page can already show.
+		view.ResolvedError = err.Error()
+	} else {
+		view.Resolved.CredentialSource = resolved.Source
+		view.Resolved.Login = resolved.Login
+		view.Resolved.HasPassword = resolved.Password != ""
+	}
+
+	s.writeJSON(w, r, http.StatusOK, view)
 }
 
 // groupOf and projectOf pick the one scope id that applies, for a resolution that is about
