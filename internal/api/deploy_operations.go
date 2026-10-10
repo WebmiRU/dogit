@@ -89,6 +89,12 @@ func (s *Server) deployOperationView(one store.DeployOperation) map[string]any {
 		"namespace":   one.Namespace,
 		"status":      one.Status,
 		"name":        one.Name,
+		// What is being deployed, so that "Running" is an answer about some code rather than
+		// about a button. Ref first because it is the thing that was pushed — the tag, or the
+		// branch — and the hash beside it because a ref on its own does not say which commit
+		// it pointed at: a tag can be moved, and two tags can point at the same commit.
+		"ref":         one.Ref,
+		"sha":         one.SHA,
 		"error":       one.Error,
 		"started_at":  millisOf(one.StartedAt),
 		"finished_at": millisOf(one.FinishedAt),

@@ -473,3 +473,44 @@ func TestTheRecentIsStillFirstWithinEachHalf(t *testing.T) {
 }
 
 func ptrTime(at time.Time) *time.Time { return &at }
+
+// A card says what code it is deploying, and the fact comes off the run rather than the job.
+//
+// "Running" is otherwise an answer about a button. The ref is the tag that was pushed, or the
+// branch it was pushed to — one column for both, which is why a single field serves somebody
+// who deploys by tag and somebody who deploys from main — and the commit beside it says which
+// one, because a tag can be moved to another commit and two tags can point at one commit.
+func TestAnOperationCarriesWhatIsBeingDeployed(t *testing.T) {
+	st := dbtest.Open(t)
+	project := dbtest.NewProject(t, st, "ops-what", nil)
+
+	const tag, sha = "v1.2.3", "9f8e7d6c5b4a39281706"
+	pipeline, err := st.Pipelines().CreatePipeline(context.Background(), project.ID, tag,
+		sha, "web", nil, nil, store.Commit{}, []store.Job{{Name: "deploy:from-any-branch"}})
+	if err != nil {
+		t.Fatalf("create the pipeline: %v", err)
+	}
+
+	var id int64
+	err = st.Pool().QueryRow(context.Background(), `
+		UPDATE jobs SET deploy = $2::jsonb WHERE pipeline_id = $1 RETURNING id`,
+		pipeline.ID, `{"Name":"from-any-branch","Module":"kubernetes","Target":"local-k3s"}`,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("make the job a deploy job: %v", err)
+	}
+
+	found, err := st.Pipelines().DeployOperations(context.Background(), project.ID, "", 10)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("read %d operations, want 1: %+v", len(found), found)
+	}
+	if found[0].Ref != tag {
+		t.Errorf("the operation names %q as what it deploys, want the tag %q", found[0].Ref, tag)
+	}
+	if found[0].SHA != sha {
+		t.Errorf("the operation names commit %q, want the one the run was made for %q", found[0].SHA, sha)
+	}
+}

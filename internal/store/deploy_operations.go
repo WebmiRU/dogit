@@ -26,6 +26,14 @@ type DeployOperation struct {
 	// Name is the deploy step's name, as the pipeline configuration named it.
 	Name string
 
+	// Ref and SHA are what is being deployed, and they come off the run rather than off the
+	// job because the job does not have them: a job says which place it deploys to and nothing
+	// about which code, and the code is the one thing a card that says "Running" most needs to
+	// answer. Ref is the tag that was pushed, or the branch it was pushed to — the same field
+	// either way, so a card does not have to know which of the two started this.
+	Ref string
+	SHA string
+
 	// StartedAt is when it began and FinishedAt when it ended, both nil for one that has not
 	// got that far. Sorted on the first with milliseconds kept, because two operations in the
 	// same second are otherwise in an order nobody can reproduce.
@@ -133,7 +141,7 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 
 	rows, err := r.s.pool.Query(ctx, `
 		SELECT j.id, j.status, j.name, j.started_at, j.finished_at, j.deploy, j.error,
-		       j.deploy_progress
+		       j.deploy_progress, p.ref, p.sha
 		FROM jobs j
 		JOIN pipelines p ON p.id = j.pipeline_id
 		WHERE p.project_id = $1 AND j.deploy IS NOT NULL
@@ -187,7 +195,7 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 			progress []byte
 		)
 		if err := rows.Scan(&op.JobID, &op.Status, &op.Name, &started, &ended, &deploy,
-			&op.Error, &progress); err != nil {
+			&op.Error, &progress, &op.Ref, &op.SHA); err != nil {
 			return nil, fmt.Errorf("scan a deploy operation: %w", err)
 		}
 		op.StartedAt, op.FinishedAt = started, ended

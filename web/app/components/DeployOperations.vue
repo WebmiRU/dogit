@@ -25,6 +25,15 @@ interface DeployOperation {
   job_id: number
   status: string
   name: string
+  /**
+   * What is being deployed: the tag that was pushed or the branch it was pushed to, and the
+   * commit it pointed at. Both from the run rather than from the job, which knows only the
+   * place. Empty on cards the core filed before this was carried — an old operation read back
+   * from a table written by an earlier version — and a card draws nothing rather than a
+   * placeholder for a fact it does not have.
+   */
+  ref?: string
+  sha?: string
   /** Which place, by name. Empty only on a page that was not told about a place. */
   place: string
   error: string
@@ -364,7 +373,15 @@ function note(payload: Record<string, unknown>) {
     else phases.add(said.phase)
   }
 
-  const saidAbout = payload.deployment as { kind?: string } | undefined
+  // The event's own account of what is being deployed. Read for two things: which steps
+  // this card draws, and what code it is deploying — the second because a card born from
+  // this event exists before any list has been asked again, and a card that cannot say
+  // what it is deploying is the exact card somebody watches most closely.
+  const saidAbout = payload.deployment as {
+    kind?: string
+    commit?: string
+    image?: string
+  } | undefined
   watching.value = {
     ...watching.value,
     [jobID]: {
@@ -408,7 +425,13 @@ function note(payload: Record<string, unknown>) {
       ...operations.value,
       { job_id: jobID, status: 'running', name: '', place: props.place ?? '',
         error: '', started_at: at ?? Date.now(),
-        finished_at: null, running: true, queued: false },
+        finished_at: null, running: true, queued: false,
+        // From the event rather than waited for: the tag is the last segment of the image
+        // being pushed, and the commit came in the same breath. The list will replace both
+        // with the run's own values when it is next asked, which is the authority; this is
+        // so the card is not blank until then.
+        ref: saidAbout?.image ? saidAbout.image.split('/').pop()?.split(':').pop() : undefined,
+        sha: saidAbout?.commit || undefined },
     ]
   }
   if (!caught.value[jobID]) {
@@ -670,6 +693,28 @@ function edgeOf(operation: DeployOperation): string {
 }
 
 
+/**
+ * What code this card is about, or nothing.
+ *
+ * The ref first, because that is the thing that was pushed — a tag or a branch, the same
+ * field either way, and the answer to "which one is this" without the page having to know
+ * which kind started it. The hash beside it because a ref alone does not say which commit
+ * it pointed at: tags get moved, and two tags can point at one commit.
+ *
+ * Seven characters of the hash rather than all of it: enough to tell two commits apart, which
+ * is the whole of its job in a card head, and short enough not to push the badge off the row.
+ */
+function whatOf(operation: DeployOperation): { ref: string; sha: string } {
+  const ref = (operation.ref ?? '').trim()
+  const sha = (operation.sha ?? '').trim()
+  return { ref, sha: ref && sha ? sha.slice(0, 7) : '' }
+}
+
+/** The full hash, for the tooltip that has room for it. */
+function fullOf(operation: DeployOperation): string {
+  return (operation.sha ?? '').trim()
+}
+
 function when(operation: DeployOperation): string {
   if (!operation.started_at) return ''
   return timeAgo(new Date(operation.started_at))
@@ -917,6 +962,14 @@ watchEvents({
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
+          <span
+            v-if="whatOf(operation).ref"
+            class="what-chip mono"
+            :title="fullOf(operation) ? `commit ${fullOf(operation)}` : undefined"
+          >{{ whatOf(operation).ref }}<span
+            v-if="whatOf(operation).sha"
+            class="sha"
+          >{{ whatOf(operation).sha }}</span></span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
           <span class="deploy-spacer" />
@@ -1006,6 +1059,14 @@ watchEvents({
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
+          <span
+            v-if="whatOf(operation).ref"
+            class="what-chip mono"
+            :title="fullOf(operation) ? `commit ${fullOf(operation)}` : undefined"
+          >{{ whatOf(operation).ref }}<span
+            v-if="whatOf(operation).sha"
+            class="sha"
+          >{{ whatOf(operation).sha }}</span></span>
           <span v-if="operation.place" class="place-chip mono">{{ operation.place }}</span>
 
           <span class="deploy-spacer" />

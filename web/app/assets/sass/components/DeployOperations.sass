@@ -76,6 +76,17 @@
   border: 1px solid var(--border)
   border-radius: 3px
   background: var(--bg)
+// What is being deployed, and deliberately without a chip of its own border: this is the
+// fact the card exists to report, and the place it is going to is already chip-shaped next
+// to it. Two boxes of equal weight would make the identifier look like one more option.
+.what-chip
+  font-size: 12px
+  padding: 1px 0
+  color: var(--text, inherit)
+  overflow-wrap: anywhere
+.what-chip .sha
+  color: var(--muted, inherit)
+  margin-left: 5px
 .operation.live
   border-left: 3px solid var(--yellow)
 .operation.queued
