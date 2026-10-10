@@ -10,7 +10,6 @@ import (
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/pipeline"
 	"github.com/ewolf/dogit/internal/store"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // When a deployment runs.
@@ -208,7 +207,7 @@ func (s *Server) waitForDeployPlace(ctx context.Context, job *store.Job,
 			s.log.Error("verify deployment candidate while waiting for the shared lock",
 				"job_id", job.ID, "error", latestErr)
 		} else if latest {
-			conn, acquired, lockErr := s.tryDeployLock(ctx, place.identity)
+			lock, acquired, lockErr := s.tryDeployLocks(ctx, place.identities)
 			if lockErr != nil {
 				s.log.Error("acquire the shared deployment lock", "job_id", job.ID,
 					"target", place.identity, "error", lockErr)
@@ -216,7 +215,7 @@ func (s *Server) waitForDeployPlace(ctx context.Context, job *store.Job,
 				claimed, stillLatest, claimErr := s.store.Pipelines().ClaimDeployCandidate(
 					ctx, keys, job.ID, run.ID)
 				if claimErr != nil {
-					s.releaseDeployLock(context.WithoutCancel(ctx), conn, place.identity)
+					s.releaseDeployLock(context.WithoutCancel(ctx), lock)
 					s.log.Error("claim the latest deployment candidate", "job_id", job.ID, "error", claimErr)
 				} else if !stillLatest {
 					s.releaseDeployLock(context.WithoutCancel(ctx), conn, place.identity)
@@ -236,7 +235,7 @@ func (s *Server) waitForDeployPlace(ctx context.Context, job *store.Job,
 				} else {
 					_ = s.store.Pipelines().SetDeployCandidateWaiting(
 						context.WithoutCancel(ctx), keys, job.ID, run.ID, false)
-					s.carryOutDeploy(ctx, job, run, project, place, conn)
+					s.carryOutDeploy(ctx, job, run, project, place, lock)
 					return
 				}
 			}
@@ -297,14 +296,14 @@ const deployTimeoutLimit = time.Hour
 
 // carryOutDeploy is the deployment itself, off the request that led to it.
 func (s *Server) carryOutDeploy(ctx context.Context, job *store.Job, run *store.Pipeline,
-	project *models.Project, place deployPlace, lockConn *pgxpool.Conn) {
+	project *models.Project, place deployPlace, lock *deployLock) {
 
 	started := time.Now()
 
 	// Unlock the shared PostgreSQL session before passing the in-process slot to the next
 	// waiter. Both are released on every exit path, including a failed module call.
 	defer s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
-	defer s.releaseDeployLock(context.WithoutCancel(ctx), lockConn, place.identity)
+	defer s.releaseDeployLock(context.WithoutCancel(ctx), lock)
 
 	finish := func(status string, reason string) {
 		elapsed := time.Since(started)
@@ -413,16 +412,19 @@ func (s *Server) deployPlaceOf(ctx context.Context, project *models.Project,
 	}
 
 	rows := s.placeRows(ctx, project, module)
-	namespace := placeNamespaceIn(rows, target)
-	if namespace == "" {
-		return place, true, fmt.Errorf("target %q has no explicit default_namespace; refusing to guess the namespace for its lock", target)
-	}
-	identity, err := physicalDeployIdentity(rows, target, namespace)
+	identities, namespaces, err := physicalDeployIdentities(rows, target)
 	if err != nil {
 		return place, true, err
 	}
-	place.namespace = namespace
-	place.identity = identity
+	if len(identities) == 0 {
+		return place, true, fmt.Errorf("target %q has no physical namespace to lock", target)
+	}
+	place.identities = identities
+	place.namespace = strings.Join(namespaces, ",")
+	// A local slot represents this whole fan-out target. PostgreSQL still locks every
+	// individual physical namespace, so other target names that overlap only part of
+	// this set are serialized correctly across processes too.
+	place.identity = strings.Join(identities, "\x00")
 	return place, true, nil
 }
 
