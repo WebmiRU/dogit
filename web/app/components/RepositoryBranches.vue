@@ -75,9 +75,11 @@ async function remove(name: string) {
           <tbody>
             <tr v-for="branch in branches" :key="branch.name">
               <td>
-                <NuxtLink class="name" :to="repoViewUrl(projectPath, 'tree', branch.name)">{{ branch.name }}</NuxtLink>
-                <span v-if="isDefault(branch.name)" class="badge badge-green badge-label">Default</span>
-                <span v-if="branch.name === refName" class="badge badge-neutral badge-label">Current</span>
+                <div class="branch-name-line">
+                  <NuxtLink class="name" :to="repoViewUrl(projectPath, 'tree', branch.name)">{{ branch.name }}</NuxtLink>
+                  <span v-if="isDefault(branch.name)" class="badge badge-green badge-label">Default</span>
+                  <span v-if="branch.name === refName" class="badge badge-neutral badge-label">Current</span>
+                </div>
               </td>
               <td class="mono small">{{ branch.target.slice(0, 10) }}</td>
               <td class="muted small">{{ branch.created_at ? timeAgo(branch.created_at) : '—' }}</td>
