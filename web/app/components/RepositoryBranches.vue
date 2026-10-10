@@ -56,8 +56,8 @@ async function remove(name: string) {
   <div>
     <div v-if="error" class="alert alert-error">{{ error }}</div>
 
-    <div class="card" style="margin-bottom: 16px">
-      <div class="toolbar repository-toolbar">
+    <div>
+      <div class="toolbar repository-toolbar repository-page-toolbar">
         <strong>Branches ({{ allBranches.length }})</strong>
         <div class="spacer" />
         <div class="field" style="max-width: 260px; margin: 0">
@@ -70,7 +70,7 @@ async function remove(name: string) {
         No branch matches “{{ filter }}”.
       </div>
       <div v-else class="repository-table-wrap">
-        <table class="admin-table repository-data-table branches-table">
+        <table class="admin-table repository-flat-table branches-table">
           <thead><tr><th>Branch</th><th>Last commit</th><th>Updated</th><th class="numeric">Actions</th></tr></thead>
           <tbody>
             <tr v-for="branch in branches" :key="branch.name">
