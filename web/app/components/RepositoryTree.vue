@@ -71,7 +71,7 @@ function icon(entry: TreeEntry) {
 
 <template>
   <div>
-    <div class="toolbar repository-toolbar repository-tree-toolbar">
+    <div class="toolbar repository-toolbar repository-page-toolbar">
       <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
 
       <div class="breadcrumbs" v-if="tree">
