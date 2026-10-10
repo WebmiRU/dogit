@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -59,7 +60,7 @@ func (s *Server) handleProjectDeployOperations(w http.ResponseWriter, r *http.Re
 		// active rows is actually queued is asked separately, below, from the queue itself.
 		switch {
 		case one.Running(), one.Queued():
-			active = append(active, s.deployOperationView(one))
+			active = append(active, s.deployOperationView(r.Context(), one))
 		case one.Finished():
 			complete = append(complete, s.deployOperationView(one))
 		}
@@ -77,7 +78,7 @@ func (s *Server) handleProjectDeployOperations(w http.ResponseWriter, r *http.Re
 // every event about this deployment carries it, and it is the only thing that tells two
 // deployments apart. Milliseconds are kept because two deployments in the same second are ordinary
 // and a page whose cards swap places between two loads cannot be read.
-func (s *Server) deployOperationView(one store.DeployOperation) map[string]any {
+func (s *Server) deployOperationView(ctx context.Context, one store.DeployOperation) map[string]any {
 	return map[string]any{
 		"job_id": one.JobID,
 		// The place by name, which is how a deploy step says it and how the page knows its
@@ -99,7 +100,7 @@ func (s *Server) deployOperationView(one store.DeployOperation) map[string]any {
 		"started_at":  millisOf(one.StartedAt),
 		"finished_at": millisOf(one.FinishedAt),
 		"running":     one.Running(),
-		"queued":      s.waitingItsTurn(one),
+		"queued":      s.waitingItsTurn(ctx, one),
 		// What the operation had last said about itself, so that a page opened halfway
 		// through it draws the step it is on rather than seven steps not yet reached. Absent
 		// rather than empty when nothing is known, because a page cannot tell an empty object
@@ -115,11 +116,18 @@ func (s *Server) deployOperationView(one store.DeployOperation) map[string]any {
 // apart: a deployment that is being built has not started, and a deployment waiting its turn
 // has not started. The first is not waiting for anything — it is working — and a header that
 // calls it waiting is wrong for the whole of its build, on every deploy, forever.
-func (s *Server) waitingItsTurn(one store.DeployOperation) bool {
+func (s *Server) waitingItsTurn(ctx context.Context, one store.DeployOperation) bool {
 	if one.Running() || one.Finished() {
 		return false
 	}
-	return s.deploys.waitingFor(one.JobID)
+	waiting, err := s.store.Pipelines().DeployCandidateWaiting(ctx, one.JobID)
+	if err != nil {
+		// If shared coordination cannot be read, the local queue remains useful for the
+		// instance serving this request. This affects only the label, never the lock.
+		s.log.Warn("read durable deployment waiting state", "job_id", one.JobID, "error", err)
+		return s.deploys.waitingFor(one.JobID)
+	}
+	return waiting || s.deploys.waitingFor(one.JobID)
 }
 
 // millisOf is a moment as a number, or nil when there was no such moment.
