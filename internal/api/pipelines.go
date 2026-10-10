@@ -156,12 +156,40 @@ func (s *Server) startRun(ctx context.Context, project *models.Project, config *
 		author = &id
 	}
 
-	created, err := s.store.Pipelines().CreatePipeline(ctx, project.ID, ref.Name, ref.SHA,
-		string(source), variablesFor(config, ref), author, commit, jobs)
+	// Register each deploy destination before runners are announced. This makes the newest
+	// pipeline the only eligible candidate even while its build and push are still running.
+	// Resolve the physical namespace where possible; on a settings error, retain the logical
+	// project/target key so the newer candidate still overtakes an older one, but it will
+	// fail closed rather than ever deploying without a physical lock identity.
+	candidateKeys := make(map[int][]string)
+	for index := range jobs {
+		if jobs[index].Deploy == nil {
+			continue
+		}
+		place, placed, placeErr := s.deployPlaceOf(ctx, project, &jobs[index])
+		if !placed {
+			target := strings.TrimSpace(asString(jobs[index].Deploy["Target"]))
+			module := strings.TrimSpace(asString(jobs[index].Deploy["Module"]))
+			place.logicalKey = logicalDeployCandidateKey(project, module, target)
+		}
+		candidateKeys[index] = place.candidateKeys()
+		if placeErr != nil {
+			s.log.Warn("deployment candidate has no resolved physical identity yet",
+				"project", project.Path, "target", asString(jobs[index].Deploy["Target"]),
+				"pipeline_ref", ref.Name, "error", placeErr)
+		}
+	}
+
+	created, replacedCandidates, err := s.store.Pipelines().CreatePipelineWithCandidates(ctx,
+		project.ID, ref.Name, ref.SHA, string(source), variablesFor(config, ref),
+		author, commit, jobs, candidateKeys)
 	if err != nil {
 		return nil, err
 	}
 	run := created
+	// Candidate registration committed with the pipeline. Mark the previous candidate's
+	// pending deploy steps superseded before any runner can begin building the new commit.
+	s.supersedeReplacedDeployCandidates(context.WithoutCancel(ctx), replacedCandidates)
 
 	s.log.Info("pipeline created", "project", project.Path, "pipeline", run.IID,
 		"ref", ref.Name, "source", string(source), "by", actor)
