@@ -70,8 +70,8 @@ function icon(entry: TreeEntry) {
 </script>
 
 <template>
-  <div class="card">
-    <div class="toolbar repository-toolbar">
+  <div>
+    <div class="toolbar repository-toolbar repository-tree-toolbar">
       <BranchSelector :refs="refs" :ref-name="refName" @change="emit('change-ref', $event)" />
 
       <div class="breadcrumbs" v-if="tree">
