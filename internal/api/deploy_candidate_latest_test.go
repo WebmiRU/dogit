@@ -82,7 +82,7 @@ func TestNewestCandidateOvertakesEveryPendingStepBeforeItsBuildFinishes(t *testi
 	}
 
 	s.supersedeReplacedDeployCandidates(ctx, changes)
-	firstJobs, err = st.store.Pipelines().JobsOfPipeline(ctx, first.ID)
+	firstJobs, err = s.store.Pipelines().JobsOfPipeline(ctx, first.ID)
 	if err != nil {
 		t.Fatalf("read previous pipeline after replacement: %v", err)
 	}
