@@ -8,7 +8,18 @@
 .operations
   display: flex
   flex-direction: column
+  align-items: stretch
   gap: 16px
+  width: 100%
+  min-width: 0
+  max-width: none
+.operations > .operation
+  display: block
+  align-self: stretch
+  width: 100%
+  min-width: 0
+  max-width: none
+  box-sizing: border-box
 .deploy-block-head
   display: flex
   align-items: baseline
