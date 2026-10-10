@@ -126,6 +126,46 @@ const words = computed(() => {
 
 const rows = ref<ModuleRow[]>([])
 const available = ref<ModuleRowsAnswer['modules']>([])
+const route = useRoute()
+const openTargetId = ref<string | null>(null)
+const targetPanel = ref({ top: 0, left: 0, up: false })
+
+const openedTarget = computed(() =>
+  openTargetId.value ? rows.value.find((row) => row.id === openTargetId.value) ?? null : null,
+)
+
+function showTargetMenu(row: ModuleRow, event: MouseEvent) {
+  if (openTargetId.value === row.id) {
+    closeTargetMenu()
+    return
+  }
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  targetPanel.value = {
+    top: box.bottom + 6,
+    left: box.right - 190,
+    up: window.innerHeight - box.bottom < 150,
+  }
+  openTargetId.value = row.id
+}
+
+function closeTargetMenu() {
+  openTargetId.value = null
+}
+
+function targetRecordUrl(row: ModuleRow): string {
+  return `${route.fullPath.split('#')[0]}#module-target-${row.id}`
+}
+
+function onTargetMenuPointerAway(event: PointerEvent) {
+  if (!openTargetId.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.row-menu-panel') || target?.closest('.row-menu')) return
+  closeTargetMenu()
+}
+
+function onTargetMenuKeyAway(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeTargetMenu()
+}
 /** What stopped applying and was removed, said once and then left alone. */
 const stale = ref('')
 const loading = ref(true)
@@ -446,6 +486,7 @@ async function toggle(row: ModuleRow) {
 }
 
 async function remove(row: ModuleRow) {
+  closeTargetMenu()
   busy.value = row.id
   try {
     await api.del(`/module-targets/${row.id}?${scopeQuery.value}`)
@@ -554,7 +595,18 @@ async function test(row: ModuleRow) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  window.addEventListener('pointerdown', onTargetMenuPointerAway, true)
+  window.addEventListener('keydown', onTargetMenuKeyAway)
+  window.addEventListener('scroll', closeTargetMenu, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', onTargetMenuPointerAway, true)
+  window.removeEventListener('keydown', onTargetMenuKeyAway)
+  window.removeEventListener('scroll', closeTargetMenu, true)
+})
 </script>
 
 <template>
@@ -695,7 +747,7 @@ onMounted(load)
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in rows" :key="row.id">
+          <tr v-for="row in rows" :id="`module-target-${row.id}`" :key="row.id">
             <td v-if="severalModules">
               <strong>{{ moduleName(row) }}</strong>
               <div class="muted small mono">{{ row.module_kind }}</div>
@@ -769,13 +821,13 @@ onMounted(load)
               </button>
               <button
                 v-if="canManage && row.scope_type === props.scope"
-                class="btn btn-small btn-danger"
+                class="row-menu"
                 type="button"
-                :disabled="busy === row.id"
-                @click="remove(row)"
-              >
-                Delete
-              </button>
+                aria-haspopup="menu"
+                :aria-expanded="openTargetId === row.id"
+                :aria-label="`Actions for ${describe(row)}`"
+                @click="showTargetMenu(row, $event)"
+              >⋯</button>
               </div>
             </td>
           </tr>
@@ -787,6 +839,22 @@ onMounted(load)
         says about notifications decides whether it speaks; this list says where a
         message would go.
       </div>
+
+      <Teleport to="#teleports">
+        <div
+          v-if="openedTarget"
+          class="row-menu-panel"
+          :class="{ up: targetPanel.up }"
+          :style="{ top: `${targetPanel.top}px`, left: `${targetPanel.left}px` }"
+        >
+          <NuxtLink :to="targetRecordUrl(openedTarget)" @click="closeTargetMenu">
+            Open record
+          </NuxtLink>
+          <button class="row-menu-danger" type="button" :disabled="busy === openedTarget.id" @click="remove(openedTarget)">
+            {{ busy === openedTarget.id ? 'Deleting…' : 'Delete' }}
+          </button>
+        </div>
+      </Teleport>
 
       <form v-if="editing" class="card row-form" @submit.prevent="save">
         <div class="card-body">
