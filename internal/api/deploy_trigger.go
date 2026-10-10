@@ -497,71 +497,68 @@ func (s *Server) supersedeDeploy(ctx context.Context, one queuedDeploy, place de
 }
 
 // startQueuedDeploy begins the deployment that was promoted, which already holds its place.
-func (s *Server) startQueuedDeploy(ctx context.Context, one *queuedDeploy, place deployPlace) {
-	placeCtx := context.WithoutCancel(ctx)
-	retryPending := true
-	defer func() {
-		if !retryPending {
-			return
-		}
-		// The promoted job owns the slot already. If loading its description fails,
-		// return the slot and let the pending job take another turn rather than blocking
-		// every deployment behind a transient read error.
-		s.releaseDeployPlace(placeCtx, place, one.jobID)
-		s.startDeployIfReady(placeCtx, one.pipelineID)
-	}()
-
+func (s *Server) startQueuedDeploy(ctx context.Context, one *queuedDeploy, heldPlace deployPlace) {
 	run, err := s.store.Pipelines().PipelineByID(ctx, one.pipelineID)
 	if err != nil {
 		s.log.Error("read the run to deploy", "job_id", one.jobID, "error", err)
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
 		return
 	}
 	job, err := s.store.Pipelines().JobByID(ctx, one.jobID)
 	if err != nil {
 		s.log.Error("read the deployment waiting to run", "job_id", one.jobID, "error", err)
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
 		return
 	}
 	if job.Status != store.JobPending {
-		// It stopped waiting while the place was held — cancelled, most likely.
-		// It never started, so hand the slot on without retrying this terminal job.
-		retryPending = false
 		s.log.Info("a deployment stopped waiting before its turn came",
 			"job_id", one.jobID, "status", job.Status)
-		s.releaseDeployPlace(placeCtx, place, one.jobID)
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
 		return
 	}
 	project, err := s.store.Projects().ByID(ctx, run.ProjectID)
 	if err != nil {
 		s.log.Error("read the project to deploy", "project_id", run.ProjectID, "error", err)
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
 		return
 	}
 
-	claimed, err := s.store.Pipelines().ClaimDeployJob(ctx, job.ID)
-	if !claimed {
-		if err != nil {
-			s.log.Error("claim the queued deployment", "job_id", job.ID, "error", err)
-		}
-		retryPending = false
-		s.releasePlaceAfterLostClaim(placeCtx, place, job.ID)
-		if current, readErr := s.store.Pipelines().JobByID(placeCtx, job.ID); readErr == nil &&
-			current.Status == store.JobPending {
-			s.startDeployIfReady(placeCtx, one.pipelineID)
-		}
+	place, placed, placeErr := s.deployPlaceOf(ctx, project, job)
+	if placeErr != nil {
+		s.failUnstartableDeploy(ctx, job, run, project, place,
+			"Cannot safely resolve the deployment destination: "+placeErr.Error())
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
 		return
 	}
-	// As with the direct path, a claim can succeed even if its follow-up pipeline
-	// timestamp update failed. The job row already says running; it still needs a worker.
+	if !placed || place.identity == "" || place.namespace == "" {
+		s.failUnstartableDeploy(ctx, job, run, project, place,
+			"Cannot safely identify the physical cluster and namespace; refusing to deploy without an exclusive lock")
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
+		return
+	}
+	if place.queueKey() != heldPlace.queueKey() {
+		// Target settings changed while the deployment waited. Do not use a lock for the
+		// old destination to deploy into the new one; release the old slot and resolve again.
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
+		s.startDeployIfReady(context.WithoutCancel(ctx), one.pipelineID)
+		return
+	}
+
+	latest, err := s.store.Pipelines().IsLatestDeployCandidate(ctx, place.candidateKeys(), run.ID)
 	if err != nil {
-		s.log.Error("claimed the queued deployment but could not update its pipeline",
-			"job_id", job.ID, "error", err)
+		s.failUnstartableDeploy(ctx, job, run, project, place,
+			"Cannot verify this deployment is still the latest candidate: "+err.Error())
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
+		return
 	}
-	retryPending = false
+	if !latest {
+		s.supersedeDeploy(context.WithoutCancel(ctx),
+			queuedDeploy{jobID: job.ID, pipelineID: run.ID}, place)
+		s.releaseDeployPlace(context.WithoutCancel(ctx), heldPlace, one.jobID)
+		return
+	}
 
-	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeoutLimit)
-	go func() {
-		defer cancel()
-		s.carryOutDeploy(detached, job, run, project)
-	}()
+	s.launchDeployWorker(ctx, job, run, project, place)
 }
 
 // pendingDeploy is the deployment waiting to run, and whether the run has earned it.
