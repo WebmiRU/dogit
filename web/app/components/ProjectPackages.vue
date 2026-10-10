@@ -9,6 +9,7 @@
  * from the module itself, which is the only place that knows what it holds.
  */
 import { timeAgo } from '~/utils/format'
+import { packageTagId, packageTagUrl } from '~/utils/package-tag-url'
 
 interface RegistryAnswer {
   project: string
@@ -490,7 +491,11 @@ function shortDigest(digest: string) {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="tag in visibleTags(entry.repository.name, entry.tags)" :key="tag.name">
+                <tr
+                  v-for="tag in visibleTags(entry.repository.name, entry.tags)"
+                  :id="packageTagId(entry.repository.name, tag.name)"
+                  :key="tag.name"
+                >
                   <td class="mono">{{ tag.name }}</td>
                   <td class="mono muted small">{{ shortDigest(tag.digest) }}</td>
                   <!-- A relative date with the exact one behind it: this column is
@@ -550,6 +555,9 @@ function shortDigest(digest: string) {
           :class="{ up: panel.up }"
           :style="{ top: `${panel.top}px`, left: `${panel.left}px` }"
         >
+          <NuxtLink :to="packageTagUrl(props.projectPath, openedTag.repository, openedTag.tag.name)" @click="closeMenu">
+            Open record
+          </NuxtLink>
           <button
             class="row-menu-danger"
             type="button"
