@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -56,9 +57,11 @@ func (s *Server) tryDeployLocks(ctx context.Context, identities []string) (*depl
 
 	acquired := make([]string, 0, len(identities))
 	unlockPartial := func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
 		for index := len(acquired) - 1; index >= 0; index-- {
 			var released bool
-			if err := conn.QueryRow(context.WithoutCancel(ctx),
+			if err := conn.QueryRow(cleanupCtx,
 				`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, acquired[index]).Scan(&released); err != nil {
 				s.log.Error("release a partially acquired deployment lock",
 					"target", acquired[index], "error", err)
@@ -89,10 +92,12 @@ func (s *Server) releaseDeployLock(ctx context.Context, lock *deployLock) {
 	if lock == nil || lock.conn == nil {
 		return
 	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	for index := len(lock.identities) - 1; index >= 0; index-- {
 		identity := lock.identities[index]
 		var released bool
-		if err := lock.conn.QueryRow(ctx,
+		if err := lock.conn.QueryRow(cleanupCtx,
 			`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, identity).Scan(&released); err != nil {
 			s.log.Error("release the shared deployment lock", "target", identity, "error", err)
 		} else if !released {
