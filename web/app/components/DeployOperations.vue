@@ -65,6 +65,8 @@ interface Watching {
 
 const props = defineProps<{
   projectId: string
+  /** Scope the event feed to this project, as well as scoping every request. */
+  projectPath?: string
   /**
    * The name of the place this card is about, or empty for a page that was not told about one.
    *
@@ -129,8 +131,12 @@ const loading = ref(false)
 const error = ref('')
 const watching = ref<Record<number, Watching>>({})
 
-/** The log of a finished operation, fetched on demand and kept per operation. */
+/** The log snapshot, fetched on demand and kept per operation. */
 const logs = ref<Record<number, LogEntry[] | 'asked'>>({})
+/** Which folded logs are open, so a queue/outcome change refreshes only what is being read. */
+const expandedLogs = ref<Record<number, true>>({})
+/** Superseded requests cannot overwrite a newer snapshot fetched after a state change. */
+const logRequest = ref<Record<number, number>>({})
 
 /** When this page subscribed, so that a line older than this says a hole was missed. */
 let subscribedAt = Date.now()
@@ -173,14 +179,18 @@ const live = computed(() =>
   cards.value.filter((one) => (one.running || caught.value[one.job_id]) && !putAway.value[one.job_id]))
 
 /** The record, as it always was: every operation, whether or not anybody watched it. */
-const history = computed(() => cards.value)
+// A live card already is the record while it is visible. Drawing the same job again below
+// creates a second log snapshot beside the socket-driven log, and the snapshot then goes stale.
+const history = computed(() => {
+  const liveIDs = new Set(live.value.map((one) => one.job_id))
+  return cards.value.filter((one) => !liveIDs.has(one.job_id))
+})
 
 /** Everything the core sends in one answer is both halves; the sort is by what was begun. */
 function reorder(answer: OperationsAnswer) {
-  // The operations endpoint can classify an operation as queued while its durable progress
-  // snapshot already contains phase updates. Progress is stronger evidence: a queued operation
-  // has not emitted deployment phases yet. Without reconciling these fields, a page refresh paints
-  // an in-flight deployment blue ("Waiting") and lateProgress() discards its active arrows.
+  const wasQueued = new Set(operations.value.filter((one) => one.queued).map((one) => one.job_id))
+  // The core's queue state is authoritative. A progress snapshot may contain phases from before
+  // the job started waiting; that is history, not evidence it is running now.
   const normalize = (operation: DeployOperation): DeployOperation => {
     // What the core says about waiting is the core's answer, and a phase left in a
     // deployment's progress from before it started waiting is not work happening now.
@@ -211,6 +221,13 @@ function reorder(answer: OperationsAnswer) {
   }
   const next = [...(answer.active ?? []), ...(answer.finished ?? [])].map(normalize)
   operations.value = next
+  // A queued card can have its log open when it is promoted. Read the persisted preamble again so
+  // the live log keeps the queue message and the core's setup lines before socket progress begins.
+  for (const one of next) {
+    if (wasQueued.has(one.job_id) && one.running && logs.value[one.job_id]) {
+      void refreshLog(one.job_id)
+    }
+  }
 
   // A reconnect is a fresh snapshot, not merely a request to redraw the list: whatever the page
   // missed while the socket was down is in here and nowhere else.
@@ -320,6 +337,16 @@ function note(payload: Record<string, unknown>) {
     void load()
   }
 
+  const existingOperation = operations.value.find((one) => one.job_id === jobID)
+  const wasQueued = existingOperation?.queued === true
+  const isOver = existingOperation && (
+    existingOperation.finished_at != null ||
+    ['success', 'failed', 'error', 'refused', 'skipped', 'superseded',
+      'canceled', 'interrupted', 'abandoned'].includes(existingOperation.status)
+  )
+  // A late event must not resurrect an operation the durable list already says is over.
+  if (isOver) return
+
   const said: DeployProgress = {
     phase: String(payload.phase ?? ''),
     message: payload.message,
@@ -365,16 +392,35 @@ function note(payload: Record<string, unknown>) {
   // it without waiting for a reload. The start moment is the line's own: the core's answer will
   // replace it with the real one a moment later, and a card that moved once on load is better than
   // a deployment that did not appear until a reload.
-  if (!caught.value[jobID]) {
-    caught.value = { ...caught.value, [jobID]: true }
-  }
-  if (!operations.value.some((one) => one.job_id === jobID)) {
+  // A progress event is proof this job has actually begun. The queued record remains in
+  // operations until the next list fetch otherwise, and the card keeps saying Waiting while
+  // its arrows and log are already moving.
+  if (existingOperation) {
+    operations.value = operations.value.map((one) => one.job_id === jobID
+      ? {
+          ...one,
+          status: 'running',
+          running: true,
+          queued: false,
+          started_at: one.started_at ?? at ?? Date.now(),
+          finished_at: null,
+        }
+      : one)
+  } else {
     operations.value = [
       ...operations.value,
       { job_id: jobID, status: 'running', name: '', place: props.place ?? '',
-        error: '', started_at: Date.now(),
+        error: '', started_at: at ?? Date.now(),
         finished_at: null, running: true, queued: false },
     ]
+  }
+  if (!caught.value[jobID]) {
+    caught.value = { ...caught.value, [jobID]: true }
+    // Fetch the log that predates this page's subscription. The live events extend it below.
+    if (wasQueued) void refreshLog(jobID)
+    else void askLog(jobID)
+  } else if (wasQueued) {
+    void refreshLog(jobID)
   }
 }
 
@@ -389,17 +435,42 @@ function note(payload: Record<string, unknown>) {
 async function askLog(jobID: number) {
   if (logs.value[jobID]) return
   logs.value = { ...logs.value, [jobID]: 'asked' }
+  await refreshLog(jobID)
+}
+
+/** Reads a current log snapshot. A newer read always wins over an older request still in flight. */
+async function refreshLog(jobID: number) {
+  const request = (logRequest.value[jobID] ?? 0) + 1
+  logRequest.value = { ...logRequest.value, [jobID]: request }
+  const previous = logOf(jobID)
 
   try {
     const answer = await api.get<{ entries?: LogEntry[] }>(
       `/projects/${props.projectId}/deploy-operations/${jobID}/log`)
+    if (logRequest.value[jobID] !== request) return
     logs.value = { ...logs.value, [jobID]: answer.entries ?? [] }
   } catch {
-    // A log that could not be read is drawn as "not recorded" rather than as a failure card: the
-    // deployment's own outcome is on the card above it and is unaffected by whether its output is
-    // readable.
-    logs.value = { ...logs.value, [jobID]: [] }
+    if (logRequest.value[jobID] !== request) return
+    // Keep a previous snapshot on a transient read error; do not turn it into a false empty log.
+    if (!previous) logs.value = { ...logs.value, [jobID]: [] }
   }
+}
+
+/** Refresh only logs somebody has open when another operation changes the queue or finishes. */
+async function refreshExpandedLogs() {
+  await Promise.all(Object.keys(expandedLogs.value).map((jobID) => refreshLog(Number(jobID))))
+}
+
+function toggleHistoryLog(jobID: number, event: Event) {
+  const details = event.currentTarget as HTMLDetailsElement
+  if (details.open) {
+    expandedLogs.value = { ...expandedLogs.value, [jobID]: true }
+    void askLog(jobID)
+    return
+  }
+  const next = { ...expandedLogs.value }
+  delete next[jobID]
+  expandedLogs.value = next
 }
 
 /**
@@ -421,6 +492,46 @@ function watched(jobID: number): Watching | null {
 function logOf(jobID: number): LogEntry[] | undefined {
   const found = logs.value[jobID]
   return Array.isArray(found) ? found : undefined
+}
+
+/** The exact line format the core writes for a structured progress event. */
+function progressLogText(line: DeployProgress): string {
+  let text = ['prepare', 'pre', 'pull', 'apply', 'rollout', 'post'].includes(line.phase)
+    ? `${line.phase}: `
+    : ''
+
+  if ((line.desired ?? 0) > 0) {
+    text += `${line.ready ?? 0} of ${line.desired} ready`
+    if (line.message) text += ' — '
+  } else if ((line.of ?? 0) > 0) {
+    text += `${line.step ?? 0} of ${line.of} — `
+  }
+
+  return text + line.message
+}
+
+/**
+ * Log lines already covered by the live stream are not shown a second time from the snapshot.
+ * This preserves the pre-subscription output (including the "waiting" note) without showing a
+ * duplicate copy of every line that is now arriving over the socket.
+ */
+function earlierLogOf(jobID: number): LogEntry[] {
+  const entries = logOf(jobID) ?? []
+  const liveLines = watching.value[jobID]?.seen ?? []
+  const remaining = new Map<string, number>()
+
+  for (const line of liveLines) {
+    const key = `${line.failed ? 'err' : 'out'}\u0000${progressLogText(line)}`
+    remaining.set(key, (remaining.get(key) ?? 0) + 1)
+  }
+
+  return entries.filter((entry) => {
+    const key = `${entry.stream}\u0000${entry.text}`
+    const count = remaining.get(key) ?? 0
+    if (count === 0) return true
+    remaining.set(key, count - 1)
+    return false
+  })
 }
 
 /**
@@ -585,16 +696,21 @@ const tone: Record<string, string> = {
 }
 
 watchEvents({
+  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued'],
+  project: () => props.projectPath,
   // The core's own line about a deployment, relayed whole. Many a minute while a rollout runs, so
   // this is the only path that has to be cheap.
   onEvent: (event) => {
-    if (event.kind === 'deploy.history') {
-      // A deployment ended, and this is the only line that says so. Without it the list is
-      // read once and never again, so a card stays "Running" with its last phase open for as
-      // long as the page is left open — a rollout that finished in a third of a second went on
-      // saying "Bring the new pods up" for five minutes, with the line that closed it sitting
-      // in the log underneath.
+    if (event.kind === 'deploy.queued') {
+      // Waiting produces no progress line: re-read the list when a job joins the queue so it is
+      // visible immediately rather than waiting for the current rollout to finish.
       void load()
+      return
+    }
+    if (event.kind === 'deploy.history') {
+      // A deployment ended, and this is the only line that says so. Refresh the list and any log
+      // the reader already has open: a waiter may have been promoted or overtaken in the meantime.
+      void load().then(refreshExpandedLogs)
       return
     }
     if (event.kind !== 'deploy.operation') return
@@ -808,11 +924,25 @@ watchEvents({
           :active-phases="openPhases(operation)"
         />
 
-        <DeployLog
-          v-if="watched(operation.job_id)"
-          :lines="logLines(operation.job_id)"
-          :plan="planOf(operation.job_id)"
-        />
+        <template v-if="watched(operation.job_id)">
+          <div v-if="earlierLogOf(operation.job_id).length" class="operation-log-wrap">
+            <p class="muted small">Earlier output</p>
+            <ul class="operation-log">
+              <li
+                v-for="(entry, index) in earlierLogOf(operation.job_id)"
+                :key="index"
+                :class="entry.stream"
+              >
+                <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
+                <span>{{ entry.text }}</span>
+              </li>
+            </ul>
+          </div>
+          <DeployLog
+            :lines="logLines(operation.job_id)"
+            :plan="planOf(operation.job_id)"
+          />
+        </template>
         <div v-else class="operation-log-wrap">
           <ul v-if="logOf(operation.job_id)?.length" class="operation-log">
             <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
@@ -852,7 +982,7 @@ watchEvents({
           {{ verdictOf(operation) }}
         </p>
 
-        <details class="log" @toggle="askLog(operation.job_id)">
+        <details class="log" @toggle="toggleHistoryLog(operation.job_id, $event)">
           <summary class="muted small">{{ logLabel(operation.job_id) }}</summary>
           <ul v-if="logOf(operation.job_id)?.length" class="operation-log">
             <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
