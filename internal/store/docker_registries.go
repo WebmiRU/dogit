@@ -205,10 +205,20 @@ func (r *DockerRegistryRepo) ByID(ctx context.Context, id uuid.UUID) (*DockerReg
 }
 
 // ByURL is one registry by the address it was written down under, compared without regard
-// to case, which is the same comparison the unique constraint makes.
+// to case and without regard to the scheme.
+//
+// The scheme because addresses are compared without it everywhere else — a place writes
+// "https://registry.example.com" and a caller hands over "registry.example.com" once it
+// has been through the same normalisation, and a lookup that wanted the scheme matched
+// neither. That is not a corner case: it is what every lookup of a named registry does,
+// so a registry nobody could ever look up was a registry that could only be reached by
+// guessing its exact spelling, and a deployment refused with "not in the list of
+// registries" for a registry that was plainly on it.
 func (r *DockerRegistryRepo) ByURL(ctx context.Context, url string) (*DockerRegistry, error) {
 	rows, err := r.s.pool.Query(ctx,
-		`SELECT `+dockerRegistryColumns+` FROM docker_registries WHERE lower(btrim(url)) = lower(btrim($1))`, url)
+		`SELECT `+dockerRegistryColumns+` FROM docker_registries
+		 WHERE regexp_replace(rtrim(rtrim(lower(btrim(url)), '/')), '^https?://', '')
+		     = regexp_replace(rtrim(rtrim(lower(btrim($1)), '/')), '^https?://', '')`, url)
 	if err != nil {
 		return nil, fmt.Errorf("read docker registry by url: %w", err)
 	}

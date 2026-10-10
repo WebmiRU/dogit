@@ -13,6 +13,50 @@ import (
 	"github.com/ewolf/dogit/internal/store"
 )
 
+// One address, however it is written down.
+//
+// Everything that compares addresses strips the scheme before it compares, and everything
+// that carries one around strips it too. A lookup that wanted the scheme back matched
+// neither: "https://registry.example.com" on the row and "registry.example.com" in the
+// caller's hand are the same address, and a registry nobody can look up is a registry
+// that can only be reached by guessing its exact spelling. A deployment then refused with
+// "not in the list of registries" for a registry plainly on the list.
+func TestARegistryIsFoundByItsAddressHoweverItIsWritten(t *testing.T) {
+	st := dbtest.Open(t)
+	ctx := context.Background()
+
+	written := &store.DockerRegistry{
+		Name: "harbor", URL: "https://registry.example.com",
+		Login: "robot", Password: "s3cret", Enabled: true,
+	}
+	if err := st.DockerRegistries().Create(ctx, written); err != nil {
+		t.Fatalf("write the registry down: %v", err)
+	}
+	t.Cleanup(func() { _ = st.DockerRegistries().Delete(ctx, written.ID) })
+
+	for _, asked := range []string{
+		"https://registry.example.com",  // as written down
+		"registry.example.com",          // as every comparison in this project carries it
+		"HTTPS://Registry.Example.com",  // and neither case nor scheme is the thing
+		"https://registry.example.com/", // or a trailing slash, which is the same address
+	} {
+		found, err := st.DockerRegistries().ByURL(ctx, asked)
+		if err != nil {
+			t.Errorf("asked for %q: %v", asked, err)
+			continue
+		}
+		if found.ID != written.ID {
+			t.Errorf("asked for %q and got %q", asked, found.URL)
+		}
+	}
+
+	// And a different address is still a different address: loosening the comparison
+	// must not make everything match.
+	if _, err := st.DockerRegistries().ByURL(ctx, "registry.example.org"); err == nil {
+		t.Error("a registry that was never written down was found")
+	}
+}
+
 // The list is an address book, so the first thing it has to get right is that one address
 // is one row. Two records for one registry are one registry and two opinions about it,
 // and every later reader would have to decide which one it meant.
