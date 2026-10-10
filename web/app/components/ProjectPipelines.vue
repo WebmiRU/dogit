@@ -470,7 +470,7 @@ watch(() => props.projectPath, () => load())
         <span class="toolbar-count">{{ range }}</span>
         <span v-if="loading" class="refreshing"><span class="refreshing-dot" /> Updating</span>
       </div>
-      <div class="toolbar">
+      <div class="pipeline-filters">
       <label class="search-wrap">
         <span class="search-icon" aria-hidden="true">
           <svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
