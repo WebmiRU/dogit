@@ -178,3 +178,55 @@ func TestTheInstanceScopeSurvivesAChangeOnTheSameScope(t *testing.T) {
 			resolved.Login, resolved.Password)
 	}
 }
+
+// Taking a scope's answer away should leave no answer, rather than a row that says nothing.
+//
+// A row with all three fields empty resolves to exactly what no row resolves to — it
+// inherits everything — so it decides nothing while still reading as a scope that has
+// written something down. The button that takes a scope's answer away would leave it
+// there for ever, pressing itself again and going nowhere.
+func TestTakingAScopesAnswerAwayLeavesNothingBehind(t *testing.T) {
+	st := dbtest.Open(t)
+	ctx := context.Background()
+
+	reg := seedRegistry(t, st, "alice", "secret123", store.CredentialSourceStatic)
+	groupID := uuid.New()
+
+	login := "group-login"
+	if err := st.RegistryCredentials().Set(ctx, store.RegistryCredentialChange{
+		RegistryID: reg.ID, ScopeType: store.ScopeGroup, ScopeID: &groupID, Login: &login,
+	}); err != nil {
+		t.Fatalf("set the group's login: %v", err)
+	}
+
+	// What the page's "forget this scope" sends: every field, named, and empty.
+	empty := ""
+	if err := st.RegistryCredentials().Set(ctx, store.RegistryCredentialChange{
+		RegistryID:       reg.ID,
+		ScopeType:        store.ScopeGroup,
+		ScopeID:          &groupID,
+		CredentialSource: &empty,
+		Login:            &empty,
+		Password:         &empty,
+	}); err != nil {
+		t.Fatalf("take the scope's answer away: %v", err)
+	}
+
+	_, written, err := st.RegistryCredentials().Scoped(ctx, reg.ID, store.ScopeGroup, &groupID)
+	if err != nil {
+		t.Fatalf("read the scope back: %v", err)
+	}
+	if written {
+		t.Error("the scope still reads as having written something, over an answer that " +
+			"says nothing and inherits everything")
+	}
+
+	// And what a build uses is unchanged by having said nothing rather than nothing.
+	resolved, err := st.RegistryCredentials().Resolve(ctx, reg, &groupID, nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if resolved.Login != "alice" || resolved.Password != "secret123" {
+		t.Errorf("resolved as %q/%q, want what it inherited", resolved.Login, resolved.Password)
+	}
+}

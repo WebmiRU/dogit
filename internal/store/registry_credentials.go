@@ -117,6 +117,15 @@ func (r *RegistryCredentialRepo) Set(ctx context.Context, c RegistryCredentialCh
 		return fmt.Errorf("clear a registry credential: %w", err)
 	}
 
+	// A row that sets nothing is not an answer, and storing it would be worse than not
+	// storing it: it resolves to exactly what no row resolves to, so it changes nothing,
+	// while the page still reads it as a scope that has written something down. The
+	// button that takes a scope's answer away would leave it there for ever, pressing
+	// itself again and again and going nowhere. So it is removed rather than written.
+	if row.CredentialSource == "" && row.Login == "" && row.Password == "" {
+		return nil
+	}
+
 	_, err = r.s.pool.Exec(ctx, `
 		INSERT INTO docker_registry_credentials
 			(registry_id, scope_type, scope_id, credential_source, login, password)
