@@ -132,7 +132,7 @@ const error = ref('')
 const watching = ref<Record<number, Watching>>({})
 
 /** The log snapshot, fetched on demand and kept per operation. */
-const logs = ref<Record<number, LogEntry[] | 'asked'>>({})
+const logs = ref<Record<number, LogEntry[] | 'asked' | 'failed'>>({})
 /** Which folded logs are open, so a queue/outcome change refreshes only what is being read. */
 const expandedLogs = ref<Record<number, true>>({})
 /** Superseded requests cannot overwrite a newer snapshot fetched after a state change. */
@@ -331,7 +331,7 @@ function note(payload: Record<string, unknown>) {
   const at = typeof payload.at === 'number' ? payload.at : null
   if (at !== null && at < subscribedAt && !gapNoticed) {
     gapNoticed = true
-    void load()
+    void load().then(refreshOpenLogs)
   }
 
   const existingOperation = operations.value.find((one) => one.job_id === jobID)
@@ -435,7 +435,7 @@ function note(payload: Record<string, unknown>) {
  * showed both would show every line twice.
  */
 async function askLog(jobID: number) {
-  if (logs.value[jobID]) return
+  if (Array.isArray(logs.value[jobID]) || logs.value[jobID] === 'asked') return
   logs.value = { ...logs.value, [jobID]: 'asked' }
   await refreshLog(jobID)
 }
@@ -454,7 +454,7 @@ async function refreshLog(jobID: number) {
   } catch {
     if (logRequest.value[jobID] !== request) return
     // Keep a previous snapshot on a transient read error; do not turn it into a false empty log.
-    if (!previous) logs.value = { ...logs.value, [jobID]: [] }
+    if (!previous) logs.value = { ...logs.value, [jobID]: 'failed' }
   }
 }
 
@@ -552,6 +552,7 @@ function earlierLogOf(jobID: number): LogEntry[] {
 function logLabel(jobID: number): string {
   const found = logs.value[jobID]
   if (found === 'asked') return 'Looking…'
+  if (found === 'failed') return 'Log unavailable — open to retry'
   if (!found) return 'What it said'
   return found.length ? `What it said (${found.length})` : 'Nothing was recorded'
 }
@@ -729,7 +730,7 @@ watchEvents({
   // A reconnection means events were missed, and an event is the only place a live operation's
   // progress lives. The list is asked again rather than patched: what was missed is more than a
   // line or two, and a card patched from a gap draws steps nobody saw finish.
-  onReconnect: load,
+  onReconnect: () => { void load().then(refreshOpenLogs) },
 })
 
 /**
