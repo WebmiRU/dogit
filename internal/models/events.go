@@ -33,7 +33,7 @@ const (
 	// different kind of fact: this is the whole plan, and it is true before the first
 	// step is taken. A client that had to infer it from progress would be inventing a
 	// list and correcting it as it went.
-	EventDeployPlan   EventKind = "deploy.plan"
+	EventDeployPlan      EventKind = "deploy.plan"
 	EventDeployOperation EventKind = "deploy.operation"
 	EventDeployHistory   EventKind = "deploy.history"
 	// A deployment joined the queue and still has not started. It changes the list
