@@ -464,7 +464,6 @@ label {
 .pager .spacer { flex: 1; }
 
 @media (max-width: 700px) {
-  .table th:nth-child(2), .table td:nth-child(2) { display: none; }
   .toolbar .search { flex-basis: 100%; }
   .toolbar select { flex: 1 1 130px; }
 }
