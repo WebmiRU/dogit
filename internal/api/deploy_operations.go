@@ -62,7 +62,7 @@ func (s *Server) handleProjectDeployOperations(w http.ResponseWriter, r *http.Re
 		case one.Running(), one.Queued():
 			active = append(active, s.deployOperationView(r.Context(), one))
 		case one.Finished():
-			complete = append(complete, s.deployOperationView(one))
+			complete = append(complete, s.deployOperationView(r.Context(), one))
 		}
 	}
 
