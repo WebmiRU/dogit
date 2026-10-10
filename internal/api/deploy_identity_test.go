@@ -26,8 +26,8 @@ func identityRow(t *testing.T, name, namespace, contextName, server string) map[
 
 func TestPhysicalDeployIdentityJoinsAliasesForTheSameKubernetesNamespace(t *testing.T) {
 	rows := []map[string]json.RawMessage{
-		identityRow(t, "production", "web", "context-a", "https://KUBE.example.test:6443/"),
-		identityRow(t, "prod-alias", "web", "context-b", "https://kube.example.test:6443"),
+		identityRow(t, "production", "web", "context-a", "https://KUBE.example.test:443/"),
+		identityRow(t, "prod-alias", "web", "context-b", "https://kube.example.test"),
 		identityRow(t, "prod-other-namespace", "jobs", "context-c", "https://kube.example.test:6443"),
 	}
 	first, err := physicalDeployIdentity(rows, "production", "web")
