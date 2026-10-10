@@ -1,20 +1,128 @@
-// components/RepositorySettings, out of its own stylesheet.
-//
-// The element attribute that made this scoped is gone with it: global styles are
-// selected by name, so a name used here has to mean one thing across the site.
+// Repository settings use the same full-width, flat page rhythm as the other
+// repository tabs. Keep the project move distinct because it changes the address.
 
-.move-note
-  margin: 10px 0 0
-  font-size: 12px
-  max-width: 62ch
-.divider
-  border: 0
+.repository-settings
+  width: 100%
+  min-width: 0
+
+.repository-settings-access
+  margin-bottom: 18px
+
+.repository-settings-grid
+  display: grid
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.85fr)
+  align-items: start
+  gap: 36px
+  width: 100%
+
+.repository-settings-section
+  min-width: 0
+  padding: 18px 0 22px
   border-top: 1px solid var(--border)
-  margin: 24px 0 16px
-.settings-section-title
-  margin: 0 0 4px
-  font-size: 14px
-.section-note
-  margin: 0 0 16px
+
+.repository-settings-heading
+  display: flex
+  align-items: flex-start
+  justify-content: space-between
+  gap: 16px
+  margin-bottom: 20px
+
+.repository-settings-heading h2
+  margin: 0 0 5px
+  font-size: 16px
+  font-weight: 600
+  line-height: 1.35
+
+.repository-settings-heading p
+  margin: 0
+  color: var(--text-muted)
   font-size: 13px
-  max-width: 62ch
+  line-height: 1.45
+
+.repository-settings-fields
+  display: grid
+  grid-template-columns: repeat(2, minmax(0, 1fr))
+  gap: 16px 18px
+  min-width: 0
+
+.repository-settings-fields .field
+  min-width: 0
+  margin: 0
+
+.repository-settings-fields label
+  margin-bottom: 7px
+  font-size: 12px
+
+.repository-settings-fields input,
+.repository-settings-fields select,
+.repository-settings-fields textarea
+  box-sizing: border-box
+  width: 100%
+  min-width: 0
+  background: var(--bg-inset)
+
+.repository-settings-fields textarea
+  min-height: 96px
+  resize: vertical
+
+.repository-settings-field-wide
+  grid-column: 1 / -1
+
+.repository-settings-form-footer
+  display: flex
+  align-items: center
+  justify-content: space-between
+  flex-wrap: wrap
+  gap: 12px
+  margin-top: 20px
+  padding-top: 16px
+  border-top: 1px solid var(--border)
+
+.repository-settings-message
+  margin: 16px 0 0
+
+.repository-settings-section-note
+  margin: -4px 0 18px
+  font-size: 13px
+  line-height: 1.55
+
+.repository-settings-move .repository-settings-fields
+  grid-template-columns: minmax(0, 1fr)
+
+.repository-settings-move-footer
+  margin-top: 18px
+  padding-top: 16px
+  border-top: 1px solid var(--border)
+
+.repository-settings-move-note
+  margin: 12px 0 0
+  padding: 10px 12px
+  border-left: 2px solid var(--border-strong)
+  background: var(--bg-elevated)
+  color: var(--text-muted)
+  font-size: 12px
+  line-height: 1.5
+
+@media (max-width: 1000px)
+  .repository-settings-grid
+    grid-template-columns: minmax(0, 1fr)
+    gap: 8px
+
+  .repository-settings-move .repository-settings-fields
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+
+@media (max-width: 620px)
+  .repository-settings-section
+    padding: 16px 0 18px
+
+  .repository-settings-fields,
+  .repository-settings-move .repository-settings-fields
+    grid-template-columns: minmax(0, 1fr)
+    gap: 14px
+
+  .repository-settings-field-wide
+    grid-column: auto
+
+  .repository-settings-form-footer
+    align-items: flex-start
+    flex-direction: column
