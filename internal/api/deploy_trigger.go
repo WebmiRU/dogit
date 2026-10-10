@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/ewolf/dogit/internal/models"
 	"github.com/ewolf/dogit/internal/pipeline"
 	"github.com/ewolf/dogit/internal/store"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // When a deployment runs.
@@ -50,78 +52,213 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 		return
 	}
 
-	// The place first, and before the claim: a deployment that has to wait must not have
-	// been claimed to wait, because a claimed job is one that has been started, and the
-	// run would sit on a job that says it is running and is not.
-	//
-	// Nothing has happened yet at this point, so saying so is free and reversible. What
-	// replaces this is the module refusing a second rollout into one namespace — which
-	// loses a deployment somebody pushed for, over a conflict that resolved itself in a
-	// minute, and which nobody re-tried because the push was already done.
-	place, placed := s.deployPlaceOf(ctx, project, job)
-	mayStart, holder, enqueued := true, false, false
-	if placed {
-		mayStart, holder, enqueued = s.deploys.takeWithStatus(place, job.ID, run.ID)
+	place, placed, placeErr := s.deployPlaceOf(ctx, project, job)
+	if placeErr != nil {
+		s.failUnstartableDeploy(ctx, job, run, project, place,
+			"Cannot safely resolve the deployment destination: "+placeErr.Error())
+		return
 	}
-	if !mayStart {
-		// Readiness can be checked more than once for the same pending job. Only the call
-		// that actually added it to the queue writes the waiting line and announces the
-		// change to the page; repeats are not another event or another log entry.
-		if enqueued {
-			s.writeDeployInfo(ctx, job, fmt.Sprintf(
-				"Another deployment is already under way in %s, so this one is waiting its turn "+
-					"rather than being refused. It will be deployed when that one is finished, "+
-					"unless a newer deployment of this project arrives first — in which case this "+
-					"one will be superseded and will not be deployed at all.\n", place.cluster))
-			s.publishPipeline(ctx, project.ID, nil, models.EventDeployQueued, map[string]any{
-				"job_id": job.ID,
-				"place":  place.cluster,
-			})
-			s.log.Info("the deployment is waiting for its place",
-				"job_id", job.ID, "project", project.Path,
-				"place", place.cluster, "namespace", place.namespace)
-		}
+	if !placed || place.identity == "" || place.namespace == "" {
+		s.failUnstartableDeploy(ctx, job, run, project, place,
+			"Cannot safely identify the physical cluster and namespace; refusing to deploy without an exclusive lock")
 		return
 	}
 
-	// Claimed before any work is done, so two calls that arrive together cannot both
-	// start one. The store does the claiming, because that is where the state lives:
-	// reading the row and then writing it would be a race with anything else asking
-	// at the same moment.
-	claimed, err := s.store.Pipelines().ClaimDeployJob(ctx, job.ID)
-	if !claimed {
-		if err != nil {
-			s.log.Error("claim the deployment", "job_id", job.ID, "error", err)
-		}
-		if holder {
-			s.releasePlaceAfterLostClaim(context.WithoutCancel(ctx), place, job.ID)
-		}
-		return
-	}
-	// ClaimDeployJob can return an error after it has already marked the job running
-	// (for example, if updating the pipeline's summary timestamp then fails). The claim
-	// is durable at that point, so this caller must still start the worker rather than
-	// leave a running row and a slot that nobody will release.
+	latest, err := s.store.Pipelines().IsLatestDeployCandidate(ctx, place.candidateKeys(), run.ID)
 	if err != nil {
-		s.log.Error("deployment was claimed but its pipeline timestamp was not updated",
-			"job_id", job.ID, "error", err)
+		s.failUnstartableDeploy(ctx, job, run, project, place,
+			"Cannot verify this deployment is still the latest candidate: "+err.Error())
+		return
+	}
+	if !latest {
+		s.supersedeDeploy(ctx, queuedDeploy{jobID: job.ID, pipelineID: run.ID}, place)
+		return
 	}
 
-	// Not derived from the caller's request: that request is about a runner reporting
-	// a test result, and it is answered already. A deploy outlives it.
-	//
-	// The deadline belongs to the goroutine rather than to this function, and that is
-	// not a detail. A `defer cancel()` here would fire the moment this function
-	// returned — which is immediately, since the goroutine has only just started — and
-	// cancel a deployment that had not yet read a single manifest. It fails in the
-	// least legible way available: the job is left "running" with an error about a
-	// cancelled context and nothing in a cluster.
-	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeoutLimit)
+	mayStart, holder, enqueued := s.deploys.takeWithStatus(place, job.ID, run.ID)
+	if !mayStart {
+		if enqueued {
+			s.announceDeployWaiting(ctx, job, project, run, place)
+		}
+		return
+	}
+	// Repeated callbacks can see the same job holding the local slot. Only the call
+	// that took it is allowed to start a worker.
+	if !holder {
+		return
+	}
+	s.launchDeployWorker(ctx, job, run, project, place)
+}
 
+// announceDeployWaiting records a queue state once, with both durable UI state and an event.
+func (s *Server) announceDeployWaiting(ctx context.Context, job *store.Job,
+	project *models.Project, run *store.Pipeline, place deployPlace) {
+	if err := s.store.Pipelines().SetDeployCandidateWaiting(ctx, place.candidateKeys(),
+		job.ID, run.ID, true); err != nil {
+		s.log.Error("record deployment waiting state", "job_id", job.ID, "error", err)
+	}
+	s.writeDeployInfo(ctx, job, fmt.Sprintf(
+		"Another deployment is already under way in %s, so this one is waiting its turn. "+
+			"It will start only if it is still the latest candidate when the place becomes available.\n",
+		place.cluster))
+	s.publishPipeline(ctx, project.ID, nil, models.EventDeployQueued, map[string]any{
+		"job_id": job.ID,
+		"place":  place.cluster,
+	})
+	s.log.Info("the deployment is waiting for its place",
+		"job_id", job.ID, "pipeline_id", run.ID, "project", project.Path,
+		"place", place.cluster, "namespace", place.namespace, "target_key", place.identity)
+}
+
+// failUnstartableDeploy finishes a pending deployment without asking a module or touching
+// a cluster. A failure to establish the lock identity is never permission to deploy unlocked.
+func (s *Server) failUnstartableDeploy(ctx context.Context, job *store.Job,
+	run *store.Pipeline, project *models.Project, place deployPlace, reason string) {
+	keys := place.candidateKeys()
+	if len(keys) > 0 {
+		latest, err := s.store.Pipelines().IsLatestDeployCandidate(ctx, keys, run.ID)
+		switch {
+		case err == nil && !latest:
+			s.supersedeDeploy(ctx, queuedDeploy{jobID: job.ID, pipelineID: run.ID}, place)
+			return
+		case err != nil:
+			reason += "; candidate freshness could not be verified: " + err.Error()
+		}
+	}
+
+	current, err := s.store.Pipelines().JobByID(ctx, job.ID)
+	if err != nil {
+		s.log.Error("read the deployment that could not be started", "job_id", job.ID, "error", err)
+		return
+	}
+	if current.Status != store.JobPending {
+		return
+	}
+	claimed, claimErr := s.store.Pipelines().ClaimDeployJob(ctx, job.ID)
+	if !claimed {
+		if claimErr != nil {
+			s.log.Error("claim the unstartable deployment", "job_id", job.ID, "error", claimErr)
+		}
+		return
+	}
+	if claimErr != nil {
+		s.log.Error("claimed the unstartable deployment but its pipeline timestamp failed",
+			"job_id", job.ID, "error", claimErr)
+	}
+	s.writeDeployLog(ctx, job, reason+"\n")
+	if err := s.store.Pipelines().FinishJob(ctx, job.ID, store.JobFailed, 0, reason); err != nil {
+		s.log.Error("finish the unstartable deployment", "job_id", job.ID, "error", err)
+		return
+	}
+	job.Status = store.JobFailed
+	s.reportDeployFinished(ctx, job, run, project, store.JobFailed, reason)
+	s.startDeployIfReady(context.WithoutCancel(ctx), run.ID)
+}
+
+// launchDeployWorker keeps the exclusive local place while it waits for the shared database lock
+// and until the rollout finishes. Build, tests and image push remain parallel.
+func (s *Server) launchDeployWorker(ctx context.Context, job *store.Job,
+	run *store.Pipeline, project *models.Project, place deployPlace) {
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeoutLimit)
 	go func() {
 		defer cancel()
-		s.carryOutDeploy(detached, job, run, project)
+		s.waitForDeployPlace(detached, job, run, project, place)
 	}()
+}
+
+// waitForDeployPlace waits for the PostgreSQL advisory lock, checking the candidate before and
+// atomically with the durable claim. This prevents an older build or a second dogit replica from
+// changing the same physical namespace, even if it was not in this process's local queue.
+func (s *Server) waitForDeployPlace(ctx context.Context, job *store.Job,
+	run *store.Pipeline, project *models.Project, place deployPlace) {
+	keys := place.candidateKeys()
+	waitingAnnounced := false
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		current, err := s.store.Pipelines().JobByID(ctx, job.ID)
+		if err != nil {
+			s.log.Error("read deployment while waiting for its lock", "job_id", job.ID, "error", err)
+		} else if current.Status != store.JobPending {
+			_ = s.store.Pipelines().SetDeployCandidateWaiting(context.WithoutCancel(ctx), keys,
+				job.ID, run.ID, false)
+			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+			return
+		}
+
+		latest, latestErr := s.store.Pipelines().IsLatestDeployCandidate(ctx, keys, run.ID)
+		if latestErr == nil && !latest {
+			s.supersedeDeploy(context.WithoutCancel(ctx),
+				queuedDeploy{jobID: job.ID, pipelineID: run.ID}, place)
+			_ = s.store.Pipelines().SetDeployCandidateWaiting(context.WithoutCancel(ctx), keys,
+				job.ID, run.ID, false)
+			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+			return
+		}
+		if latestErr != nil && errors.Is(latestErr, store.ErrNotFound) {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			s.failUnstartableDeploy(cleanup, job, run, project, place,
+				"The shared deployment candidate record is missing; refusing to deploy without coordination")
+			cancel()
+			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+			return
+		}
+		if latestErr != nil {
+			s.log.Error("verify deployment candidate while waiting for the shared lock",
+				"job_id", job.ID, "error", latestErr)
+		} else if latest {
+			conn, acquired, lockErr := s.tryDeployLock(ctx, place.identity)
+			if lockErr != nil {
+				s.log.Error("acquire the shared deployment lock", "job_id", job.ID,
+					"target", place.identity, "error", lockErr)
+			} else if acquired {
+				claimed, stillLatest, claimErr := s.store.Pipelines().ClaimDeployCandidate(
+					ctx, keys, job.ID, run.ID)
+				if claimErr != nil {
+					s.releaseDeployLock(context.WithoutCancel(ctx), conn, place.identity)
+					s.log.Error("claim the latest deployment candidate", "job_id", job.ID, "error", claimErr)
+				} else if !stillLatest {
+					s.releaseDeployLock(context.WithoutCancel(ctx), conn, place.identity)
+					s.supersedeDeploy(context.WithoutCancel(ctx),
+						queuedDeploy{jobID: job.ID, pipelineID: run.ID}, place)
+					s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+					return
+				} else if !claimed {
+					s.releaseDeployLock(context.WithoutCancel(ctx), conn, place.identity)
+					now, readErr := s.store.Pipelines().JobByID(context.WithoutCancel(ctx), job.ID)
+					if readErr == nil && now.Status != store.JobPending {
+						_ = s.store.Pipelines().SetDeployCandidateWaiting(
+							context.WithoutCancel(ctx), keys, job.ID, run.ID, false)
+						s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+						return
+					}
+				} else {
+					_ = s.store.Pipelines().SetDeployCandidateWaiting(
+						context.WithoutCancel(ctx), keys, job.ID, run.ID, false)
+					s.carryOutDeploy(ctx, job, run, project, place, conn)
+					return
+				}
+			}
+
+			if !waitingAnnounced {
+				s.announceDeployWaiting(ctx, job, project, run, place)
+				waitingAnnounced = true
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			s.failUnstartableDeploy(cleanup, job, run, project, place,
+				"Timed out waiting to verify or acquire the exclusive deployment lock; nothing was deployed")
+			_ = s.store.Pipelines().SetDeployCandidateWaiting(cleanup, keys, job.ID, run.ID, false)
+			cancel()
+			s.releaseDeployPlace(context.WithoutCancel(ctx), place, job.ID)
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // releasePlaceAfterLostClaim checks the durable job state before giving a place back after
