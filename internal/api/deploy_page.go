@@ -490,6 +490,16 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 			"project", project.Path, "cluster", request.Cluster, "error", err)
 	}
 
+	// A rollback mutates the same namespace as an ordinary deploy, so it takes the same
+	// physical lock. Do not guess at the target when its kubeconfig or namespace is missing.
+	identity, identityErr := physicalDeployIdentity(
+		s.placeRows(r.Context(), project, module), request.Cluster, request.Namespace)
+	if identityErr != nil {
+		s.writeError(w, r, errBadRequest(
+			"cannot safely identify the rollback destination: "+identityErr.Error()))
+		return
+	}
+
 	body, err := json.Marshal(map[string]any{
 		"project":       project.Path,
 		"cluster":       request.Cluster,
@@ -528,7 +538,7 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 	// The context outlives the request, and the module's own timeout is the deadline:
 	// nobody waiting on this answer is waiting for the rollout, they are waiting to be
 	// told it has begun.
-	go s.carryOutRevert(context.WithoutCancel(r.Context()), module, project, body, request, user)
+	go s.carryOutRevertWithLock(context.WithoutCancel(r.Context()), identity, module, project, body, request, user)
 
 	s.log.Info("a version is being put back", "project", project.Path,
 		"cluster", request.Cluster, "deployment", request.DeploymentID, "user", user.Username)
@@ -539,6 +549,53 @@ func (s *Server) handleRevertDeployment(w http.ResponseWriter, r *http.Request) 
 		"place":    request.Cluster,
 		"workload": request.Workload,
 	})
+}
+
+// carryOutRevertWithLock waits for the same physical namespace lock as a pipeline deployment.
+// A rollback cannot run beside a rollout merely because it was requested by an administrator
+// rather than started by a pipeline.
+func (s *Server) carryOutRevertWithLock(ctx context.Context, identity string,
+	module *models.Integration, project *models.Project, body []byte,
+	request revertRequest, user *models.User) {
+	workCtx, cancel := context.WithTimeout(ctx, deployTimeoutLimit)
+	defer cancel()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		conn, acquired, err := s.tryDeployLock(workCtx, identity)
+		if err != nil {
+			s.log.Warn("could not acquire the shared lock for a rollback",
+				"project", project.Path, "target", identity, "error", err)
+		} else if acquired {
+			func() {
+				defer s.releaseDeployLock(context.Background(), conn, identity)
+				s.carryOutRevert(workCtx, module, project, body, request, user)
+			}()
+			return
+		}
+
+		select {
+		case <-workCtx.Done():
+			reason := "timed out waiting for the exclusive namespace lock; nothing was changed"
+			s.log.Warn("a rollback could not start without the shared lock",
+				"project", project.Path, "cluster", request.Cluster, "error", reason)
+			place := map[string]any{
+				"cluster": request.Cluster, "namespace": request.Namespace,
+				"workload": request.Workload, "kind": "revert",
+			}
+			s.publishPipeline(context.WithoutCancel(ctx), project.ID, nil, models.EventDeployOperation,
+				map[string]any{"phase": "wait_for_lock", "message": reason, "failed": true, "deployment": place})
+			s.publishPipeline(context.WithoutCancel(ctx), project.ID, nil, models.EventDeployHistory, map[string]any{
+				"project": project.Path,
+				"deployment": map[string]any{
+					"cluster": request.Cluster, "namespace": request.Namespace,
+				},
+			})
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // carryOutRevert is the rollback itself, told about rather than waited for.
