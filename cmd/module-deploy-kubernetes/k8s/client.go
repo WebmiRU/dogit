@@ -702,81 +702,34 @@ func (c *clusterClient) Counts(ctx context.Context, namespace, name, image strin
 	if deployment.Spec.Replicas != nil {
 		desired = *deployment.Spec.Replicas
 	}
-	counts := RolloutCounts{
-		Desired: int(desired),
-		// The cluster's own verdict, asked of the same object rather than re-decided
-		// here. Two readers of a Deployment disagreeing about whether it has finished is
-		// the last thing this file needs.
-		Settled: rolloutOf(deployment).Done,
-	}
+	settled := rolloutOf(deployment).Done
 
-	// By digest, from the pods themselves — and not from the Deployment's own ready count, though
-	// the field is right there and says something. It counts every ready pod the Deployment owns,
-	// including the ones from the revision being replaced, so it is satisfied before the new pods
-	// have started: three old pods still serving answer "3 of 3" on a rollout whose new pods
-	// have not left Pending. That is how a deployment announced that it had finished while the
-	// thing it deployed was still waiting to be pulled.
-	//
-	// Asked of a tag rather than a digest, though, the question has no answer and the fallback is
-	// taken instead. The pods being replaced are already running the image this deployment names,
-	// so counting pods on that name counts the old ones as the new ones — and a deployment that
-	// says so has claimed a rollout happened when what it did was re-apply a manifest. The
-	// wording a reader is given already refuses the claim in this case; the count must not make
-	// it behind the reader's back. So the Deployment's own number is used, which cannot
-	// distinguish the two either, and the sentence beside it does not claim to.
-	if digestOf(image) == "" {
-		counts.Ready = int(deployment.Status.ReadyReplicas)
+	// The card and the decision to finish must count the same pods by the same rule.
+	// Otherwise a tag falls back to Deployment.Status.ReadyReplicas here while the watcher
+	// counts ReplicaSet revisions, and the two answers disagree during exactly the rollout
+	// they are meant to describe. A Deployment's count includes pods from the revision being
+	// replaced, so it cannot stand in for pods actually serving the target revision.
+	sets, err := c.typed.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return RolloutCounts{}, fmt.Errorf("read the revisions of deployment %s: %w", name, err)
 	}
+	revision := currentRevisionFromSets(deployment, sets.Items)
 
 	pods, err := c.typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelectorOf(deployment),
 	})
 	if err != nil {
-		// Not knowing is not knowing; the counts read so far are still true.
-		return counts, nil
+		// No pod list means no evidence that any pod is ready on the target revision.
+		// Keep waiting rather than treating the Deployment's aggregate count as a substitute.
+		return RolloutCounts{Desired: int(desired), Settled: settled}, nil
 	}
 
+	seen := make(map[string]podSeen, len(pods.Items))
 	for index := range pods.Items {
-		pod := pods.Items[index]
-		if !worthCounting(&pod) {
-			continue
-		}
-
-		// On the image being deployed, and serving — the two things at once.
-		//
-		// A pod on its way out is not counted, and neither is one that exists but would not take
-		// traffic: the cluster takes terminating pods out of a workload's available replicas the
-		// moment it starts deleting them, and a pod that is up but not yet ready is not one of
-		// the ones that would. Counted, a place finished rolling out kept announcing that the
-		// image it had just replaced was still there for as long as the pod took to go.
-		onTheNewImage, saidWhich := false, false
-
-		// What the container is running, not what its spec was written with, and a pod that
-		// has not said is not counted as being on the old one: saying nothing is not the same
-		// as saying it is on the old one, and counted the same way it puts pods that are still
-		// pulling into the number of pods being retired.
-		for _, container := range pod.Spec.Containers {
-			running := containerImage(&pod, container)
-			if running == "" {
-				continue
-			}
-			saidWhich = true
-			if SameImage(image, running) {
-				onTheNewImage = true
-			} else {
-				counts.OldUp++
-			}
-		}
-		if saidWhich && onTheNewImage && serving(&pod) {
-			counts.Ready++
-		}
+		remember(seen, &pods.Items[index], revision)
 	}
-
-	// Never more ready than were asked for. A pod left over from a wider previous state is
-	// counted as new because nothing says it is not, and eleven of them are not eleven of ten.
-	if counts.Ready > counts.Desired {
-		counts.Ready = counts.Desired
-	}
+	counts := tally(seen, int(desired), image, revision)
+	counts.Settled = settled
 	return counts, nil
 }
 
@@ -1005,23 +958,37 @@ func currentRevision(ctx context.Context, typed kubernetes.Interface, namespace,
 	if err != nil {
 		return "", err
 	}
+	return currentRevisionFromSets(deployment, sets.Items), nil
+}
 
-	newest := ""
-	var newestAt time.Time
-	for index := range sets.Items {
-		set := sets.Items[index]
+// currentRevisionFromSets prefers the ReplicaSet carrying the Deployment's current revision.
+// Creation time alone is not enough: rolling back to an earlier pod template can reuse an old
+// ReplicaSet and give it the newest revision number without changing its creation timestamp.
+// When the controller has not yet written matching revision annotations, creation time remains
+// the fallback, so a rollout can still be observed while those annotations are absent.
+func currentRevisionFromSets(deployment *appsv1.Deployment, sets []appsv1.ReplicaSet) string {
+	targetRevision := deploymentRevision(deployment)
+	newest, matching := "", ""
+	var newestAt, matchingAt time.Time
+	for index := range sets {
+		set := sets[index]
 		if !ownedBy(set.OwnerReferences, deployment.UID) {
 			continue
 		}
-		// The newest wins, and where two were made in the same second — which a rollout
-		// of one manifest does produce — the name settles it, so the answer does not
-		// depend on the order the API returned them in.
 		if newest == "" || set.CreationTimestamp.After(newestAt) ||
 			(set.CreationTimestamp.Time.Equal(newestAt) && set.Name > newest) {
 			newest, newestAt = set.Name, set.CreationTimestamp.Time
 		}
+		if targetRevision != 0 && revisionOf(&set) == targetRevision &&
+			(matching == "" || set.CreationTimestamp.After(matchingAt) ||
+				(set.CreationTimestamp.Time.Equal(matchingAt) && set.Name > matching)) {
+			matching, matchingAt = set.Name, set.CreationTimestamp.Time
+		}
 	}
-	return newest, nil
+	if matching != "" {
+		return matching
+	}
+	return newest
 }
 
 // ownedBy says whether one of these owners is this object.
