@@ -102,6 +102,10 @@ func (s *Server) startDeployIfReady(ctx context.Context, pipelineID int64) {
 	// (for example, if updating the pipeline's summary timestamp then fails). The claim
 	// is durable at that point, so this caller must still start the worker rather than
 	// leave a running row and a slot that nobody will release.
+	if err != nil {
+		s.log.Error("deployment was claimed but its pipeline timestamp was not updated",
+			"job_id", job.ID, "error", err)
+	}
 
 	// Not derived from the caller's request: that request is about a runner reporting
 	// a test result, and it is answered already. A deploy outlives it.
