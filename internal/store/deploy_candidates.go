@@ -103,7 +103,7 @@ func (r *PipelineRepo) IsLatestDeployCandidate(ctx context.Context, keys []strin
 			FROM deploy_candidates
 			WHERE target_key = $1`, key).Scan(&latest)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return false, fmt.Errorf("deployment candidate %q is not registered: %w", key, ErrNotFound)
 		}
 		if err != nil {
 			return false, fmt.Errorf("read latest deployment candidate: %w", err)
