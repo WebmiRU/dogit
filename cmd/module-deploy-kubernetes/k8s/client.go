@@ -664,6 +664,23 @@ type RolloutCounts struct {
 	Ready   int
 	Desired int
 	OldUp   int
+	// Settled says the workload's own status describes the revision that is being
+	// deployed, rather than the one before it.
+	//
+	// It is the only signal that separates the two when the image is named by a tag,
+	// because a tag cannot: the pods being replaced are running the same string as the
+	// pods replacing them, so counting pods by name counts the old ones as the new ones,
+	// and the Deployment's own ready count is the previous rollout's — three ready pods
+	// that have not been asked to change yet. Either way "3 of 3" arrives at the instant
+	// the manifest is applied, and a deployment announces itself finished over a rollout
+	// that has not started.
+	//
+	// The controller bumps observedGeneration once it has seen the spec this deployment
+	// wrote, and only then does status mean anything about it. A digest-pinned image
+	// makes this redundant — the pods are told apart by their digest either way — but
+	// redundant and true is not a cost worth saving, and the same rule for both is one
+	// less thing to be wrong in one shape only.
+	Settled bool
 	// OldImage is what the pods being taken off are running, by digest, when they agree
 	// on it. Empty when nothing is being taken off, and also when the pods being retired
 	// are on more than one image — which is a real state during a rollback onto a version
@@ -687,7 +704,13 @@ func (c *clusterClient) Counts(ctx context.Context, namespace, name, image strin
 	if deployment.Spec.Replicas != nil {
 		desired = *deployment.Spec.Replicas
 	}
-	counts := RolloutCounts{Desired: int(desired)}
+	counts := RolloutCounts{
+		Desired: int(desired),
+		// Observed at least as far as the spec says. Kubernetes sets observedGeneration
+		// when the controller has worked through the current generation, so until it does,
+		// everything under .status is still describing the rollout before this one.
+		Settled: deployment.Status.ObservedGeneration >= deployment.Generation,
+	}
 
 	// By digest, from the pods themselves — and not from the Deployment's own ready count, though
 	// the field is right there and says something. It counts every ready pod the Deployment owns,

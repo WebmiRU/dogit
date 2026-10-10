@@ -631,7 +631,14 @@ func (d *Deployer) wait(ctx context.Context, request Request) error {
 		// the guard that once stood here treated zero desired as "not finished yet", so
 		// scaling a deployment to zero made every deployment to it time out, and the reason
 		// it gave was the one thing that was never wrong.
-		if counts.Ready >= counts.Desired {
+		//
+		// Settled as well, and that is what makes the two answers above mean anything. A
+		// count taken before the controller has seen the spec that was just applied
+		// describes the rollout before this one: three pods ready, running the image this
+		// deployment is about to replace, counted as ready because their name and the new
+		// one's are the same string. That is not a rare moment to be wrong in — it is the
+		// moment right after apply, on every deployment whose image is named by a tag.
+		if counts.Settled && counts.Ready >= counts.Desired {
 			d.logf("rollout finished: %d/%d pods on the new image", counts.Ready, counts.Desired)
 			return nil
 		}

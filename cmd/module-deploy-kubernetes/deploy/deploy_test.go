@@ -155,7 +155,7 @@ func (f *fakeClient) Counts(_ context.Context, _, _, _ string) (k8s.RolloutCount
 	if len(f.countsThen) == 1 {
 		return f.countsThen[0], nil
 	}
-	return k8s.RolloutCounts{Ready: 1, Desired: 1}, nil
+	return k8s.RolloutCounts{Ready: 1, Desired: 1, Settled: true}, nil
 }
 
 // WatchCounts stands in for the cluster's event stream: it says the same numbers once
@@ -167,7 +167,7 @@ func (f *fakeClient) WatchCounts(ctx context.Context, _, _, _ string, onChange f
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	onChange(k8s.RolloutCounts{Ready: 1, Desired: 1})
+	onChange(k8s.RolloutCounts{Ready: 1, Desired: 1, Settled: true})
 	<-ctx.Done()
 	return nil
 }
@@ -517,8 +517,8 @@ func TestADeploymentThatRolledOutNothingIsNotASuccess(t *testing.T) {
 	// are the ones being replaced, the wait sees them, and by the time the count that
 	// becomes the record is taken there is nothing on the new image at all.
 	client.countsThen = []k8s.RolloutCounts{
-		{Desired: 3, Ready: 3, OldUp: 3},
-		{Desired: 3, Ready: 0, OldUp: 0},
+		{Desired: 3, Ready: 3, OldUp: 3, Settled: true},
+		{Desired: 3, Ready: 0, OldUp: 0, Settled: true},
 	}
 
 	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
@@ -559,7 +559,7 @@ func TestADeploymentThatRolledOutNothingIsNotASuccess(t *testing.T) {
 func TestADeploymentWithNothingToRollOutIsNotAFailure(t *testing.T) {
 	client := newFake()
 	client.rollouts["app"] = k8s.Rollout{Desired: 0, Updated: 0, Ready: 0, Done: true}
-	client.counts = &k8s.RolloutCounts{Desired: 0, Ready: 0, OldUp: 0}
+	client.counts = &k8s.RolloutCounts{Desired: 0, Ready: 0, OldUp: 0, Settled: true}
 
 	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
 
@@ -850,7 +850,7 @@ func TestARolloutWithNoPodsOnTheNewImageIsNotFinished(t *testing.T) {
 	// while the old pods are up and the new ones are failing to pull.
 	client.rollouts["app"] = k8s.Rollout{Desired: 3, Updated: 3, Ready: 3, Done: true}
 	// What the pods say: three wanted, none of them on this image.
-	client.counts = &k8s.RolloutCounts{Desired: 3, Ready: 0, OldUp: 3}
+	client.counts = &k8s.RolloutCounts{Desired: 3, Ready: 0, OldUp: 3, Settled: true}
 
 	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
 
@@ -872,7 +872,7 @@ func TestARolloutWithNoPodsOnTheNewImageIsNotFinished(t *testing.T) {
 func TestARolloutWithEveryPodOnTheNewImageIsFinished(t *testing.T) {
 	client := newFake()
 	client.rollouts["app"] = k8s.Rollout{Desired: 3, Updated: 3, Ready: 3, Done: true}
-	client.counts = &k8s.RolloutCounts{Desired: 3, Ready: 3}
+	client.counts = &k8s.RolloutCounts{Desired: 3, Ready: 3, Settled: true}
 
 	deployer := &Deployer{client: client, history: newHistory(), Now: time.Now}
 
