@@ -926,7 +926,7 @@ watchEvents({
           :active-phases="openPhases(operation)"
         />
 
-        <template v-if="watched(operation.job_id)">
+        <template v-if="watched(operation.job_id) && operation.running">
           <div v-if="earlierLogOf(operation.job_id).length" class="operation-log-wrap">
             <p class="muted small">Earlier output</p>
             <ul class="operation-log">
@@ -945,6 +945,17 @@ watchEvents({
             :plan="planOf(operation.job_id)"
           />
         </template>
+        <ul v-else-if="watched(operation.job_id) && logOf(operation.job_id)?.length" class="operation-log">
+          <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
+            <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
+            <span>{{ entry.text }}</span>
+          </li>
+        </ul>
+        <DeployLog
+          v-else-if="watched(operation.job_id)"
+          :lines="logLines(operation.job_id)"
+          :plan="planOf(operation.job_id)"
+        />
         <div v-else class="operation-log-wrap">
           <ul v-if="logOf(operation.job_id)?.length" class="operation-log">
             <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
@@ -986,7 +997,7 @@ watchEvents({
 
         <details class="log" @toggle="toggleHistoryLog(operation.job_id, $event)">
           <summary class="muted small">{{ logLabel(operation.job_id) }}</summary>
-          <template v-if="watched(operation.job_id)">
+          <template v-if="watched(operation.job_id) && operation.running">
             <div v-if="earlierLogOf(operation.job_id).length" class="operation-log-wrap">
               <ul class="operation-log">
                 <li
@@ -1004,6 +1015,17 @@ watchEvents({
               :plan="planOf(operation.job_id)"
             />
           </template>
+          <ul v-else-if="watched(operation.job_id) && logOf(operation.job_id)?.length" class="operation-log">
+            <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
+              <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
+              <span>{{ entry.text }}</span>
+            </li>
+          </ul>
+          <DeployLog
+            v-else-if="watched(operation.job_id)"
+            :lines="logLines(operation.job_id)"
+            :plan="planOf(operation.job_id)"
+          />
           <ul v-else-if="logOf(operation.job_id)?.length" class="operation-log">
             <li v-for="(entry, index) in logOf(operation.job_id)" :key="index" :class="entry.stream">
               <span v-if="entry.at" class="mono small muted">{{ clockOf(entry.at) }}</span>
