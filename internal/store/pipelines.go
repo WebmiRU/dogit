@@ -246,6 +246,7 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 	}
 
 	candidateJobs := map[string]int64{}
+	candidateMembers := map[string][]int64{}
 	for index, job := range jobs {
 		job.IID = index + 1
 		if job.Status == "" {
@@ -293,6 +294,7 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 			if _, exists := candidateJobs[key]; !exists {
 				candidateJobs[key] = job.ID
 			}
+			candidateMembers[key] = append(candidateMembers[key], job.ID)
 		}
 	}
 
@@ -305,7 +307,7 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 		keys = append(keys, key)
 	}
 	for _, key := range uniqueDeployCandidateKeys(keys) {
-		change, err := registerDeployCandidateTx(ctx, tx, key, candidateJobs[key], pipeline.ID)
+		change, err := registerDeployCandidateTx(ctx, tx, key, candidateJobs[key], pipeline.ID, candidateMembers[key])
 		if err != nil {
 			return nil, nil, err
 		}
