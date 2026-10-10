@@ -1909,9 +1909,15 @@ select:focus-visible {
   width: 112px;
 }
 
+.repository-flat-table {
+  width: 100%;
+  min-width: 0;
+}
+
 /* Keep the ref controls as a separate toolbar. The tree table itself stays flat,
    like the canonical admin tables: only the header and rows draw horizontal rules. */
-.repository-tree-toolbar {
+.repository-tree-toolbar,
+.repository-page-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1993,11 +1999,14 @@ select:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.repository-pager {
+.repository-page-toolbar.repository-pager {
   justify-content: flex-end;
-  gap: 10px;
+  margin: 10px 0 0;
+  padding: 10px 0 0;
+  border: 0;
   border-top: 1px solid var(--border);
-  border-bottom: 0;
+  border-radius: 0;
+  background: transparent;
 }
 @media (hover: none) and (pointer: coarse) {
   .repository-data-table .row-menu {
