@@ -492,7 +492,7 @@ stages:
   build:
     api: {image: registry.example/myapp/api}
 `))
-	if err == nil || !strings.Contains(err.Error(), "deploy cannot appear before build") {
+	if err == nil || !strings.Contains(err.Error(), "cannot appear before stage build") {
 		t.Fatalf("error = %v, want build/deploy ordering error", err)
 	}
 }

@@ -284,14 +284,20 @@ func (c *coreClient) deployOne(ctx context.Context, request deployRequest, place
 		})
 	}
 
+	rollouts := rolloutTargetsFor(manifests)
 	workload := request.Rollout
+	if workload == "" && len(rollouts) > 0 {
+		workload = rollouts[0].Workload
+	}
 	if workload == "" {
-		// Asked of what was applied rather than configured separately: a second place
-		// to name the workload is a second place to get it wrong, and a rollback that
-		// looked at the wrong name would undo somebody's deployment.
+		// Legacy workloads without a supported Deployment manifest retain the previous
+		// single-target path, rather than silently dropping rollout observation.
 		if found := deploy.WorkloadsOf(manifests); len(found) > 0 {
 			workload = found[0]
 		}
+	}
+	if len(rollouts) == 0 && workload != "" {
+		rollouts = []deploy.RolloutTarget{{Workload: workload, Image: request.Image}}
 	}
 
 	// The place's own answers first, and the repository's configuration over them: a
@@ -343,10 +349,34 @@ func (c *coreClient) deployOne(ctx context.Context, request deployRequest, place
 		Post:           jobs(substitution, request.Post, namespace),
 		WaitForRollout: request.WaitForRollout,
 		Rollout:        workload,
+		Rollouts:       rollouts,
 		Workload:       workload,
 		Timeout:        timeout,
 		KeepJobs:       keepJobs,
 	})
+}
+
+// rolloutTargetsFor lists each supported Deployment in the prepared manifest set.
+// A target takes the first container image, matching the workload's primary pod image;
+// the watch still checks the readiness of the whole pod, including every sidecar.
+func rolloutTargetsFor(objects []k8s.Object) []deploy.RolloutTarget {
+	targets := []deploy.RolloutTarget{}
+	seen := map[string]bool{}
+	for _, object := range objects {
+		if object.Kind != "Deployment" || object.Name == "" || seen[object.Name] {
+			continue
+		}
+		images := k8s.ImagesIn(object.Body)
+		if len(images) == 0 {
+			continue
+		}
+		seen[object.Name] = true
+		targets = append(targets, deploy.RolloutTarget{
+			Workload: object.Name,
+			Image:    images[0],
+		})
+	}
+	return targets
 }
 
 /**

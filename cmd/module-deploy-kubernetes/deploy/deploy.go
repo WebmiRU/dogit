@@ -54,7 +54,13 @@ const (
 	StateReverted State = "reverted"
 )
 
-// Request is a deployment somebody asked for.
+// RolloutTarget is one Deployment whose readiness belongs to the same overall release.
+type RolloutTarget struct {
+	Workload string
+	Image    string
+}
+
+// Request is one complete deployment operation, potentially spanning several workloads.
 type Request struct {
 	// Project is whose deployment this is, and it is what the history is filed under.
 	Project string
@@ -91,8 +97,12 @@ type Request struct {
 
 	// WaitForRollout waits for the new pods to become ready and reports how it went.
 	WaitForRollout bool
-	// Rollout names the workload whose progress is watched.
+	// Rollout names the primary workload for older single-workload requests.
 	Rollout string
+	// Rollouts are all supported Deployment workloads touched by this request. The module
+	// applies every manifest first, then watches each target in this one operation.
+	// When empty, the legacy Rollout/Image pair below remains the fallback.
+	Rollouts []RolloutTarget
 	// Workload is the Deployment a rollback would act on. Recorded on the deployment
 	// so that a rollback has something to act on without asking the cluster what it
 	// thinks was deployed.
@@ -453,97 +463,81 @@ func (d *Deployer) Run(ctx context.Context, request Request) (Deployment, error)
 			Message: fmt.Sprintf("applied %s %s", written.Kind, written.Name)})
 	}
 
-	// The rollout itself, when somebody asked to wait for it.
-	if request.WaitForRollout && request.Rollout != "" {
-		// Watching: the count of pods is the thing somebody watching actually wants,
-		// and it is only knowable by asking the cluster as it goes.
-		stop, counted := d.watchRollout(ctx, request)
-		err := d.wait(ctx, request)
-
-		// The old pods are still on their way out when the new ones are all up: a
-		// rolling update finishes as soon as the replacement is serving, and the
-		// deployment it replaces is terminated afterwards. Stopping here would cut the
-		// watch off one message early, and the line saying the drain is done — the one
-		// that says this phase finished rather than what its last number happened to be
-		// — would never be said at all.
-		//
-		// Bounded, because the pods are somebody else's to remove: a finalizer left on a
-		// pod must not turn a finished deployment into a deployment that hangs.
-		drainDeadline := time.Now().Add(drainGrace)
-		for {
-			_, _, retired := counted()
-			if retired == 0 || time.Now().After(drainDeadline) {
-				break
+	// Observe every Deployment only after all manifests have been applied. No individual
+	// image starts its own deployment, and a failed rollout is recorded rather than rolled
+	// back automatically.
+	if request.WaitForRollout {
+		rollouts := request.Rollouts
+		if len(rollouts) == 0 && request.Rollout != "" {
+			rollouts = []RolloutTarget{{Workload: request.Rollout, Image: request.Image}}
+		}
+		wantedTotal, readyTotal, retiredTotal := 0, 0, 0
+		for index, target := range rollouts {
+			rolloutRequest := request
+			rolloutRequest.Rollout = target.Workload
+			rolloutRequest.Image = target.Image
+			if strings.TrimSpace(rolloutRequest.Rollout) == "" {
+				return d.fail(ctx, rolloutRequest, record, PhaseApply, fmt.Errorf("a rollout target has no workload name"))
 			}
-			select {
-			case <-ctx.Done():
-			case <-time.After(500 * time.Millisecond):
+			rolloutRequest.report(Progress{Phase: StepRollout, Message: fmt.Sprintf(
+				"watching rollout of %s", rolloutRequest.Rollout)})
+
+			stop, counted := d.watchRollout(ctx, rolloutRequest)
+			err := d.wait(ctx, rolloutRequest)
+			if err != nil {
+				err = fmt.Errorf("rollout of %s: %w", rolloutRequest.Rollout, err)
 			}
-		}
-		stop()
 
-		// Asked once more after the watching has stopped, because watching is by
-		// definition a sample: a rollout that finishes between two ticks is a rollout
-		// that was never seen at all, and a history that says "0 of 0" about three
-		// pods that came up a moment ago is worse than one that says nothing.
-		//
-		// The state at the end is also the only one worth recording. The numbers during
-		// a rollout are for the person watching; the numbers afterwards are the record.
-		wanted, ready, retired := counted()
-		if final, cerr := d.client.Counts(ctx, request.Namespace, request.Rollout,
-			request.Image); cerr == nil {
-			wanted, ready = final.Desired, final.Ready
-		}
-		// Onto the record as well as into the table, because the page is told about this
-		// deployment by reading the record and not by reading the table. Writing only to
-		// the table leaves the page with the zeros this record was created with, for ever:
-		// a card that says "Success" above "0 of 3 running the new image" for a rollout
-		// that brought three pods up, and no way to tell that page apart from a rollout
-		// that brought none. Found by watching a real one and then reading its numbers,
-		// which were right in one place and zero in the other.
-		record.PodsWanted, record.PodsReady, record.PodsRetired = wanted, ready, retired
-		if err := d.history.Counts(ctx, record.ID, wanted, ready, retired); err != nil {
-			d.logf("record what the rollout did: %v", err)
-		}
+			// Keep observing old pods while Kubernetes retires them, bounded so a
+			// finalizer cannot turn a completed deployment into an operation that hangs.
+			drainDeadline := time.Now().Add(drainGrace)
+			for {
+				_, _, retired := counted()
+				if err != nil || retired == 0 || time.Now().After(drainDeadline) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+				case <-time.After(500 * time.Millisecond):
+				}
+			}
+			stop()
 
-		if err != nil {
-			request.report(Progress{Phase: StepRollout, Message: err.Error(), Failed: true})
-			return d.fail(ctx, request, record, PhaseApply, err)
-		}
-		// "The new image" only means anything when the image was pinned to a digest. Applied
-		// by a name, the pods being counted are the pods already running under that name —
-		// the ones this deployment was supposed to replace — and the sentence becomes a
-		// claim that the old pods are the new ones. It is not a small wording problem: it is
-		// the whole difference between a rollout that happened and a manifest that was
-		// re-applied, and the reason a deploy can finish in a second having changed nothing.
-		//
-		// So the number is reported and the claim is not made. A reader is told what was
-		// counted and not asked to draw the conclusion from a name that never changed.
-		// A deployment nobody waited for may leave the workload wherever it was, which is
-		// what that option means. One somebody did wait for has promised something, and the
-		// promise is the count.
-		//
-		// Without this the numbers above are decoration: a rollout that came up with none
-		// of its pods says "0 of 3" and then "Deployed in 2m22s", and the record beside it
-		// is a success. A manifest applied over a workload whose image cannot be pulled is
-		// the commonest way for this to happen, and it is exactly the case that must not
-		// read as a finished deployment.
-		//
-		// Zero wanted is not a failure. A workload scaled to nothing has nothing to wait
-		// for, and saying "0 of 0 pods are ready" about it is the truth rather than a
-		// complaint.
-		if wanted > 0 && ready < wanted {
-			return d.fail(ctx, request, record, PhaseApply, fmt.Errorf(
-				"the manifests were applied, but only %d of %d pods are running the image "+
-					"this deployment names — the rollout did not finish, so nothing here was "+
-					"deployed", ready, wanted))
-		}
+			wanted, ready, retired := counted()
+			if final, countErr := d.client.Counts(ctx, rolloutRequest.Namespace,
+				rolloutRequest.Rollout, rolloutRequest.Image); countErr == nil {
+				wanted, ready = final.Desired, final.Ready
+			}
+			wantedTotal += wanted
+			readyTotal += ready
+			retiredTotal += retired
+			record.PodsWanted, record.PodsReady, record.PodsRetired =
+				wantedTotal, readyTotal, retiredTotal
+			if countErr := d.history.Counts(ctx, record.ID, wantedTotal, readyTotal, retiredTotal); countErr != nil {
+				d.logf("record what the rollouts did: %v", countErr)
+			}
 
-		message := fmt.Sprintf("%d of %d pods are running the image this deployment names", ready, wanted)
-		if pinned(request.Image) {
-			message = fmt.Sprintf("every pod is running the new image (%d of %d)", ready, wanted)
+			if err != nil {
+				rolloutRequest.report(Progress{Phase: StepRollout, Message: err.Error(), Failed: true})
+				return d.fail(ctx, rolloutRequest, record, PhaseApply, err)
+			}
+			if wanted > 0 && ready < wanted {
+				return d.fail(ctx, rolloutRequest, record, PhaseApply, fmt.Errorf(
+					"the manifests were applied, but rollout %s has only %d of %d pods running the requested image",
+					rolloutRequest.Rollout, ready, wanted))
+			}
+
+			message := fmt.Sprintf("%s: %d of %d pods are running the image in this deployment",
+				rolloutRequest.Rollout, ready, wanted)
+			if pinned(rolloutRequest.Image) {
+				message = fmt.Sprintf("%s: every pod is running the new image (%d of %d)",
+					rolloutRequest.Rollout, ready, wanted)
+			}
+			rolloutRequest.report(Progress{
+				Phase: StepRollout, Ready: ready, Desired: wanted, Message: message,
+				Finished: index == len(rollouts)-1,
+			})
 		}
-		request.report(Progress{Phase: StepRollout, Ready: ready, Desired: wanted, Message: message})
 	}
 
 	// Post: judged separately, and never mistaken for the deployment having worked.
@@ -1179,7 +1173,7 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) (func(), f
 					lastReady, lastReadyDesired = counts.Ready, counts.Desired
 					request.Progress(Progress{
 						Phase:    StepRollout,
-						Message:  fmt.Sprintf("%d of %d running the new image", counts.Ready, counts.Desired),
+						Message:  fmt.Sprintf("%s: %d of %d running the new image", request.Rollout, counts.Ready, counts.Desired),
 						Ready:    counts.Ready,
 						Desired:  counts.Desired,
 						Previous: counts.OldImage,
@@ -1204,7 +1198,7 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) (func(), f
 					// serving. The number of pods is the one this step is about.
 					request.Progress(Progress{
 						Phase:    StepRetire,
-						Message:  fmt.Sprintf("%d pod(s) still running the previous image", counts.OldUp),
+						Message:  fmt.Sprintf("%s: %d pod(s) still running the previous image", request.Rollout, counts.OldUp),
 						Ready:    counts.Ready,
 						Desired:  counts.Desired,
 						Previous: counts.OldImage,
@@ -1218,7 +1212,7 @@ func (d *Deployer) watchRollout(ctx context.Context, request Request) (func(), f
 				retireClosed = true
 				request.Progress(Progress{
 					Phase:    StepRetire,
-					Message:  "the old pods are gone",
+					Message:  fmt.Sprintf("%s: the old pods are gone", request.Rollout),
 					Finished: true,
 				})
 			})

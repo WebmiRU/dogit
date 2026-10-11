@@ -46,6 +46,8 @@ type fakeClient struct {
 	// when it looks again is nothing. One answer cannot express that, and it is the
 	// shape that made a deployment with no pods on the new image read as a success.
 	countsThen []k8s.RolloutCounts
+	countedNames []string
+	watchedNames []string
 }
 
 func newFake() *fakeClient {
@@ -143,7 +145,8 @@ func (f *fakeClient) Revisions(_ context.Context, _, _ string) ([]k8s.Revision, 
 
 // Counts answers what the watching code asks, so a test sees the same numbers a page
 // would: no pods yet, none of the old ones left.
-func (f *fakeClient) Counts(_ context.Context, _, _, _ string) (k8s.RolloutCounts, error) {
+func (f *fakeClient) Counts(_ context.Context, _, name, _ string) (k8s.RolloutCounts, error) {
+	f.countedNames = append(f.countedNames, name)
 	if len(f.countsThen) > 1 {
 		first := f.countsThen[0]
 		f.countsThen = f.countsThen[1:]
@@ -163,7 +166,8 @@ func (f *fakeClient) Counts(_ context.Context, _, _, _ string) (k8s.RolloutCount
 // whose first frame can be asserted on.
 //
 // A fake that emitted a stream of changing numbers would be testing its own fiction.
-func (f *fakeClient) WatchCounts(ctx context.Context, _, _, _ string, onChange func(k8s.RolloutCounts)) error {
+func (f *fakeClient) WatchCounts(ctx context.Context, _, name, _ string, onChange func(k8s.RolloutCounts)) error {
+	f.watchedNames = append(f.watchedNames, name)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -904,5 +908,42 @@ func TestPinnedIsAboutTheAddressAndNotTheName(t *testing.T) {
 		if got := pinned(image); got != want {
 			t.Errorf("pinned(%q) = %v, want %v", image, got, want)
 		}
+	}
+}
+
+
+func TestRunWatchesEveryDeploymentInOneOperation(t *testing.T) {
+	client := newFake()
+	history := newHistory()
+	deployer := New(client, history, nil)
+	request := Request{
+		Project: "sample", Cluster: "cluster", Namespace: "default",
+		Image: "registry.example/sample/api@sha256:api",
+		Rollout: "api",
+		Rollouts: []RolloutTarget{
+			{Workload: "api", Image: "registry.example/sample/api@sha256:api"},
+			{Workload: "worker", Image: "registry.example/sample/worker@sha256:worker"},
+		},
+		WaitForRollout: true,
+		Manifests: []k8s.Object{
+			{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api",
+				Body: []byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n")},
+			{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "worker",
+				Body: []byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: worker\n")},
+		},
+	}
+	record, err := deployer.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("run deployment: %v", err)
+	}
+	if record.State != StateSucceeded {
+		t.Fatalf("deployment state = %q, want %q", record.State, StateSucceeded)
+	}
+	seen := map[string]bool{}
+	for _, name := range client.watchedNames {
+		seen[name] = true
+	}
+	if !seen["api"] || !seen["worker"] {
+		t.Fatalf("watched workloads = %v, want api and worker", client.watchedNames)
 	}
 }
