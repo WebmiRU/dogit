@@ -1692,7 +1692,7 @@ watch(() => props.module.id, load)
                        about this project: the same image is in the registry or it is not,
                        and it can change without anything here being deployed. -->
                   <th>In the registry</th>
-                  <th class="deploy-admin-actions-col">Put back</th>
+                  <th class="deploy-admin-actions-col">On workload</th>
                 </tr>
               </thead>
               <tbody>
@@ -1833,25 +1833,7 @@ watch(() => props.module.id, load)
                     >
                       Retire {{ retiredDone }}/{{ retiredTotal }}
                     </span>
-                    <!-- Refused here, in advance, when the registry has said the image is
-                         not there: the module refuses the same thing a moment later, and
-                         refusing it before the question is asked saves a cluster from
-                         being told to pull an image nobody can pull. Every other state
-                         leaves the button alone — a registry that did not answer is not
-                         a reason to stop anybody, it is a reason to know less. -->
-                    <button
-                      v-else-if="props.canManage && image.live"
-                      class="btn btn-small"
-                      type="button"
-                      :disabled="underWay || !!revertBlocked(image.name)"
-                      :title="revertBlocked(image.name)
-                        || (underWay && !busy ? 'Another operation is under way on this place' : '')
-                        || 'Put this image back on the workload'"
-                      @click="revertTo(image.live)"
-                    >
-                      Revert to this
-                    </button>
-                    <span v-else-if="image.live" class="muted small">nothing to put back</span>
+                    <span v-else-if="image.live" class="muted small">Not running</span>
                     <span v-else class="muted">—</span>
                   </td>
                 </tr>
