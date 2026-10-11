@@ -879,20 +879,8 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("job claimed", "job", job.ID, "job_name", job.Name,
 		"project", job.ProjectPath, "runner", integration.Kind)
 
-	// The job state is durably Running after ClaimJob, so announce it immediately. Without
-	// this event the artifact list can miss the entire running interval and jump from Waiting
-	// straight to Passed when the build is fast.
-	s.publishPipeline(r.Context(), job.ProjectID, nil, models.EventJobUpdated, map[string]any{
-		"job_id": job.ID,
-		"status": job.Status,
-	})
-	s.publishPipeline(r.Context(), job.ProjectID, nil, models.EventPipelineUpdated, map[string]any{
-		"pipeline_id":  job.PipelineID,
-		"job_name":     job.Name,
-		"status":       job.Status,
-		"run_finished": !s.runStillHasWork(r.Context(), job.PipelineID),
-		"job_id":       job.ID,
-	})
+	// The job is durably Running after ClaimJob; announce the transition immediately.
+	s.publishJobState(r.Context(), job, job.Status)
 
 	answer := map[string]any{
 		"job":     s.runnerJobView(r, job),
@@ -925,9 +913,15 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 				if finishErr := s.store.Pipelines().FinishJob(r.Context(), job.ID,
 					store.JobFailed, 0, refused.Error()); finishErr != nil {
 					s.log.Error("could not finish a refused job", "job", job.ID, "error", finishErr)
+				} else {
+					s.publishJobState(r.Context(), job, store.JobFailed)
 				}
 			} else if releaseErr := s.store.Pipelines().ReleaseJob(r.Context(), job.ID); releaseErr != nil {
 				s.log.Error("could not put a claimed job back", "job", job.ID, "error", releaseErr)
+			} else {
+				// A transient lookup failure returned the job to the queue, so do not leave its
+				// last announced state as Running.
+				s.publishJobState(r.Context(), job, store.JobPending)
 			}
 			s.writeError(w, r, err)
 			return
@@ -960,6 +954,24 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	answer["clone_url"] = s.cloneURL()
 
 	s.writeJSON(w, r, http.StatusOK, answer)
+}
+
+// publishJobState announces a durable job-state transition to job and pipeline readers.
+func (s *Server) publishJobState(ctx context.Context, job *store.Job, status string) {
+	if job == nil {
+		return
+	}
+	s.publishPipeline(ctx, job.ProjectID, nil, models.EventJobUpdated, map[string]any{
+		"job_id": job.ID,
+		"status": status,
+	})
+	s.publishPipeline(ctx, job.ProjectID, nil, models.EventPipelineUpdated, map[string]any{
+		"pipeline_id":  job.PipelineID,
+		"job_name":     job.Name,
+		"status":       status,
+		"run_finished": !s.runStillHasWork(ctx, job.PipelineID),
+		"job_id":       job.ID,
+	})
 }
 
 // pushTarget is where a build pushes and what it authenticates with.
