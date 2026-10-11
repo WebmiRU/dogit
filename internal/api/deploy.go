@@ -223,7 +223,6 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	imageVariables := map[string]string{}
 	resolvedOutputs := map[string]string{}
 	var image string
-	var err error
 	if len(outputs) > 0 {
 		var images map[string]string
 		if spec.ArtifactPipelineID > 0 {
