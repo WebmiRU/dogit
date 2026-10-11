@@ -53,6 +53,7 @@ type Job struct {
 	Stage       string
 	Name        string
 	ProjectPath string
+	BuildOutputName string
 	Script          []string
 	Variables       map[string]string
 	BreakOnError    *bool
@@ -152,10 +153,13 @@ func (e *Executor) Run(ctx context.Context, job *Job) Result {
 	started := time.Now()
 	result := Result{Status: StatusFailed}
 
-	// Under "build", like every other phase this package says, and for the same reason:
-	// "checkout" is a word of its own on a page that shows a plan, and it becomes a row
-	// below it.
-	_ = e.report.JobProgress(ctx, job.ID, "build", "preparing "+job.ProjectPath)
+	buildPhase := "build"
+	if job.BuildOutputName != "" {
+		buildPhase += ":" + job.BuildOutputName
+	}
+	// A named image owns its checkout and script steps too, even if it times out before
+	// BuildKit starts.
+	_ = e.report.JobProgress(ctx, job.ID, buildPhase, "preparing "+job.ProjectPath)
 
 	// One directory per project, shared between that project's jobs, rather than one per job.
 	// That is what makes keeping a checkout worth anything: the next job of the same project
@@ -200,7 +204,7 @@ func (e *Executor) Run(ctx context.Context, job *Job) Result {
 		// its work "checkout" and "script" hands a person four arrows and a list whose
 		// steps do not match the plan they were just shown. Same step, the name the plan
 		// already uses.
-		_ = e.report.JobProgress(ctx, job.ID, "build", step)
+		_ = e.report.JobProgress(ctx, job.ID, buildPhase, step)
 
 		if err := e.step(ctx, job, directory, step); err != nil {
 			var exitErr *exec.ExitError

@@ -82,12 +82,13 @@ func (r Result) Duration() time.Duration {
 // Called from a single goroutine, so a handler may write to a channel or a file without
 // locking, and is not called after Build returns.
 type Progress struct {
-	Step   string
-	Line   string
-	Cached bool
-	Failed bool
-	// Failed is a step that broke, and Line is a line of that step's output. A build page
-	// with a live log is the difference between watching a build and watching a spinner.
+	Step    string
+	Line    string
+	Cached  bool
+	Failed  bool
+	Started bool
+	// Started marks the first status update for a vertex. The runner uses it to move from
+	// build to push when BuildKit actually begins exporting the image.
 }
 
 // Client is a connection to one builder.
@@ -163,6 +164,7 @@ func (c *Client) Build(ctx context.Context, request Request, onProgress func(Pro
 	// BuildKit re-sends the whole vertex list on every update, so a step already reported
 	// has to be remembered or the log says "step 3 done" forty times.
 	reported := map[string]bool{}
+	started := map[string]bool{}
 	// Digest to step name, so that a line of output can say which step produced it. A log
 	// line attributed to "sha256:9f2a…" is attributed to nothing.
 	names := map[string]string{}
@@ -174,8 +176,13 @@ func (c *Client) Build(ctx context.Context, request Request, onProgress func(Pro
 		defer consumer.Done()
 		for status := range statuses {
 			for _, vertex := range status.Vertexes {
-				names[string(vertex.Digest)] = vertex.Name
-				if vertex.Completed == nil || reported[string(vertex.Digest)] {
+				digest := string(vertex.Digest)
+				names[digest] = vertex.Name
+				if onProgress != nil && vertex.Started != nil && !started[digest] {
+					started[digest] = true
+					onProgress(Progress{Step: vertex.Name, Started: true})
+				}
+				if vertex.Completed == nil || reported[digest] {
 					continue
 				}
 				reported[string(vertex.Digest)] = true

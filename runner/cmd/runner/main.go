@@ -416,6 +416,12 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 	module *settings.Settings, credential *builder.Credentials) {
 	started := time.Now()
 	claimed := answer.Job
+	timeout := time.Duration(module.JobTimeout.Load())
+	if timeout <= 0 {
+		timeout = time.Hour
+	}
+	workCtx, cancelWork := context.WithTimeout(ctx, timeout)
+	defer cancelWork()
 	log.Printf("runner: job %d (%s, %s) on %s", claimed.ID, claimed.Name, claimed.Stage, claimed.ProjectPath)
 
 	// Which runner did this, in the log somebody reads when it went wrong.
@@ -434,6 +440,7 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 		Stage:           claimed.Stage,
 		Name:            claimed.Name,
 		ProjectPath:     claimed.ProjectPath,
+		BuildOutputName: stringOf(claimed.Build, "__dogit_output_name"),
 		Script:          claimed.Script,
 		Variables:       claimed.Variables,
 		BreakOnError:    &breakOnError,
@@ -461,10 +468,10 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 		}
 	}
 
-	result := executor.Run(ctx, job)
+	result := executor.Run(workCtx, job)
 	scriptFailed := result.Status != jobs.StatusSuccess
 	buildAfterScriptFailure := scriptFailed && result.BuildAfterFailure &&
-		len(claimed.Build) > 0 && ctx.Err() == nil
+		len(claimed.Build) > 0 && workCtx.Err() == nil
 	if scriptFailed && !buildAfterScriptFailure {
 		log.Printf("runner: job %d failed after %s: %s", job.ID, result.Took, result.Reason)
 		finish(jobs.StatusFailed, result.Reason)
@@ -480,7 +487,7 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 		}
 		return
 	}
-	if err := buildImage(ctx, cfg, client, job, claimed, credential); err != nil {
+	if err := buildImage(workCtx, cfg, client, job, claimed, credential); err != nil {
 		log.Printf("runner: job %d: build failed: %s", job.ID, err)
 		reason := "the image this job builds did not build: " + err.Error()
 		if scriptFailed {
@@ -559,7 +566,14 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 	}
 
 	image = image + ":" + tag
-	_ = client.JobProgress(ctx, job.ID, "build", "building "+image)
+	outputName := stringOf(build, "__dogit_output_name")
+	displayName := outputName
+	if displayName == "" {
+		displayName = image
+	}
+	buildPhase := namedOutputPhase(build, "build")
+	pushPhase := namedOutputPhase(build, "push")
+	_ = client.JobProgress(ctx, job.ID, buildPhase, "building image "+displayName+" ("+image+")")
 
 	// The credential this process already read at startup, from memory. Not a re-read of the
 	// file, because there is no file: it was deleted on purpose so that a job script running
@@ -574,14 +588,10 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 	}
 	defer built.Close()
 
-	// "push" and not "build": the plan has a step of that name for exactly this, and the
-	// arrow moving from one to the other is what tells a person the build finished and the
-	// push began. Said under one name it would look like one step that never ends.
-	//
-	// The registry, and not the image again. It is one image — the build above said so, and
-	// repeating a name the line above already carries turns two steps into one sentence
-	// said twice. What this step has that the one above did not is where it is going.
-	_ = client.JobProgress(ctx, job.ID, "push", "pushing to "+hostOf(job.Registry.URL))
+	// BuildKit emits exporter vertices while Solve is running. Keep the build arrow active
+	// until export/push has actually started; a Dockerfile failure must not look like a push
+	// that is hanging.
+	currentPhase := buildPhase
 	result, err := built.Build(ctx, builder.Request{
 		ContextDir: filepath.Join(jobs.Directory(cfg.workspace, job.ProjectPath), contextDir),
 		Dockerfile: filepath.Join(contextDir, dockerfile),
@@ -591,17 +601,39 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 		Push:       true,
 		Registry:   registryCredential(job.Registry),
 	}, func(progress builder.Progress) {
+		if progress.Started && isPushProgressStep(progress.Step) && currentPhase != pushPhase {
+			currentPhase = pushPhase
+			_ = client.JobProgress(ctx, job.ID, pushPhase,
+				"pushing image "+displayName+" to "+hostOf(job.Registry.URL))
+		}
+		prefix := ""
+		if outputName != "" {
+			prefix = "image " + outputName + " | "
+		}
 		switch {
+		case progress.Started:
+			// Vertex starts only drive phase transitions; completion and logs are below.
 		case progress.Failed:
-			_ = client.JobLog(ctx, job.ID, "stderr", "FAILED "+progress.Step+"\n")
+			_ = client.JobLog(ctx, job.ID, "stderr", prefix+"FAILED "+progress.Step+"\n")
 		case progress.Line != "":
-			_ = client.JobLog(ctx, job.ID, "stdout", progress.Step+" | "+progress.Line+"\n")
+			_ = client.JobLog(ctx, job.ID, "stdout", prefix+progress.Step+" | "+progress.Line+"\n")
 		default:
-			_ = client.JobLog(ctx, job.ID, "stdout", "done "+progress.Step+"\n")
+			_ = client.JobLog(ctx, job.ID, "stdout", prefix+"done "+progress.Step+"\n")
 		}
 	})
 	if err != nil {
-		return failBuild(ctx, client, job, err.Error())
+		reason := err.Error()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			reason = "the job timed out while building or pushing image " + displayName
+		} else if ctx.Err() != nil {
+			reason = "the job stopped while building or pushing image " + displayName + ": " + ctx.Err().Error()
+		}
+		return failBuild(ctx, client, job, reason)
+	}
+	if currentPhase != pushPhase {
+		// Fallback for BuildKit versions that do not report an exporter start.
+		_ = client.JobProgress(ctx, job.ID, pushPhase,
+			"pushed image "+displayName+" to "+hostOf(job.Registry.URL))
 	}
 
 	log.Printf("runner: job %d pushed %s with digest %s in %s, %d steps (%d cached)",
@@ -614,7 +646,7 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 	// The job log records the exact pushed reference and digest after BuildKit's push-enabled
 	// export completed successfully. No leading newline: the core takes this text as lines,
 	// and a leading one arrives as an empty line in the middle of a build's output.
-	_ = client.JobLog(ctx, job.ID, "stdout", "pushed "+image+" with digest "+result.Digest+"\n")
+	_ = client.JobLog(ctx, job.ID, "stdout", "pushed image "+displayName+" ("+image+") with digest "+result.Digest+"\n")
 	if err := client.ReportBuildArtifact(ctx, job.ID, image, result.Digest); err != nil {
 		_ = client.JobLog(ctx, job.ID, "stderr",
 			"the image was pushed, but dogit could not record its artifact reference and digest: "+err.Error()+"\n")
@@ -628,11 +660,25 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 // build stage is green, whose deploy stage then looks for an image that was never pushed, and
 // whose page shows a run that succeeded. A build that failed has to be a failed build.
 func failBuild(ctx context.Context, client *core.Client, job *jobs.Job, reason string) error {
-	// No phase here either: the core's progress has no "failed" field, so a phase called
-	// "failed" marks nothing and only adds a row that reads as a step. The failure is said
-	// by finishing the job as failed, which is what a page actually reads.
-	_ = client.JobLog(ctx, job.ID, "stderr", "the build did not finish: "+reason+"\n")
+	// The work deadline may have expired. Still allow a brief window for the reason to
+	// reach the core's durable log before runJob records the failed verdict.
+	reportCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	_ = client.JobLog(reportCtx, job.ID, "stderr", "the build did not finish: "+reason+"\n")
 	return errors.New(reason)
+}
+
+func namedOutputPhase(build map[string]any, phase string) string {
+	name := strings.TrimSpace(stringOf(build, "__dogit_output_name"))
+	if name == "" {
+		return phase
+	}
+	return phase + ":" + name
+}
+
+func isPushProgressStep(step string) bool {
+	step = strings.ToLower(step)
+	return strings.Contains(step, "exporting") || strings.Contains(step, "pushing")
 }
 
 // expand fills $VARIABLE and ${VARIABLE} from what the core recorded.
