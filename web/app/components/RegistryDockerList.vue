@@ -140,7 +140,6 @@ function switches(reg: DockerRegistry): string[] {
     return said
   }
   if (reg.enabled === false) said.push('off')
-  if (reg.read_only) said.push('pull only')
   if (reg.insecure_tls) said.push('no TLS check')
   if (reg.login && !reg.has_password) said.push('login, no password')
   return said

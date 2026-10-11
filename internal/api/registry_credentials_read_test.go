@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -127,36 +128,64 @@ func TestAScopeThatSetsOnlyAPasswordIsNotGivenTheLoginAsItsOwn(t *testing.T) {
 	}
 }
 
-// A registry nobody can push to still has scopes somebody may have written, and the page
-// editing it must be able to say so rather than answering with an error about a fact the
-// page can already show.
-func TestAReadOnlyRegistryIsReportedRatherThanRefused(t *testing.T) {
+// A registry cannot be marked pull-only, because there is no such thing here any more.
+//
+// It is refused rather than ignored, and that is the whole point. A field accepted and
+// quietly dropped leaves whoever ticked it believing a rule is in force — the list still
+// shows a registry that may only be pulled from, somebody reads that and concludes the
+// image in it is safe to depend on — and the only way anybody finds out is a build that
+// pushes where they were told it must not.
+func TestARegistryCannotBeMarkedPullOnly(t *testing.T) {
+	env := newRegistryEnv(t, true)
+
+	code, answer := env.do(t, http.MethodPost, "/registry/docker", map[string]any{
+		"url": env.host(), "login": "robot", "password": "hunter2", "read_only": true,
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("a registry was written down as pull-only with %d: %s", code, answer)
+	}
+	if !strings.Contains(answer, "read_only") {
+		t.Errorf("the refusal does not name the field, so whoever sent it is left to guess: %s", answer)
+	}
+}
+
+// And the one that was written down works in both directions, which is the other half of
+// removing the flag: not that nobody can say "pull only" any more, but that every registry
+// on the list is somewhere a build may push.
+//
+// A registry's scopes are still read one scope at a time and an unwritten one still comes
+// back as unwritten, because those are facts about the credentials rather than about the
+// registry.
+func TestARegistryOnTheListIsSomewhereToPush(t *testing.T) {
 	env := newRegistryEnv(t, true)
 
 	_, body := env.mustCreate(t, map[string]any{
-		"url": env.host(), "login": "robot", "password": "hunter2", "read_only": true,
+		"url": env.host(), "login": "robot", "password": "hunter2",
 	})
 	id := env.id(t, body)
 
 	code, answer := env.do(t, http.MethodGet,
 		"/registry/docker/"+id.String()+"/credentials", nil)
 	if code != http.StatusOK {
-		t.Fatalf("reading the instance scope of a read-only registry: %d %s", code, answer)
+		t.Fatalf("reading the instance scope of a registry: %d %s", code, answer)
 	}
 
 	var view struct {
 		ResolvedError string `json:"resolved_error"`
-		Written       bool   `json:"written"`
+		Resolved      struct {
+			Login string `json:"login"`
+		} `json:"resolved"`
 	}
 	if err := json.Unmarshal([]byte(answer), &view); err != nil {
 		t.Fatalf("the answer is not a scope: %v (%s)", err, answer)
 	}
-	if view.ResolvedError == "" {
-		t.Error("nothing says this registry cannot be pushed to, so the page would show a " +
-			"credential as though a build could use it")
+	if view.ResolvedError != "" {
+		t.Errorf("nothing on the list is refused a push any more, but this one is: %s",
+			view.ResolvedError)
 	}
-	if view.Written {
-		t.Error("the instance scope claims to have written something, which nothing did")
+	if view.Resolved.Login != "robot" {
+		t.Errorf("resolved login %q, want the row's own — a registry a build may push to has "+
+			"to come back with the login that lets it", view.Resolved.Login)
 	}
 }
 

@@ -161,7 +161,7 @@ func TestEditingARegistryKeepsThePasswordUnlessTheFormSaysOtherwise(t *testing.T
 	// A form that sends what it was given, which is everything except the password.
 	code, edit := env.do(t, http.MethodPatch, "/registry/docker/"+id.String(), map[string]any{
 		"name": "internal mirror", "url": env.host(), "login": "robot",
-		"insecure_tls": true, "read_only": true, "enabled": true,
+		"insecure_tls": true, "enabled": true,
 	})
 	if code != http.StatusOK {
 		t.Fatalf("editing it: %d %s", code, edit)
@@ -177,7 +177,7 @@ func TestEditingARegistryKeepsThePasswordUnlessTheFormSaysOtherwise(t *testing.T
 	if stored.Password != "hunter2" {
 		t.Errorf("editing a name cleared the password: %q", stored.Password)
 	}
-	if !stored.InsecureTLS || !stored.ReadOnly {
+	if !stored.InsecureTLS || !stored.Enabled {
 		t.Error("the switches did not take")
 	}
 
@@ -406,7 +406,7 @@ func TestEditingOneFieldLeavesTheOthersAlone(t *testing.T) {
 	env := newRegistryEnv(t, true)
 	_, body := env.mustCreate(t, map[string]any{
 		"url": env.host(), "name": "mirror", "login": "robot", "password": "hunter2",
-		"insecure_tls": true, "read_only": true, "note": "owned by the platform team", "enabled": true,
+		"insecure_tls": true, "note": "owned by the platform team", "enabled": true,
 	})
 	id := env.id(t, body)
 
@@ -423,7 +423,7 @@ func TestEditingOneFieldLeavesTheOthersAlone(t *testing.T) {
 	if stored.Name != "the mirror" {
 		t.Errorf("the name is %q", stored.Name)
 	}
-	if !stored.InsecureTLS || !stored.ReadOnly || !stored.Enabled {
+	if !stored.InsecureTLS || !stored.Enabled {
 		t.Error("editing the name turned a switch off")
 	}
 	if stored.Login != "robot" || stored.Password != "hunter2" {

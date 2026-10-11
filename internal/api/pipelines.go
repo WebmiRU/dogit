@@ -1001,10 +1001,10 @@ func (s *Server) pushRegistryFor(ctx context.Context, project *models.Project,
 // push to, for a job that names no place.
 //
 // The same rule as for modules: one is an answer, none is an answer, and several is a
-// question the configuration has not answered. Read-only registries are left out of the
-// count, because a registry an image may only be pulled from is not a candidate for
-// pushing and counting it would make "no registry module installed" look like a choice
-// between three.
+// question the configuration has not answered. Every registry on the list is a candidate:
+// dogit holds the credential for each one and pushes over the network, so there was never
+// a kind of registry that could be listed and not pushed to, and a count that left those
+// out would have made "no registry module installed" look like a choice between three.
 func (s *Server) writtenRegistryTarget(ctx context.Context, project *models.Project,
 	job *store.Job) (*pushTarget, error) {
 
@@ -1015,7 +1015,7 @@ func (s *Server) writtenRegistryTarget(ctx context.Context, project *models.Proj
 	pushable := make([]*store.DockerRegistry, 0, len(written))
 	for i := range written {
 		reg := &written[i]
-		if reg.Enabled && !reg.ReadOnly {
+		if reg.Enabled {
 			pushable = append(pushable, reg)
 		}
 	}

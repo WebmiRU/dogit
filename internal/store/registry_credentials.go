@@ -152,14 +152,6 @@ func (r *RegistryCredentialRepo) Resolve(ctx context.Context, reg *DockerRegistr
 		Login:    reg.Login,
 		Password: reg.Password,
 	}
-	if reg.ReadOnly {
-		// A registry that may only be pulled from is not somewhere a build can push,
-		// and saying so here rather than at the push keeps the failure where the
-		// decision was written down.
-		return resolved, fmt.Errorf("%w: the registry %q is marked read-only, so nothing can be pushed to it",
-			ErrConflict, reg.URL)
-	}
-
 	scopes := []struct {
 		scopeType string
 		scopeID   *uuid.UUID

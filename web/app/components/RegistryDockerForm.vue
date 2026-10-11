@@ -26,7 +26,6 @@ const form = reactive({
   login: '',
   password: '',
   insecure_tls: false,
-  read_only: false,
   note: '',
   enabled: true,
 })
@@ -57,7 +56,6 @@ onMounted(async () => {
     form.login = answer.login
     form.password = ''
     form.insecure_tls = answer.insecure_tls
-    form.read_only = answer.read_only
     form.note = answer.note
     form.enabled = answer.enabled
   } catch (caught) {
@@ -82,7 +80,6 @@ function payload(): DockerRegistryInput {
     url: form.url,
     login: form.login,
     insecure_tls: form.insecure_tls,
-    read_only: form.read_only,
     note: form.note,
     enabled: form.enabled,
   }
@@ -213,10 +210,6 @@ async function remove() {
             <label class="checkbox">
               <input v-model="form.insecure_tls" type="checkbox" />
               Do not check the certificate (a self-signed registry)
-            </label>
-            <label class="checkbox">
-              <input v-model="form.read_only" type="checkbox" />
-              Pull only — images may not be pushed here
             </label>
             <label class="checkbox">
               <input v-model="form.enabled" type="checkbox" />

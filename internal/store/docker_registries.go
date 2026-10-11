@@ -43,8 +43,6 @@ type DockerRegistry struct {
 	// case and the only correct default; a registry behind a self-signed certificate
 	// says so here rather than being quietly unreachable.
 	InsecureTLS bool
-	// ReadOnly marks a registry images may be pulled from and never pushed to.
-	ReadOnly bool
 	// Note is free text for the administrator. Nothing reads it.
 	Note string
 	// Enabled false keeps the record but takes it out of use.
@@ -54,7 +52,7 @@ type DockerRegistry struct {
 }
 
 const dockerRegistryColumns = `id, name, url, login, password, credential_source,
-	insecure_tls, read_only, note, enabled, created_at, updated_at`
+	insecure_tls, note, enabled, created_at, updated_at`
 
 // dockerRegistryRows is one round trip for a page of the list and for the size of the
 // whole list: a page that says "3 of 47" counts 47 rows and reads 10 of them, and two
@@ -104,7 +102,7 @@ func (r *DockerRegistryRepo) List(ctx context.Context, f DockerRegistryListFilte
 	for rows.Next() {
 		var reg DockerRegistry
 		if err := rows.Scan(&total, &reg.ID, &reg.Name, &reg.URL, &reg.Login, &reg.Password,
-			&reg.CredentialSource, &reg.InsecureTLS, &reg.ReadOnly, &reg.Note, &reg.Enabled,
+			&reg.CredentialSource, &reg.InsecureTLS, &reg.Note, &reg.Enabled,
 			&reg.CreatedAt, &reg.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("read a docker registry: %w", err)
 		}
@@ -135,11 +133,11 @@ func (r *DockerRegistryRepo) Create(ctx context.Context, reg *DockerRegistry) er
 	reg.URL = cleanDockerURL(reg.URL)
 	err := r.s.pool.QueryRow(ctx, `
 		INSERT INTO docker_registries
-			(name, url, login, password, credential_source, insecure_tls, read_only, note, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			(name, url, login, password, credential_source, insecure_tls, note, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, created_at, updated_at`,
 		reg.Name, reg.URL, reg.Login, reg.Password, registryCredentialSource(reg.CredentialSource),
-		reg.InsecureTLS, reg.ReadOnly, reg.Note, reg.Enabled,
+		reg.InsecureTLS, reg.Note, reg.Enabled,
 	).Scan(&reg.ID, &reg.CreatedAt, &reg.UpdatedAt)
 	if err != nil {
 		if IsUniqueViolation(err) {
@@ -163,12 +161,12 @@ func (r *DockerRegistryRepo) Update(ctx context.Context, reg *DockerRegistry) er
 		UPDATE docker_registries SET
 			name = $2, url = $3, login = $4, password = $5,
 			credential_source = $6,
-			insecure_tls = $7, read_only = $8,
-			note = $9, enabled = $10, updated_at = now()
+			insecure_tls = $7,
+			note = $8, enabled = $9, updated_at = now()
 		WHERE id = $1
 		RETURNING updated_at`, reg.ID,
 		reg.Name, reg.URL, reg.Login, reg.Password, registryCredentialSource(reg.CredentialSource),
-		reg.InsecureTLS, reg.ReadOnly, reg.Note, reg.Enabled,
+		reg.InsecureTLS, reg.Note, reg.Enabled,
 	).Scan(&reg.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
@@ -256,7 +254,7 @@ func (r *DockerRegistryRepo) Delete(ctx context.Context, id uuid.UUID) error {
 func scanDockerRegistry(row interface{ Scan(...any) error }) (*DockerRegistry, error) {
 	var reg DockerRegistry
 	err := row.Scan(&reg.ID, &reg.Name, &reg.URL, &reg.Login, &reg.Password,
-		&reg.CredentialSource, &reg.InsecureTLS, &reg.ReadOnly, &reg.Note, &reg.Enabled,
+		&reg.CredentialSource, &reg.InsecureTLS, &reg.Note, &reg.Enabled,
 		&reg.CreatedAt, &reg.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("read a docker registry: %w", err)

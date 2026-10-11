@@ -235,8 +235,9 @@ type registryCredentialView struct {
 		Login            string `json:"login"`
 		HasPassword      bool   `json:"has_password"`
 	} `json:"resolved"`
-	// Set when this registry cannot be pushed to at all — marked read-only — so the page
-	// can say so where it is being edited rather than only at the moment a build fails.
+	// Set when this registry cannot be used for a build at all — no credential any scope
+	// has written, or a credential that resolves to nothing — so the page can say so where
+	// it is being edited rather than only at the moment a build fails.
 	ResolvedError string `json:"resolved_error,omitempty"`
 }
 

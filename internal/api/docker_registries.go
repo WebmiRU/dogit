@@ -46,7 +46,6 @@ type dockerRegistryInput struct {
 	// is what a record that has never been told otherwise has always done.
 	CredentialSource *string `json:"credential_source"`
 	InsecureTLS      *bool   `json:"insecure_tls"`
-	ReadOnly         *bool   `json:"read_only"`
 	Note             *string `json:"note"`
 	Enabled          *bool   `json:"enabled"`
 }
@@ -341,7 +340,6 @@ func dockerRegistryView(reg store.DockerRegistry) map[string]any {
 		"has_password":      reg.Password != "",
 		"credential_source": reg.CredentialSource,
 		"insecure_tls":      reg.InsecureTLS,
-		"read_only":         reg.ReadOnly,
 		"note":              reg.Note,
 		"enabled":           reg.Enabled,
 		"created_at":        reg.CreatedAt,
@@ -407,9 +405,6 @@ func applyDockerRegistryInput(reg *store.DockerRegistry, body dockerRegistryInpu
 	}
 	if body.InsecureTLS != nil {
 		reg.InsecureTLS = *body.InsecureTLS
-	}
-	if body.ReadOnly != nil {
-		reg.ReadOnly = *body.ReadOnly
 	}
 	if body.Enabled != nil {
 		reg.Enabled = *body.Enabled

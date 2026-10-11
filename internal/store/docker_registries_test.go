@@ -168,7 +168,6 @@ func TestARegistryKeepsWhatItWasGiven(t *testing.T) {
 		Login:       "robot$deployer",
 		Password:    "hunter2",
 		InsecureTLS: true,
-		ReadOnly:    true,
 		Note:        "written down because the address was in shell history",
 		Enabled:     true,
 	}
@@ -182,7 +181,7 @@ func TestARegistryKeepsWhatItWasGiven(t *testing.T) {
 	}
 	if read.Name != written.Name || read.URL != written.URL || read.Login != written.Login ||
 		read.Password != written.Password || read.InsecureTLS != written.InsecureTLS ||
-		read.ReadOnly != written.ReadOnly || read.Note != written.Note || read.Enabled != written.Enabled {
+		read.Note != written.Note || read.Enabled != written.Enabled {
 		t.Errorf("came back as %+v, not what was written (%+v)", read, written)
 	}
 	if read.CreatedAt.IsZero() || read.UpdatedAt.IsZero() {

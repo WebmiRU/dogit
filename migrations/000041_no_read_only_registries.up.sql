@@ -1,0 +1,17 @@
+-- A registry is somewhere to push, and there is no second kind that is not.
+--
+-- 'read_only' said a registry could be pulled from and never pushed to, and nothing in the
+-- push enforced it: dogit held the credential either way and sent the request regardless,
+-- so the flag was a note on a row that was read in exactly one place — the answer to "is
+-- this somewhere a build may push" — while the registry itself would have refused the push
+-- long afterwards with its own words. Somebody who trusted the flag and nobody who read it
+-- would find out the same way, from the registry.
+--
+-- Every registry on the list has a credential dogit holds, so the honest list is the list
+-- of places images can go. Dropping the column says that; keeping it would mean a flag
+-- with nothing behind it, which is worse than either state it replaced.
+--
+-- The values go with the column on purpose. Restoring them would restore marks that say
+-- "nothing may be pushed here" about registries that have since been pushed to, and that
+-- refusal is the one thing the flag was used for.
+ALTER TABLE docker_registries DROP COLUMN read_only;

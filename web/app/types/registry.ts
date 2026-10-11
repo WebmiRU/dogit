@@ -33,7 +33,6 @@ export interface DockerRegistry {
   login?: string
   has_password?: boolean
   insecure_tls?: boolean
-  read_only?: boolean
   note?: string
   enabled?: boolean
   created_at?: string
@@ -54,7 +53,6 @@ export interface WrittenDockerRegistry extends DockerRegistry {
   login: string
   has_password: boolean
   insecure_tls: boolean
-  read_only: boolean
   note: string
   enabled: boolean
   created_at: string
@@ -83,7 +81,6 @@ export interface DockerRegistryInput {
    */
   password?: string
   insecure_tls?: boolean
-  read_only?: boolean
   note?: string
   enabled?: boolean
 }

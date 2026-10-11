@@ -179,19 +179,29 @@ func TestAGroupOutsideTheRegistryDoesNotChangeIt(t *testing.T) {
 	}
 }
 
-func TestAReadOnlyRegistryIsNotSomewhereToPush(t *testing.T) {
+// Every registry on the list is somewhere a build can push, and there is no second kind
+// that says otherwise.
+//
+// There used to be one marked read-only: images could be pulled from it and nothing could
+// be pushed to it, and the push was refused here with a sentence saying so. dogit holds the
+// credential either way and talks to the registry over the network, so that sentence was
+// the only thing holding it — the push itself would go out and be refused by the registry,
+// long after the row that said otherwise stopped being read by anybody. A flag that asks
+// for a distinction the system cannot enforce is a flag that is right exactly until
+// somebody edits the row, and the cost of being wrong is a build that fails at the push.
+func TestARegistryIsSomewhereToPush(t *testing.T) {
 	st := dbtest.Open(t)
 	ctx := context.Background()
 
 	reg := seedRegistry(t, st, "alice", "secret123", store.CredentialSourceStatic)
-	reg.ReadOnly = true
-	if err := st.DockerRegistries().Update(ctx, reg); err != nil {
-		t.Fatalf("mark read-only: %v", err)
-	}
 
-	if _, err := st.RegistryCredentials().Resolve(ctx, reg, nil, nil); err == nil {
-		t.Fatal("a registry that may only be pulled from was accepted as somewhere to push, " +
-			"so the failure would surface at the push instead of where it was written down")
+	resolved, err := st.RegistryCredentials().Resolve(ctx, reg, nil, nil)
+	if err != nil {
+		t.Fatalf("resolve a registry on the list: %v", err)
+	}
+	if resolved.Login != "alice" || resolved.Password != "secret123" {
+		t.Errorf("got %q/%q, want the row's own — a registry somebody may push to has to "+
+			"come back with the login that lets them", resolved.Login, resolved.Password)
 	}
 }
 
