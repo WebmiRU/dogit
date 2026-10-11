@@ -510,7 +510,7 @@ watch(() => props.runIid, async () => {
 
     <template v-else-if="pipeline">
       <div class="p2-breadcrumbs pipeline-run-breadcrumbs">
-        <NuxtLink :to="\`/p/\${projectPath}/-/pipelines\`">Pipelines</NuxtLink>
+        <NuxtLink :to="'/p/' + projectPath + '/-/pipelines'">Pipelines</NuxtLink>
         <b>/</b>
         <strong>#{{ pipeline.iid }}</strong>
       </div>
