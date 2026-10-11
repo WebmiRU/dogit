@@ -2,6 +2,7 @@
 /** Artifact catalog for every image-producing job, including queued and failed builds. */
 import { watchEvents } from '~/composables/useEvents'
 import { formatDuration, statusClass, statusText } from '~/types/pipeline'
+import type { JobStatus } from '~/types/pipeline'
 
 interface BuildArtifact {
   job_id: number
@@ -10,7 +11,7 @@ interface BuildArtifact {
   job_iid: number
   job_name: string
   stage: string
-  status: string
+  status: JobStatus
   queue_priority: number
   project_path: string
   ref: string
@@ -112,6 +113,7 @@ async function loadSelectedLog() {
   if (!artifact) {
     logText.value = ''
     consumedLogLength.value = 0
+    logLoading.value = false
     return
   }
   logLoading.value = true
@@ -137,7 +139,7 @@ async function loadSelectedLog() {
   } catch {
     // A transient network problem is corrected by the next socket event or reconnect.
   } finally {
-    logLoading.value = false
+    if (requestID === selectedLogRequest) logLoading.value = false
   }
 }
 
@@ -247,7 +249,7 @@ function nextPage() {
                 {{ buildString(one, 'digest') ? buildString(one, 'digest').slice(0, 19) + '…' : '—' }}
               </td>
               <td>
-                <span v-if="one.queue_priority < 100" class="artifact-queue-low">Low priority</span>
+                <span v-if="one.status === 'pending' && one.queue_priority < 100" class="artifact-queue-low">Low priority</span>
                 <span v-else-if="one.status === 'pending'" class="muted">Normal priority</span>
                 <span v-else class="muted">—</span>
               </td>
