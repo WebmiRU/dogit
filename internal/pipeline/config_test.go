@@ -209,7 +209,7 @@ stages:
 `))
 	if err != nil { t.Fatalf("parse stage-first config: %v", err) }
 	if len(config.StageSpecs) != 3 || config.StageSpecs[0].Name != "prepare" { t.Fatalf("stages = %+v", config.StageSpecs) }
-	if !config.StageSpecs[0].BreaksOnFail() || !config.StageSpecs[0].Commands[0].Shell.ChecksExitStatus() { t.Fatal("failure flags must default to true") }
+	if !config.StageSpecs[0].BreaksOnError() || !config.StageSpecs[0].Commands[0].Shell.ChecksExitStatus() { t.Fatal("failure flags must default to true") }
 	if len(config.Deploys) != 1 || config.Deploys[0].Target != "production" { t.Fatalf("deployment config = %+v", config.Deploys) }
 }
 
@@ -217,10 +217,10 @@ func TestStageFirstConfigAllowsFailurePoliciesPerStageAndCommand(t *testing.T) {
 	config, err := Parse([]byte(`
 stages:
   - name: build
-    break_on_fail: false
+    break_on_error: false
     build: {image: registry.example/app}
   - name: custom
-    break_on_fail: false
+    break_on_error: false
     commands:
       - shell:
           command: echo first
@@ -230,7 +230,7 @@ stages:
           check_exit_status: true
 `))
 	if err != nil { t.Fatalf("parse stage-first config: %v", err) }
-	if config.StageSpecs[0].BreaksOnFail() { t.Fatal("explicit break_on_fail=false was not preserved") }
+	if config.StageSpecs[0].BreaksOnError() { t.Fatal("explicit break_on_error=false was not preserved") }
 	commands := config.StageSpecs[1].Commands
 	if commands[0].Shell.ChecksExitStatus() { t.Fatal("explicit check_exit_status=false was not preserved") }
 	if !commands[1].Shell.ChecksExitStatus() { t.Fatal("check_exit_status=true was not preserved") }

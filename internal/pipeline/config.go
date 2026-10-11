@@ -81,7 +81,7 @@ type JobSpec struct {
 
 type StageSpec struct {
 	Name        string         `yaml:"name"`
-	BreakOnFail *bool          `yaml:"break_on_fail"`
+	BreakOnError *bool          `yaml:"break_on_error"`
 	Commands    []StageCommand `yaml:"commands"`
 	Build       map[string]any `yaml:"build"`
 	Deploy      *DeploySpec    `yaml:"-"`
@@ -100,31 +100,31 @@ func (c ShellCommand) ChecksExitStatus() bool {
 	return c.CheckExitStatus == nil || *c.CheckExitStatus
 }
 
-func (s StageSpec) BreaksOnFail() bool {
-	return s.BreakOnFail == nil || *s.BreakOnFail
+func (s StageSpec) BreaksOnError() bool {
+	return s.BreakOnError == nil || *s.BreakOnError
 }
 
 func (s *StageSpec) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("a stage must be a block with name, break_on_fail and commands")
+		return fmt.Errorf("a stage must be a block with name, break_on_error and commands")
 	}
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		switch key := node.Content[i].Value; key {
-		case "name", "break_on_fail", "commands", "build", "deploy":
+		case "name", "break_on_error", "commands", "build", "deploy":
 		default:
-			return fmt.Errorf("stage has no field called %q; it knows name, break_on_fail, commands, build and deploy", key)
+			return fmt.Errorf("stage has no field called %q; it knows name, break_on_error, commands, build and deploy", key)
 		}
 	}
 	var decoded struct {
 		Name        string         `yaml:"name"`
-		BreakOnFail *bool          `yaml:"break_on_fail"`
+		BreakOnError *bool          `yaml:"break_on_error"`
 		Commands    []StageCommand `yaml:"commands"`
 		Build       map[string]any `yaml:"build"`
 	}
 	if err := node.Decode(&decoded); err != nil {
 		return err
 	}
-	*s = StageSpec{Name: decoded.Name, BreakOnFail: decoded.BreakOnFail, Commands: decoded.Commands, Build: decoded.Build}
+	*s = StageSpec{Name: decoded.Name, BreakOnError: decoded.BreakOnError, Commands: decoded.Commands, Build: decoded.Build}
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		if node.Content[i].Value != "deploy" {
 			continue

@@ -142,8 +142,11 @@ type Job struct {
 	Stage         string     `json:"stage"`
 	StageOrder    int        `json:"stage_order"`
 	Status        string     `json:"status"`
-	QueuePriority int        `json:"queue_priority"`
-	RunnerID      *uuid.UUID `json:"runner_id,omitempty"`
+	QueuePriority   int        `json:"queue_priority"`
+	BreakOnError    bool       `json:"break_on_error"`
+	BreakOnErrorSet bool       `json:"-"`
+	CheckExitStatus []bool     `json:"check_exit_status"`
+	RunnerID        *uuid.UUID `json:"runner_id,omitempty"`
 	Image        string     `json:"image"`
 	Script       []string   `json:"script"`
 	AllowFailure bool       `json:"allow_failure"`
@@ -278,6 +281,12 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 		if job.QueuePriority <= 0 {
 			job.QueuePriority = QueuePriorityNormal
 		}
+		if !job.BreakOnErrorSet {
+			job.BreakOnError = true
+		}
+		if job.CheckExitStatus == nil {
+			job.CheckExitStatus = []bool{}
+		}
 
 		build, err := jsonbOf(job.Build)
 		if err != nil {
@@ -287,18 +296,23 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 		if err != nil {
 			return nil, nil, err
 		}
+		checkExitStatus, err := jsonbOf(job.CheckExitStatus)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		// RETURNING rather than a plain insert: the job's id is needed by whatever
 		// asked for this pipeline, and reading it back separately would be a second
 		// round trip for a value the database already had.
 		err = tx.QueryRow(ctx, `
 			INSERT INTO jobs (pipeline_id, iid, name, stage, status, image, script,
-			                  allow_failure, needs, build, deploy, stage_order, queue_priority)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			                  allow_failure, needs, build, deploy, stage_order, queue_priority,
+			                  break_on_error, check_exit_status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			RETURNING id`,
 			job.PipelineID, job.IID, job.Name, job.Stage, job.Status, job.Image,
 			job.Script, job.AllowFailure, job.Needs, build, deploy, job.StageOrder,
-			job.QueuePriority).Scan(&job.ID)
+			job.QueuePriority, job.BreakOnError, checkExitStatus).Scan(&job.ID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create job: %w", err)
 		}
@@ -624,7 +638,7 @@ const jobColumns = `
 	SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.runner_id, j.image,
 	       j.script, j.allow_failure, j.needs, j.build, j.deploy, j.started_at, j.finished_at,
 	       j.duration_ms, j.created_at, j.error, p.project_id, pr.path, p.variables,
-	       j.stage_order, j.queue_priority`
+	       j.stage_order, j.queue_priority, j.break_on_error, j.check_exit_status`
 
 // scanJob reads the row the cursor is standing on. It does not step the cursor: the
 // caller is walking a list, and a scan that advanced it would swallow every other row.
@@ -639,11 +653,13 @@ func scanJobRow(row interface{ Scan(...any) error }) (*Job, error) {
 	var build []byte
 	var deploy []byte
 	var variables []byte
+	var checkExitStatus []byte
 
 	if err := row.Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
 		&job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs, &build, &deploy,
 		&job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt, &job.Error,
-		&job.ProjectID, &job.ProjectPath, &variables, &job.StageOrder, &job.QueuePriority); err != nil {
+		&job.ProjectID, &job.ProjectPath, &variables, &job.StageOrder, &job.QueuePriority,
+		&job.BreakOnError, &checkExitStatus); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
 
@@ -663,6 +679,10 @@ func scanJobRow(row interface{ Scan(...any) error }) (*Job, error) {
 	decodeJSONB(deploy, &job.Deploy)
 	if len(job.Deploy) == 0 {
 		job.Deploy = nil
+	}
+	decodeJSONB(checkExitStatus, &job.CheckExitStatus)
+	if job.CheckExitStatus == nil {
+		job.CheckExitStatus = []bool{}
 	}
 	return &job, nil
 }
@@ -700,7 +720,8 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 			        AND prior.stage_order < j.stage_order
 			        AND (
 			          prior.status IN ($4, $5, $6, $7)
-			          OR (prior.status = $8 AND NOT prior.allow_failure)
+			          OR (prior.status = $8 AND ((NOT prior.allow_failure AND prior.break_on_error)
+				          OR (prior.stage = 'build' AND j.deploy IS NOT NULL)))
 			        )
 			  )
 			-- Low-priority jobs gain one point per waiting minute until they reach normal
@@ -842,18 +863,28 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 	// working on it, and cancelling it here would only make two things believe
 	// otherwise — the machine, and whoever reads the log afterwards.
 	if status == JobFailed || status == JobCanceled || status == JobInterrupted {
-		// A hard stop cancels later stages, not sibling jobs in the same stage.
-		// An explicitly allowed failure is the only failed job that does not block them.
+		// A checked command may fail without stopping later stages. A stopped or lost
+		// runner always stops them, and a failed build always disqualifies its deploy,
+		// even when the rest of that stage was configured to continue.
 		if _, err := r.s.pool.Exec(ctx, `
-			UPDATE jobs SET status = $2, finished_at = now()
-			WHERE pipeline_id = (
-			    SELECT pipeline_id FROM jobs
-			    WHERE id = $1 AND (status <> $4 OR NOT allow_failure)
-			)
-			  AND stage_order > (SELECT stage_order FROM jobs WHERE id = $1)
-			  AND status = $3`,
-			id, JobSkipped, JobPending, JobFailed); err != nil {
-			return fmt.Errorf("skip the stages after a stopped job: %w", err)
+			UPDATE jobs AS later
+			SET status = $2, finished_at = now()
+			WHERE later.pipeline_id = (SELECT pipeline_id FROM jobs WHERE id = $1)
+			  AND later.stage_order > (SELECT stage_order FROM jobs WHERE id = $1)
+			  AND later.status = $3
+			  AND EXISTS (
+			    SELECT 1 FROM jobs AS source
+			    WHERE source.id = $1
+			      AND (
+			        source.status IN ($4, $5)
+			        OR (source.status = $6 AND (
+			              (NOT source.allow_failure AND source.break_on_error)
+			              OR (source.stage = 'build' AND later.deploy IS NOT NULL)
+			        ))
+			      )
+			  )`,
+			id, JobSkipped, JobPending, JobCanceled, JobInterrupted, JobFailed); err != nil {
+			return fmt.Errorf("skip work blocked by a stopped stage: %w", err)
 		}
 	}
 

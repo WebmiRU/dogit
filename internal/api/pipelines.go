@@ -445,6 +445,9 @@ func variablesFor(config *pipeline.Config, ref pipeline.Ref) map[string]string {
 }
 
 func jobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []store.Job {
+	if len(config.StageSpecs) > 0 {
+		return stageJobsFrom(config, ref, only)
+	}
 	jobs := []store.Job{}
 	stageOrder := make(map[string]int, len(config.Stages))
 	for index, name := range config.Stages {
@@ -515,6 +518,55 @@ func jobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []store.Jo
 	return jobs
 }
 
+// stageJobsFrom turns each explicit stage into one job. Its shell commands run in
+// their declared order and carry their exit-status policy to the runner.
+func stageJobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []store.Job {
+	jobs := []store.Job{}
+	variables := variablesFor(config, ref)
+
+	for order, spec := range config.StageSpecs {
+		if only != "" && spec.Name != only {
+			continue
+		}
+		if spec.Name == "deploy" {
+			if only != "" || spec.Deploy == nil {
+				continue
+			}
+			for _, deployment := range pipeline.DeploysFor([]pipeline.DeploySpec{*spec.Deploy}, ref) {
+				job := deployJob(deployment)
+				job.StageOrder = order
+				job.BreakOnError = spec.BreaksOnError()
+				job.BreakOnErrorSet = true
+				jobs = append(jobs, job)
+			}
+			continue
+		}
+
+		job := store.Job{
+			Name:            spec.Name,
+			Stage:           spec.Name,
+			StageOrder:      order,
+			Image:           "alpine:3.21",
+			BreakOnError:    spec.BreaksOnError(),
+			BreakOnErrorSet: true,
+			Script:          make([]string, 0, len(spec.Commands)),
+			CheckExitStatus: make([]bool, 0, len(spec.Commands)),
+		}
+		for _, command := range spec.Commands {
+			if command.Shell == nil {
+				continue
+			}
+			job.Script = append(job.Script, command.Shell.Command)
+			job.CheckExitStatus = append(job.CheckExitStatus, command.Shell.ChecksExitStatus())
+		}
+		if spec.Name == "build" {
+			job.Build = expandBuild(spec.Build, variables)
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs
+}
+
 // deployJob is the job that carries out a deployment.
 //
 // It has no script, which is exactly why no runner may claim it: there is nothing on
@@ -538,9 +590,11 @@ func deployJob(spec pipeline.DeploySpec) store.Job {
 		// "deploy" is a reserved job name in the file's own terms: somebody who
 		// writes a job called deploy gets this one instead of theirs, which is why it
 		// is checked for while the configuration is read.
-		Name:   name,
-		Stage:  "deploy",
-		Deploy: deploy,
+		Name:            name,
+		Stage:           "deploy",
+		Deploy:          deploy,
+		BreakOnError:    true,
+		BreakOnErrorSet: true,
 	}
 }
 
@@ -1885,15 +1939,17 @@ func (s *Server) runnerJobView(r *http.Request, job *store.Job) map[string]any {
 // jobView is one job as the interface sees it.
 func jobView(r *http.Request, job *store.Job) map[string]any {
 	view := map[string]any{
-		"id":            job.ID,
-		"pipeline_id":   job.PipelineID,
-		"iid":           job.IID,
-		"name":          job.Name,
-		"stage":          job.Stage,
-		"stage_order":    job.StageOrder,
-		"status":         job.Status,
-		"queue_priority": job.QueuePriority,
-		"image":          job.Image,
+		"id":                job.ID,
+		"pipeline_id":       job.PipelineID,
+		"iid":               job.IID,
+		"name":              job.Name,
+		"stage":             job.Stage,
+		"stage_order":       job.StageOrder,
+		"status":            job.Status,
+		"queue_priority":    job.QueuePriority,
+		"break_on_error":    job.BreakOnError,
+		"check_exit_status": job.CheckExitStatus,
+		"image":             job.Image,
 		"script":        job.Script,
 		"allow_failure": job.AllowFailure,
 		"created_at":    job.CreatedAt,

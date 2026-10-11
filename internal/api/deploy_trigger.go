@@ -685,9 +685,9 @@ func (s *Server) pendingDeploy(ctx context.Context, pipelineID int64) (*store.Jo
 		case store.JobRefused, store.JobSkipped, store.JobSuperseded:
 			// A terminal non-failure does not hold up later stages.
 		case store.JobFailed:
-			if !job.AllowFailure {
+			if job.Stage == "build" || (!job.AllowFailure && job.BreakOnError) {
 				failed = true
-			}
+		}
 		case store.JobCanceled, store.JobInterrupted:
 			failed = true
 		}
