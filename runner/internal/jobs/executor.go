@@ -208,7 +208,7 @@ func (e *Executor) Run(ctx context.Context, job *Job) Result {
 
 			if isCommandExit && !checksExitStatus(job, index) {
 				_ = e.report.JobLog(context.WithoutCancel(ctx), job.ID, "stderr",
-					fmt.Sprintf("[command %d exit status %d ignored: check_exit_status=false]\\n", index+1, exitErr.ExitCode()))
+					fmt.Sprintf("[command %d exit status %d ignored: check_exit_status=false]\n", index+1, exitErr.ExitCode()))
 				result.Steps = index + 1
 				continue
 			}

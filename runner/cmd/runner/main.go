@@ -468,7 +468,7 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 		log.Printf("runner: job %d: build failed: %s", job.ID, err)
 		reason := "the image this job builds did not build: " + err.Error()
 		if scriptFailed {
-			reason = result.Reason + "\\n" + reason
+			reason = result.Reason + "\n" + reason
 		}
 		finish(jobs.StatusFailed, reason)
 		return
