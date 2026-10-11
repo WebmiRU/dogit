@@ -25,6 +25,8 @@ interface DeployOperation {
   job_id: number
   status: string
   name: string
+  /** Whether the operation deploys a previously built artifact rather than building now. */
+  artifact?: boolean
   /**
    * What is being deployed: the tag that was pushed or the branch it was pushed to, and the
    * commit it pointed at. Both from the run rather than from the job, which knows only the
@@ -279,6 +281,7 @@ async function load() {
     reason.value = answer.reason ?? ''
     reorder(answer)
     error.value = ''
+    void loadOperationPlans()
     // The log of anything under way that this page did not watch. One request per operation,
     // once, on arrival: a rollout says many lines a minute and the socket is carrying the ones
     // from here on, so this is not a stream being duplicated — it is the part of the account
@@ -830,6 +833,7 @@ watchEvents({
  * a card describing something that is not happening.
  */
 const plans = ref<Record<string, { key: string; label: string }[]>>({})
+const operationPlansLoaded = ref<Record<number, true>>({})
 
 /** The steps for one operation, by what that operation is. A deployment unless it says otherwise. */
 function planOf(jobID: number): { key: string; label: string }[] {
@@ -838,7 +842,44 @@ function planOf(jobID: number): { key: string; label: string }[] {
   const kind = watching.value[jobID]?.kind === 'revert' || savedKind?.kind === 'revert'
     ? 'revert'
     : 'deploy'
-  return plans.value[kind] ?? []
+  return plans.value[String(jobID)] ?? plans.value[kind] ?? []
+}
+
+
+// Plans are read from the SHA and target represented by a card, not today's default branch.
+// Historic artifacts can be deployed after a branch moves, and two targets can have different
+// manifests and pre/post jobs even though both are Kubernetes deployments.
+async function loadOperationPlans() {
+  const pending = operations.value.filter((operation) =>
+    !operationPlansLoaded.value[operation.job_id] &&
+    (Boolean(operation.sha) || watching.value[operation.job_id]?.kind === 'revert'),
+  )
+  await Promise.all(pending.map(async (operation) => {
+    const jobID = operation.job_id
+    operationPlansLoaded.value = { ...operationPlansLoaded.value, [jobID]: true }
+    const params = new URLSearchParams()
+    const savedKind = watching.value[jobID]?.kind ??
+      (operation.progress?.deployment as { kind?: unknown } | undefined)?.kind
+    if (savedKind === 'revert') {
+      params.set('kind', 'revert')
+    } else {
+      if (operation.sha) params.set('sha', operation.sha)
+      if (operation.place) params.set('target', operation.place)
+      if (operation.name.startsWith('deploy:')) params.set('name', operation.name)
+      if (operation.artifact) params.set('artifact', 'true')
+    }
+    const suffix = params.size ? '?' + params.toString() : ''
+    try {
+      const answer = await api.get<{ steps?: { key: string; label: string }[] }>(
+        '/projects/' + props.projectId + '/deploy-plan' + suffix,
+      )
+      if (Array.isArray(answer.steps) && answer.steps.length) {
+        plans.value = { ...plans.value, [String(jobID)]: answer.steps }
+      }
+    } catch {
+      // The global plan remains the fallback for older operation records without a source SHA.
+    }
+  }))
 }
 
 async function loadPlan() {
@@ -955,8 +996,15 @@ watchEvents({
     if (event.kind !== 'deploy.plan') return
     const steps = event.payload?.steps
     if (!Array.isArray(steps) || !steps.length) return
-    const kind = event.payload?.kind === 'revert' ? 'revert' : 'deploy'
-    plans.value = { ...plans.value, [kind]: steps as { key: string; label: string }[] }
+    const rows = steps as { key: string; label: string }[]
+    const jobID = Number(event.payload?.job_id ?? 0)
+    if (jobID > 0) {
+      plans.value = { ...plans.value, [String(jobID)]: rows }
+      operationPlansLoaded.value = { ...operationPlansLoaded.value, [jobID]: true }
+    } else {
+      const kind = event.payload?.kind === 'revert' ? 'revert' : 'deploy'
+      plans.value = { ...plans.value, [kind]: rows }
+    }
   },
 })
 </script>
