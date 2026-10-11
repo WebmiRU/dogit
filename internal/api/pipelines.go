@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -445,6 +446,10 @@ func variablesFor(config *pipeline.Config, ref pipeline.Ref) map[string]string {
 
 func jobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []store.Job {
 	jobs := []store.Job{}
+	stageOrder := make(map[string]int, len(config.Stages))
+	for index, name := range config.Stages {
+		stageOrder[name] = index
+	}
 	for _, name := range config.Order {
 		spec, ok := config.Jobs[name]
 		if !ok {
@@ -463,6 +468,7 @@ func jobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []store.Jo
 		jobs = append(jobs, store.Job{
 			Name:         name,
 			Stage:        spec.Stage,
+			StageOrder:   stageOrder[spec.Stage],
 			Image:        spec.Image,
 			Script:       script,
 			AllowFailure: spec.AllowFailure,
@@ -495,10 +501,17 @@ func jobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []store.Jo
 	// shows one line, not three that appear and disappear.
 	if only == "" {
 		for _, spec := range pipeline.DeploysFor(config.Deploys, ref) {
-			jobs = append(jobs, deployJob(spec))
+			job := deployJob(spec)
+			job.StageOrder = stageOrder["deploy"]
+			jobs = append(jobs, job)
 		}
 	}
 
+	// Job ids follow stage order so the history reads as the pipeline runs, not as YAML
+	// happened to name a later-stage job first. Keep the author's order within each stage.
+	sort.SliceStable(jobs, func(i, j int) bool {
+		return jobs[i].StageOrder < jobs[j].StageOrder
+	})
 	return jobs
 }
 

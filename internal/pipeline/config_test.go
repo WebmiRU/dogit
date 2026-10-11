@@ -77,6 +77,8 @@ build:
   image: golang:1.25
   script:
     - go build ./...
+  build:
+    tag: test
   artifacts:
     when: always
 `))
@@ -84,7 +86,7 @@ build:
 		t.Fatalf("parse: %v", err)
 	}
 
-	if len(config.Stages) != 2 || config.Stages[0] != "build" {
+	if len(config.Stages) != 3 || config.Stages[0] != "build" || config.Stages[2] != "deploy" {
 		t.Errorf("stages = %v", config.Stages)
 	}
 	if len(config.Jobs) != 2 {

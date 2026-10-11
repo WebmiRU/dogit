@@ -233,10 +233,62 @@ func Parse(data []byte) (*Config, error) {
 		config.Jobs[name] = job
 	}
 
-	if len(config.Stages) == 0 {
-		config.Stages = []string{"build", "test", "deploy"}
+	stages, err := canonicalStages(config.Stages)
+	if err != nil {
+		return nil, err
+	}
+	config.Stages = stages
+	knownStages := make(map[string]bool, len(stages))
+	for _, stage := range stages {
+		knownStages[stage] = true
+	}
+	for name, job := range config.Jobs {
+		if !knownStages[job.Stage] {
+			return nil, fmt.Errorf("job %q uses stage %q, which is not listed in stages", name, job.Stage)
+		}
+		switch job.Stage {
+		case "build":
+			if len(job.Build) == 0 {
+				return nil, fmt.Errorf("job %q uses reserved stage build but has no build: definition", name)
+			}
+		case "deploy":
+			return nil, fmt.Errorf("job %q uses reserved stage deploy; configure deployment with the top-level deploy: or deploys: block", name)
+		}
 	}
 	return config, nil
+}
+
+// canonicalStages makes build and deploy fixed parts of every pipeline.
+//
+// Their names are contracts, not labels a project may move or redefine: build always comes
+// first, deploy always comes last, and the project controls only the order of stages between
+// them. Omitting either from the YAML does not remove it from the execution model.
+func canonicalStages(declared []string) ([]string, error) {
+	if len(declared) == 0 {
+		return []string{"build", "test", "deploy"}, nil
+	}
+	custom := make([]string, 0, len(declared))
+	seen := map[string]bool{"build": true, "deploy": true}
+	for _, raw := range declared {
+		stage := strings.TrimSpace(raw)
+		if stage == "" {
+			return nil, fmt.Errorf("stages cannot contain an empty name")
+		}
+		if stage == "build" || stage == "deploy" {
+			continue
+		}
+		if seen[stage] {
+			return nil, fmt.Errorf("stage %q is listed more than once", stage)
+		}
+		seen[stage] = true
+		custom = append(custom, stage)
+	}
+	stages := make([]string, 0, len(custom)+2)
+	stages = append(stages, "build")
+	stages = append(stages, custom...)
+	stages = append(stages, "deploy")
+	return stages, nil
+}
 }
 
 // Load reads a project's configuration from a checkout.

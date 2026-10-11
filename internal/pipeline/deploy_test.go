@@ -12,7 +12,7 @@ import (
 // did something. Each of those deploys something, or nothing, and both are worse than
 // a refusal at the moment the file is read.
 
-const deployable = "image:\n  stage: build\n  script: [true]\n"
+const deployable = "image:\n  stage: test\n  script: [true]\n"
 
 // A file that says nothing about deploying is a file that does not deploy.
 func TestAFileThatDoesNotMentionDeployingDoesNotDeploy(t *testing.T) {
