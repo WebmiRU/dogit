@@ -184,6 +184,7 @@ func (e *Executor) Run(ctx context.Context, job *Job) Result {
 		return result
 	}
 
+	hadCommandFailure := false
 	for index, step := range job.Script {
 		step = strings.TrimSpace(step)
 		if step == "" {
@@ -202,19 +203,48 @@ func (e *Executor) Run(ctx context.Context, job *Job) Result {
 		_ = e.report.JobProgress(ctx, job.ID, "build", step)
 
 		if err := e.step(ctx, job, directory, step); err != nil {
-			result.Reason = err.Error()
+			var exitErr *exec.ExitError
+			isCommandExit := errors.As(err, &exitErr) && ctx.Err() == nil
+
+			if isCommandExit && !checksExitStatus(job, index) {
+				_ = e.report.JobLog(context.WithoutCancel(ctx), job.ID, "stderr",
+					fmt.Sprintf("[command %d exit status %d ignored: check_exit_status=false]\\n", index+1, exitErr.ExitCode()))
+				result.Steps = index + 1
+				continue
+			}
+			if result.Reason == "" {
+				result.Reason = fmt.Sprintf("command %d (%s): %v", index+1, step, err)
+			}
 			result.Steps = index
-			return result
+			if !isCommandExit || breaksOnError(job) {
+				result.Took = time.Since(started)
+				return result
+			}
+			hadCommandFailure = true
+			continue
 		}
 		result.Steps = index + 1
 	}
 
-	// No phase of its own for "the script is over". A page learns a step is finished from
-	// the step after it, and this package has no opinion about what comes next; announcing
-	// it under a name of its own would put a row on the page that no plan asked for.
-	result.Status = StatusSuccess
+	// With break_on_error=false the remaining commands run, but a checked non-zero
+	// status still fails the stage. A build then still builds and pushes its image before
+	// reporting that failure; the core will never deploy an artifact from a failed build.
 	result.Took = time.Since(started)
+	if hadCommandFailure {
+		result.Status = StatusFailed
+		result.BuildAfterFailure = !breaksOnError(job)
+		return result
+	}
+	result.Status = StatusSuccess
 	return result
+}
+
+func breaksOnError(job *Job) bool {
+	return job.BreakOnError == nil || *job.BreakOnError
+}
+
+func checksExitStatus(job *Job, index int) bool {
+	return index < 0 || index >= len(job.CheckExitStatus) || job.CheckExitStatus[index]
 }
 
 // clone fetches the job's commit into a directory of its own.
