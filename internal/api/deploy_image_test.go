@@ -30,6 +30,35 @@ func TestAnImageIsSplitIntoItsRepositoryAndTag(t *testing.T) {
 	}
 }
 
+func TestPinnedBuildReferenceUsesRecordedDigest(t *testing.T) {
+	build := map[string]any{
+		"reference": "registry.example/team/app:v1.2",
+		"digest": "sha256:0123456789abcdef",
+	}
+	got := pinnedBuildReference(build, "registry.example/team/app")
+	want := "registry.example/team/app@sha256:0123456789abcdef"
+	if got != want {
+		t.Fatalf("pinnedBuildReference = %q, want %q", got, want)
+	}
+}
+
+func TestPinnedBuildReferenceRejectsDifferentRepository(t *testing.T) {
+	build := map[string]any{
+		"reference": "registry.example/team/other:v1.2",
+		"digest": "sha256:0123456789abcdef",
+	}
+	if got := pinnedBuildReference(build, "registry.example/team/app"); got != "" {
+		t.Fatalf("pinnedBuildReference accepted a different repository: %q", got)
+	}
+}
+
+func TestPinnedBuildReferenceRequiresDigest(t *testing.T) {
+	build := map[string]any{"reference": "registry.example/team/app:v1.2", "digest": "v1.2"}
+	if got := pinnedBuildReference(build, "registry.example/team/app"); got != "" {
+		t.Fatalf("pinnedBuildReference accepted a tag as digest: %q", got)
+	}
+}
+
 // The credential's address is the host and port, never the path.
 //
 // A colon before the last slash is a port and one after it is a tag, which is the

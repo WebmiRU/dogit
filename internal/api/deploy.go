@@ -735,6 +735,22 @@ func prefaceFor(ctx context.Context, s *Server, run *store.Pipeline, jobID int64
 // has no build of its own, so asking it here would find nothing and apply the
 // manifests with the placeholder still in them. It comes from whichever job in this
 // run produced an image.
+// pinnedBuildReference returns the image by the digest recorded after a successful push.
+// The recorded tag is only accepted when it names the repository built for this deployment.
+func pinnedBuildReference(build map[string]any, expectedImage string) string {
+	reference := strings.TrimSpace(asString(build["reference"]))
+	digest := strings.TrimSpace(asString(build["digest"]))
+	if reference == "" || !strings.HasPrefix(digest, "sha256:") {
+		return ""
+	}
+	repository, _ := splitImage(reference)
+	expectedRepository, _ := splitImage(expectedImage)
+	if repository == "" || repository != expectedRepository {
+		return ""
+	}
+	return repository + "@" + digest
+}
+
 func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.Pipeline,
 	log func(string, ...any)) (string, error) {
 
@@ -753,6 +769,23 @@ func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.
 		return "", nil
 	}
 
+	// Prefer the exact digest the runner recorded immediately after a successful push.
+	// Resolving the mutable tag again is unnecessary here and can fail for a registry
+	// whose module cannot resolve its own public address, even though the push succeeded.
+	// Keep the registry lookup below for pipelines created before digest recording existed.
+	if from != "" {
+		if jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, run.ID); err == nil {
+			for _, producer := range jobs {
+				if producer.Name != from || len(producer.Build) == 0 {
+					continue
+				}
+				if pinned := pinnedBuildReference(producer.Build, image); pinned != "" {
+					log("  image:     %s (built by %q; digest recorded after push)\n", pinned, from)
+					return pinned, nil
+				}
+			}
+		}
+	}
 	log("  image:     %s (built by %q)\n", image, from)
 
 	// Under the commit's own name when the repository named no image, because the
