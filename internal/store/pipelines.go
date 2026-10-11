@@ -837,16 +837,19 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 	// A job that is already running is left alone: it belongs to a machine that is
 	// working on it, and cancelling it here would only make two things believe
 	// otherwise — the machine, and whoever reads the log afterwards.
-	if status == JobFailed {
-		// A failure stops later stages, not sibling jobs in the same stage. An explicitly
-		// allowed failure does not block anything downstream.
+	if status == JobFailed || status == JobCanceled || status == JobInterrupted {
+		// A hard stop cancels later stages, not sibling jobs in the same stage.
+		// An explicitly allowed failure is the only failed job that does not block them.
 		if _, err := r.s.pool.Exec(ctx, `
 			UPDATE jobs SET status = $2, finished_at = now()
-			WHERE pipeline_id = (SELECT pipeline_id FROM jobs WHERE id = $1 AND NOT allow_failure)
+			WHERE pipeline_id = (
+			    SELECT pipeline_id FROM jobs
+			    WHERE id = $1 AND (status <> $5 OR NOT allow_failure)
+			)
 			  AND stage_order > (SELECT stage_order FROM jobs WHERE id = $1)
 			  AND status = $3`,
-			id, JobSkipped, JobPending); err != nil {
-			return fmt.Errorf("skip the stages after a failed one: %w", err)
+			id, JobSkipped, JobPending, status, JobFailed); err != nil {
+			return fmt.Errorf("skip the stages after a stopped job: %w", err)
 		}
 	}
 
@@ -973,6 +976,24 @@ func (r *PipelineRepo) ReapStaleJobs(ctx context.Context, olderThan time.Duratio
 	}
 	if len(stale) == 0 {
 		return nil, nil
+	}
+
+	// A reaped runner stops its stage. Mark still-pending jobs in later stages skipped,
+	// while leaving parallel siblings in the same stage queued.
+	if _, err := r.s.pool.Exec(ctx, `
+		UPDATE jobs later
+		SET status = $1, finished_at = now()
+		WHERE later.status = $2
+		  AND EXISTS (
+		      SELECT 1 FROM jobs earlier
+		      WHERE earlier.pipeline_id = later.pipeline_id
+		        AND earlier.stage_order < later.stage_order
+		        AND (
+		          earlier.status IN ($3, $4)
+		          OR (earlier.status = $5 AND NOT earlier.allow_failure)
+		        )
+		  )`, JobSkipped, JobPending, JobInterrupted, JobCanceled, JobFailed); err != nil {
+		return stale, fmt.Errorf("skip stages blocked by interrupted jobs: %w", err)
 	}
 
 	// The pipelines those jobs belonged to are finished for the same reason, by the
