@@ -113,6 +113,27 @@ func (b *Bus) Publish(ctx context.Context, kind models.EventKind, projectID, act
 	return nil
 }
 
+// PublishTransient broadcasts a short-lived event without writing it to the durable activity
+// log. It is for high-frequency signals, such as a job log growing, where the consumer reads
+// the actual content from its authoritative endpoint. Reconnects recover by refreshing state.
+//
+// A zero ID distinguishes it from durable events; transports send it immediately and do not
+// advance their persistent cursor. It is deliberately not replayed by RunTail.
+func (b *Bus) PublishTransient(ctx context.Context, kind models.EventKind, projectID, actorID *uuid.UUID, payload any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	b.broadcast(models.Event{
+		Kind: kind, ProjectID: projectID, ActorID: actorID,
+		Payload: raw, CreatedAt: time.Now().UTC(),
+	})
+	return nil
+}
+
 // Subscribe returns a channel of events published after the call, and a
 // function that unsubscribes. The channel is buffered; a slow consumer is
 // dropped rather than allowed to block publishers.

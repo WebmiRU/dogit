@@ -16,6 +16,9 @@ const (
 	EventPipelineUpdated     EventKind = "pipeline.updated"
 	EventJobCreated          EventKind = "job.created"
 	EventJobUpdated          EventKind = "job.updated"
+	// EventJobLog is transient. It signals that a running job's object-store log grew,
+	// without writing one durable activity row for every few lines of compiler output.
+	EventJobLog              EventKind = "job.log"
 	EventMergeRequestChanged EventKind = "merge_request.changed"
 	EventProjectUpdated      EventKind = "project.updated"
 

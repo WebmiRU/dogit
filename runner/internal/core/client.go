@@ -255,6 +255,15 @@ func (c *Client) JobProgress(ctx context.Context, jobID int64, phase, message st
 		map[string]string{"phase": phase, "message": message}, nil)
 }
 
+// ReportBuildArtifact records the exact reference and immutable digest of an image whose
+// push-enabled BuildKit export completed successfully.
+func (c *Client) ReportBuildArtifact(ctx context.Context, jobID int64, image, digest string) error {
+	return c.post(ctx, jobPath(jobID, "artifact"), map[string]string{
+		"image": image,
+		"digest": digest,
+	}, nil)
+}
+
 // FinishJob says how a job ended, for good.
 //
 // Status is one of the core's own words — success, failed, canceled — and anything else is

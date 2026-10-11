@@ -260,10 +260,21 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 			// the query, which decides whether this person may see it at all. A
 			// project filter is applied there too, so an event about another project
 			// costs nothing but the check.
-			if ev.ID <= lastSent {
+			if projectID != nil && (ev.ProjectID == nil || *ev.ProjectID != *projectID) {
 				continue
 			}
-			if projectID != nil && (ev.ProjectID == nil || *ev.ProjectID != *projectID) {
+			if ev.ID == 0 {
+				message, err := transientEventMessage(ev)
+				if err != nil {
+					continue
+				}
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", message); err != nil {
+					return
+				}
+				flusher.Flush()
+				continue
+			}
+			if ev.ID <= lastSent {
 				continue
 			}
 			// Read on the settle timer rather than here, so a burst costs one read.
@@ -483,6 +494,22 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			if projectID != nil && (ev.ProjectID == nil || *ev.ProjectID != *projectID) {
 				continue
 			}
+			if ev.ID == 0 {
+				message, err := transientEventMessage(ev)
+				if err != nil {
+					continue
+				}
+				ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+				err = conn.Write(ctx, websocket.MessageText, message)
+				cancel()
+				if err != nil {
+					reason = "transient event write failed"
+					lastWriteErr = err.Error()
+					return
+				}
+				eventsSent++
+				continue
+			}
 			if ev.ID <= lastSent {
 				continue
 			}
@@ -492,6 +519,31 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			}
 		}
 	}
+}
+
+
+func transientEventMessage(ev models.Event) ([]byte, error) {
+	var payload any
+	if len(ev.Payload) > 0 {
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			return nil, err
+		}
+	}
+	message := map[string]any{
+		"id": int64(0),
+		"kind": string(ev.Kind),
+		"created_at": ev.CreatedAt,
+		"payload": payload,
+	}
+	if ev.ProjectID != nil {
+		message["project_id"] = *ev.ProjectID
+	}
+	if body, ok := payload.(map[string]any); ok {
+		if projectPath, ok := body["project_path"].(string); ok {
+			message["project_path"] = projectPath
+		}
+	}
+	return json.Marshal(message)
 }
 
 // filterName is what a log line can say about a stream's project filter without

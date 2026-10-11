@@ -219,6 +219,7 @@ func (s *Server) Register(r chi.Router) {
 	// printed; this says what it meant, which is the difference between a page that
 	// shows a build happening and one that shows a wall of layer output.
 	moduleRoutes.Post("/runner/jobs/{jobID}/progress", s.handleJobProgress)
+	moduleRoutes.Post("/runner/jobs/{jobID}/artifact", s.handleReportBuildArtifact)
 
 	// What happened, for the modules that were asked to be told.
 	moduleRoutes.Post("/notifications", s.handleModuleNotifications)
@@ -407,6 +408,7 @@ func (s *Server) projectRoutes() chi.Router {
 	// them and hands out a short credential the registry module recognises, and the
 	// page then asks the module at the address it published.
 	projects.Get(base+"/packages", s.handleProjectImages)
+	projects.Get(base+"/artifacts", s.handleListBuildArtifacts)
 
 	// Pipelines. A run is a run whether it came from a push or from a person, and
 	// both end up here.

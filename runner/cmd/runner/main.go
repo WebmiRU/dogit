@@ -581,6 +581,11 @@ func buildImage(ctx context.Context, cfg *config, client *core.Client, job *jobs
 	// export completed successfully. No leading newline: the core takes this text as lines,
 	// and a leading one arrives as an empty line in the middle of a build's output.
 	_ = client.JobLog(ctx, job.ID, "stdout", "pushed "+image+" with digest "+result.Digest+"\n")
+	if err := client.ReportBuildArtifact(ctx, job.ID, image, result.Digest); err != nil {
+		_ = client.JobLog(ctx, job.ID, "stderr",
+			"the image was pushed, but dogit could not record its artifact reference and digest: "+err.Error()+"\n")
+		return fmt.Errorf("record the pushed image in dogit: %w", err)
+	}
 	return nil
 }
 

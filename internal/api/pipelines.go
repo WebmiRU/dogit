@@ -1556,6 +1556,14 @@ func (s *Server) handleAppendJobLog(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	// Log growth is broadcast live, without a durable activity row per chunk. The
+	// artifact page reads the authoritative log endpoint and refreshes only the job it has open.
+	if s.events != nil {
+		if err := s.events.PublishTransient(r.Context(), models.EventJobLog, &job.ProjectID, nil,
+			map[string]any{"job_id": job.ID, "appended": appended, "project_path": job.ProjectPath}); err != nil {
+			s.log.Debug("could not broadcast job log growth", "job_id", job.ID, "error", err)
+		}
+	}
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"appended": appended})
 }
@@ -1881,9 +1889,11 @@ func jobView(r *http.Request, job *store.Job) map[string]any {
 		"pipeline_id":   job.PipelineID,
 		"iid":           job.IID,
 		"name":          job.Name,
-		"stage":         job.Stage,
-		"status":        job.Status,
-		"image":         job.Image,
+		"stage":          job.Stage,
+		"stage_order":    job.StageOrder,
+		"status":         job.Status,
+		"queue_priority": job.QueuePriority,
+		"image":          job.Image,
 		"script":        job.Script,
 		"allow_failure": job.AllowFailure,
 		"created_at":    job.CreatedAt,
