@@ -117,7 +117,7 @@ async function loadHead() {
     const answer = await api.get<{
       active?: { running?: boolean; queued?: boolean }[]
       finished?: { status?: string }[]
-    }>(`/projects/${props.projectId}/deploy-operations?finished=1`)
+    }>(`/projects/${props.projectId}/deploy-operations?finished=10`)
     listed.value = answer.active ?? []
     // Read off the list rather than off its length: the list holds deployments that are
     // under way and deployments that are waiting, and only the first is work happening.
@@ -162,7 +162,11 @@ const stopState = watchEvents({
     // page for as long as the request takes, every time one ends, on a project that
     // deploys several in a row. What it said a moment ago is more true than nothing.
     const status = String(event.payload?.status ?? '')
-    if (status) lastFailed.value = isFailedDeployStatus(status)
+    // Neutral endings must not clear a real failure underneath them. The API response
+    // chooses the latest meaningful result (success or actual failure) across recent rows.
+    if (status === 'success' || isFailedDeployStatus(status)) {
+      lastFailed.value = isFailedDeployStatus(status)
+    }
     void loadHead()
   },
 })
