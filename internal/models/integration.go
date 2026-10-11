@@ -302,6 +302,35 @@ type SettingSpec struct {
 	MustContain []string `json:"must_contain,omitempty"`
 	// WhyContains is shown when a value is refused.
 	WhyContains string `json:"why_contains,omitempty"`
+
+	// ShowIf names another field in the same row and the values that field must hold
+	// for this one to be drawn.
+	//
+	// It exists because a form cannot ask a question whose answer changes its own
+	// shape. A setting that offers "use the group's" beside "choose your own" cannot
+	// also show a registry dropdown beside a login field beside a password field and
+	// leave the reader to work out which of them apply — so the wrong three get filled
+	// in, and which of them was read at deploy time becomes a question nobody thought
+	// to answer until something was deployed the wrong way.
+	//
+	// Hidden is not erased. A value set while its field was drawn is kept, because a
+	// reader who switches away and back should find what they typed, and because a
+	// field that vanished on a save is a field whose value nobody can explain.
+	//
+	// The key is looked up in the same row: another field of this list, or another
+	// setting at the same level. A key that names nothing visible hides nothing, and
+	// the core refuses such a spec rather than shipping a field that can never appear.
+	ShowIf *SettingCondition `json:"show_if,omitempty"`
+}
+
+// SettingCondition says which values of a sibling field show another one.
+type SettingCondition struct {
+	// Key is the sibling field's key, in the same row or the same level.
+	Key string `json:"key"`
+	// In lists the values that show the field. A value absent from this list hides it,
+	// and so does an unset one — which is what makes a field with a default show nothing
+	// until the reader touches the field that governs it.
+	In []string `json:"in"`
 }
 
 // SettingItems is what one entry of a list setting is made of.

@@ -134,15 +134,51 @@ function fill(answer: { own?: Record<string, unknown>; inherited?: Record<string
 }
 
 /**
+ * Whether a field's sibling holds one of the values that draw it.
+ *
+ * The sibling is looked up in the same row: a field that governs another one governs it
+ * for that row only, because a list's rows are independent settings and a row that took its
+ * registry from its neighbour's choice would be a row nobody could point at.
+ *
+ * An unset value hides, which is deliberate and is what a field with a default needs: until
+ * the reader touches the field that governs it, the governed ones stay out of the way.
+ */
+function conditionMet(cond: SettingCondition | undefined, row: SettingEntry | null): boolean {
+  if (!cond) return true
+  const held = row ? row[cond.key] : undefined
+  if (held === undefined || held === null) return false
+  return (cond.in ?? []).includes(String(held))
+}
+
+/**
+ * The settings this level may draw, and the same rule as inside a list.
+ *
+ * A setting that governs others sits in the same `values` map they do, so the condition is
+ * read from there rather than from a row. A list is not exempt: a list of credentials may
+ * just as well be there only while a module is pointed at its own registry, and a form that
+ * exempted lists would be the one kind of field that could not be made conditional.
+ */
+function visibleSettings(): SettingSpec[] {
+  return (props.module.manifest.settings ?? []).filter(
+    (spec) => conditionMet(spec.show_if, values.value),
+  )
+}
+
+/**
  * The fields a module declared, minus the ones this page must not show.
  *
  * A row's identity is one of those: it is the core's own field, written for the core and
  * not for a reader, and a page that showed it would be showing an internal detail where
  * a cluster's name belongs.
+ *
+ * The row is needed because a field inside a list is governed by a sibling inside that same
+ * row, and the row is where that sibling's value lives.
  */
-function visibleFieldsOf(spec: SettingSpec): SettingSpec[] {
+function visibleFieldsOf(spec: SettingSpec, row?: SettingEntry | null): SettingSpec[] {
   const hidden = new Set([...(props.hideFields ?? []), 'dogit_row_id'])
-  return (spec.items?.fields ?? []).filter((field) => !hidden.has(field.key))
+  return (spec.items?.fields ?? []).filter(
+    (field) => !hidden.has(field.key) && conditionMet(field.show_if, row ?? null),
+  )
 }
 
 function isList(spec: SettingSpec): boolean {
@@ -1077,7 +1113,7 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
     <div v-else>
       <p v-if="note" class="muted small">{{ note }}</p>
 
-      <div v-for="spec in module.manifest.settings" :key="spec.key" class="setting-row">
+      <div v-for="spec in visibleSettings()" :key="spec.key" class="setting-row">
         <div class="setting-label">
           <div>{{ spec.label }}</div>
           <div v-if="spec.description" class="muted small">{{ spec.description }}</div>
@@ -1167,7 +1203,7 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
 
 
             <div
-              v-for="field in visibleFieldsOf(spec)"
+              v-for="field in visibleFieldsOf(spec, row)"
               :key="field.key"
               class="setting-field"
             >

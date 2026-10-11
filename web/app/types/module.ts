@@ -32,6 +32,20 @@ export interface SettingSpec {
   secret?: boolean
   /** Present when the type is "list": what one row of it is made of. */
   items?: SettingItems
+  /**
+   * Draw this field only when a sibling field holds one of these values.
+   *
+   * Hidden is not erased: a value set while the field was drawn is kept, so a reader
+   * who switches away and back finds what they typed. The key names another field of
+   * the same row — another field of this list, or another setting at the same level.
+   */
+  show_if?: SettingCondition
+}
+
+/** Which values of a sibling field show another one. */
+export interface SettingCondition {
+  key: string
+  in: string[]
 }
 
 /** One row of a list setting: its fields, keyed by their own keys. */

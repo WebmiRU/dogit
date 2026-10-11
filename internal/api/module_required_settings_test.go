@@ -74,3 +74,41 @@ func TestWhatCountsAsHavingAValue(t *testing.T) {
 			"something it already has")
 	}
 }
+
+// A conditional field has to survive the manifest a module writes by hand.
+//
+// A module declares its settings as JSON it assembles itself, so a field the core reads
+// but the struct does not carry is a field that is silently absent: the condition parses
+// as nothing, every governed field is drawn, and the form shows a reader three questions
+// where there is one. The check that would have caught it is a struct tag, and a struct tag
+// is exactly the kind of thing nobody notices is missing.
+func TestShowIfSurvivesAManifestWrittenByHand(t *testing.T) {
+	var caps models.Manifest
+	raw := `{"version":"0.1.0","settings":[
+		{"key":"registry_source","type":"enum","label":"Registry",
+		 "options":["group","own"],
+		 "default":"group"},
+		{"key":"registry","type":"registry","label":"Registry",
+		 "show_if":{"key":"registry_source","in":["own"]}}
+	]}`
+	if err := json.Unmarshal([]byte(raw), &caps); err != nil {
+		t.Fatalf("the manifest a module writes did not parse: %v", err)
+	}
+	if len(caps.Settings) != 2 {
+		t.Fatalf("wanted two settings, read %d", len(caps.Settings))
+	}
+	shown := caps.Settings[1]
+	if shown.ShowIf == nil {
+		t.Fatal("the condition did not survive: the field would be drawn whatever was chosen")
+	}
+	if shown.ShowIf.Key != "registry_source" {
+		t.Errorf("the condition watches %q, want the field it was written against",
+			shown.ShowIf.Key)
+	}
+	if len(shown.ShowIf.In) != 1 || shown.ShowIf.In[0] != "own" {
+		t.Errorf("the condition admits %v, want only \"own\"", shown.ShowIf.In)
+	}
+	if caps.Settings[0].ShowIf != nil {
+		t.Error("the field that governs the others was itself made conditional")
+	}
+}
