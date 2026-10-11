@@ -1,6 +1,7 @@
 ALTER TABLE jobs
     ADD COLUMN stage_order INTEGER NOT NULL DEFAULT 0,
-    ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 100;
+    ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 100,
+    ADD COLUMN queue_priority_since TIMESTAMPTZ NOT NULL DEFAULT now();
 
 -- Reconstruct a safe conventional order for existing rows: build first, user stages in
 -- their previous job order, deploy last. New pipelines persist the exact YAML order.

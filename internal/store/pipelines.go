@@ -703,7 +703,11 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 			          OR (prior.status = $8 AND NOT prior.allow_failure)
 			        )
 			  )
-			ORDER BY j.queue_priority DESC, j.created_at, j.id
+			-- Low-priority jobs gain one point per waiting minute until they reach normal
+			-- priority, so sustained normal traffic cannot starve them forever.
+			ORDER BY LEAST($9, j.queue_priority +
+				GREATEST(0, floor(EXTRACT(EPOCH FROM (now() - j.queue_priority_since)) / 60)::int)) DESC,
+				j.created_at, j.id
 			FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
 		)
@@ -712,7 +716,7 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 		-- not update the winner's now-running row after it wakes.
 		AND status = $3
 		RETURNING id`, JobRunning, runnerID, JobPending,
-		JobPending, JobRunning, JobCanceled, JobInterrupted, JobFailed).Scan(&id)
+		JobPending, JobRunning, JobCanceled, JobInterrupted, JobFailed, QueuePriorityNormal).Scan(&id)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}
@@ -896,7 +900,7 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 func (r *PipelineRepo) DeprioritizeObsoleteBuilds(ctx context.Context, pipelineID int64) ([]int64, error) {
 	rows, err := r.s.pool.Query(ctx, `
 		UPDATE jobs
-		SET queue_priority = $2
+		SET queue_priority = $2, queue_priority_since = now()
 		WHERE pipeline_id = $1 AND build IS NOT NULL AND status = $3
 		  AND queue_priority > $2
 		  AND EXISTS (
@@ -1002,11 +1006,15 @@ func (r *PipelineRepo) ReapStaleJobs(ctx context.Context, olderThan time.Duratio
 	if _, err := r.s.pool.Exec(ctx, `
 		UPDATE pipelines p
 		SET finished_at = now(), status = $1
-		WHERE p.status = $2
+		WHERE p.finished_at IS NULL
+		  AND EXISTS (
+		      SELECT 1 FROM jobs interrupted
+		      WHERE interrupted.pipeline_id = p.id AND interrupted.status = $2
+		  )
 		  AND NOT EXISTS (
 		      SELECT 1 FROM jobs j
 		      WHERE j.pipeline_id = p.id AND j.status IN ($3, $4))`,
-		pipelineStatusFor(JobInterrupted), PipelineRunning, JobPending, JobRunning); err != nil {
+		pipelineStatusFor(JobInterrupted), JobInterrupted, JobPending, JobRunning); err != nil {
 		return stale, fmt.Errorf("finish the pipelines of reclaimed jobs: %w", err)
 	}
 	return stale, nil

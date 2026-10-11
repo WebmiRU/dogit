@@ -311,6 +311,39 @@ func TestListBuildArtifactsIncludesPendingBuildJobs(t *testing.T) {
 		t.Errorf("queue priority = %d, want normal priority %d", got[0].QueuePriority, store.QueuePriorityNormal)
 	}
 }
+
+// A low-priority build eventually becomes eligible ahead of newer normal work.
+func TestClaimJobAgesLowPriorityWork(t *testing.T) {
+	st := dbtest.Open(t)
+	ctx := context.Background()
+	project := dbtest.NewProject(t, st, "queueaging", nil)
+	_, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", "old", "manual",
+		nil, nil, store.Commit{}, []store.Job{{
+			Name: "old-build", Stage: "build", Build: map[string]any{"tag": "old"},
+			QueuePriority: store.QueuePriorityLow,
+		}})
+	if err != nil {
+		t.Fatalf("create low-priority pipeline: %v", err)
+	}
+	_, err = st.Pipelines().CreatePipeline(ctx, project.ID, "main", "new", "manual",
+		nil, nil, store.Commit{}, []store.Job{{
+			Name: "new-work", Stage: "test", Script: []string{"true"},
+			QueuePriority: store.QueuePriorityNormal,
+		}})
+	if err != nil {
+		t.Fatalf("create normal-priority pipeline: %v", err)
+	}
+	if _, err := st.Pool().Exec(ctx, `UPDATE jobs SET queue_priority_since = now() - interval '2 hours' WHERE name = 'old-build'`); err != nil {
+		t.Fatalf("age low-priority job: %v", err)
+	}
+	got, err := st.Pipelines().ClaimJob(ctx, uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("claim aged low-priority job: %v", err)
+	}
+	if got.Name != "old-build" {
+		t.Fatalf("claimed %q after low-priority work aged, want old-build", got.Name)
+	}
+}
 // Jobs come back in the order they were declared, and a job carries its build
 // definition because that is what a runner needs and only the pipeline has it.
 func TestJobsCarryWhatARunnerNeeds(t *testing.T) {
