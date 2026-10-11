@@ -1,30 +1,28 @@
-// Project navigation: a real project sidebar, not another floating card.
-// The global application menu is hidden on project routes so this is the single,
-// consistent navigation rail for repository and delivery pages.
+// The project menu: what it is made of, once the shell has given it its column.
+//
+// It carries no position, no edge and no surface of its own. It used to be a sticky
+// column inside the page with a sticky offset and a border down its right side, because
+// the page was what used to hold it — and on a project page that meant the menu was not
+// at the left of the screen but inset by the page's own margin, with the application
+// menu hidden so there was nothing to compare it against. The shell holds it now.
 
-.project-workspace
-  display: grid
-  grid-template-columns: 232px minmax(0, 1fr)
-  align-items: start
-  gap: 26px
-  min-width: 0
-  margin-top: 20px
-
+// The project menu, once it has arrived in the shell's left column.
+//
+// It used to be a sticky column inside the page, with a sticky offset of its own and a
+// border down its right side, because the page was what used to hold it. The shell holds
+// it now and the shell gives it a column of its own — so this is the contents of that
+// column and nothing else. Any edge or surface drawn here would be a second rail laid
+// over the one already in place.
 .project-sidebar
-  position: sticky
-  top: 76px
-  align-self: start
+  display: grid
+  gap: 6px
+  align-content: start
   min-width: 0
-  max-height: calc(100vh - 94px)
-  overflow-y: auto
-  padding: 2px 14px 18px 0
+  margin: 0
+  padding: 0
   border: 0
-  border-right: 1px solid var(--border)
-  border-radius: 0
   background: transparent
   color: var(--text)
-  scrollbar-width: thin
-  scrollbar-color: var(--border-strong) transparent
 
 .project-sidebar-caption
   padding: 2px 8px 9px
@@ -184,31 +182,19 @@
   text-overflow: ellipsis
   white-space: nowrap
 
-.project-workspace-main,
+// The page beside the rail. Named for what it is now that it is the only thing in the
+// column: the project's content, at the same width every other page's content is.
 .project-view-content
   min-width: 0
 
-@media (max-width: 1050px)
-  .project-workspace
-    grid-template-columns: 214px minmax(0, 1fr)
-    gap: 20px
-  .project-sidebar
-    padding-right: 12px
-
-@media (max-width: 760px)
-  .project-workspace
-    grid-template-columns: minmax(0, 1fr)
-    gap: 16px
-    margin-top: 14px
-  .project-sidebar
-    position: static
-    max-height: none
-    overflow: visible
-    padding: 0 0 14px
-    border-right: 0
-    border-bottom: 1px solid var(--border)
+// Below this the rail cannot stand beside anything, and the shell has already laid itself
+// down in one column — so the menu is a row of groups across the top of the page rather
+// than a column down its side, and its groups go side by side rather than one under
+// another. Two columns is as many as nine labels can be shown in without truncating any
+// of them on a screen this narrow.
+@media (max-width: 860px)
   .project-nav
-    grid-template-columns: repeat(2, minmax(0, 1fr))
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr))
     align-items: start
     gap: 8px 12px
   .project-nav-group + .project-nav-group

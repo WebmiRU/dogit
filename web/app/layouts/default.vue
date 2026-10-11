@@ -191,9 +191,13 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
       <NuxtLink v-else to="/login" class="btn">Sign in</NuxtLink>
     </header>
 
-    <div class="body">
-      <aside v-if="user && !onRepository" class="sidebar">
-        <nav class="app-nav-rail" aria-label="Main sections">
+    <!-- The left column of the shell. One column, the same width on every route, holding
+         whichever menu the page calls for: the application's on most pages, the project's
+         own on a project page. The project page puts that menu here itself — it is the
+         only thing that knows what the project is — so the slot stands empty until it
+         arrives rather than being filled with a guess. -->
+    <aside class="app-rail">
+      <nav v-if="user && !onRepository" class="app-nav-rail" aria-label="Main sections">
           <section
             v-for="group in navGroups"
             :key="group.key"
@@ -236,19 +240,24 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
             </div>
           </section>
         </nav>
+        <div v-else id="project-rail" />
 
-        <div class="sidebar-footer">
+        <div v-if="user && !onRepository" class="sidebar-footer">
           <div class="muted">dogit</div>
           <div class="muted" style="font-size: 11px">early development</div>
         </div>
       </aside>
+
+      <!-- The right column of the shell. Empty and 0px wide today, and drawn now rather
+           than added later: a shell that would have to be rebuilt to hold a second column
+           is a shell that gets rebuilt badly. Nothing goes here until something does. -->
+      <aside class="app-rail-right" aria-hidden="true" />
 
       <main class="page" :class="{ 'page-project-layout': onRepository }">
         <div class="page-content" :class="{ 'project-page-content': onRepository }">
           <slot />
         </div>
       </main>
-      </div>
 
       <footer class="footer">
         <strong>dogit</strong>

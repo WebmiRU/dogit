@@ -354,7 +354,11 @@ async function copyCloneUrl() {
         </div>
       </div>
 
-      <div class="project-workspace">
+      <!-- This project's menu belongs in the shell's left column, beside every other
+           page, and not inside the page. It is the only thing here that knows what the
+           project is, so it is the only thing that can fill that column — which is why it
+           travels there rather than being handed down from the layout. -->
+      <Teleport to="#project-rail">
         <aside class="project-sidebar">
           <div class="project-sidebar-caption">Project</div>
           <div class="project-sidebar-project">
@@ -460,9 +464,9 @@ async function copyCloneUrl() {
             </section>
           </nav>
         </aside>
+      </Teleport>
 
-        <div class="project-workspace-main">
-
+      <div class="project-view-content">
 
       <div v-if="repositoryIsEmpty" class="card empty-repo">
         <h2>This repository is empty</h2>
@@ -622,7 +626,6 @@ async function copyCloneUrl() {
         />
         <div v-else class="card empty">Unknown view “{{ view.name }}”.</div>
         </div>
-      </div>
     </div>
     </template>
   </div>

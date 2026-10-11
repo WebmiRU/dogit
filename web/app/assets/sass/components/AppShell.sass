@@ -1,0 +1,102 @@
+// The shell: one grid, and everything on it.
+//
+// The page is a grid of three columns and three rows, and nothing else decides where
+// anything goes:
+//
+//   ┌────────────┬──────────────┬──────┐
+//   │   header   │    header    │      │
+//   ├────────────┼──────────────┼──────┤
+//   │ left rail  │   content    │ right│
+//   ├────────────┼──────────────┼──────┤
+//   │   footer   │    footer    │      │
+//   └────────────┴──────────────┴──────┘
+//
+// The right column is 0px and carries nothing. It is written down rather than left out
+// because a page is going to want it — a details pane, a second column of actions — and
+// a shell that would have to be rebuilt to hold one is a shell that will be rebuilt
+// badly. Until then it costs one empty column.
+//
+// The left rail is the application's menu. On a project page it holds that project's own
+// menu instead, which is why the width is here rather than on either menu: the two take
+// turns in the same column, and a column whose width belongs to whichever menu is in it
+// would be a column that moves when you change pages.
+
+$rail-width: 232px
+
+// Written as a value and not spread over the declaration: Sass reads a line ending in a
+// declaration as the end of that declaration, so a list broken across lines under the
+// property is a list the compiler never sees — it reads "grid-template-areas" with the
+// first row and stops, and what it hands the browser is not a grid at all.
+$areas: "top top top", "rail main right", "bottom bottom bottom"
+
+.app-shell
+  display: grid
+  grid-template-areas: $areas
+  grid-template-columns: $rail-width minmax(0, 1fr) 0px
+  // A fixed height with the middle row taking what is left is the whole of it. Left to
+  // grow — min-height, auto rows — the grid is as tall as its tallest page, and the
+  // header and footer stop being the first and last things on screen: they are wherever
+  // that page puts them, and a menu down the side of a page ten times the height of the
+  // window is a menu you have to scroll back to.
+  grid-template-rows: auto minmax(0, 1fr) auto
+  height: 100vh
+  overflow: hidden
+  background: var(--bg)
+
+.topbar
+  grid-area: top
+
+// The rail is the one column that is always the same width and always on the left, so a
+// page does not shift sideways when it opens. It is a column of the shell rather than a
+// block inside it for that reason alone.
+.app-rail
+  grid-area: rail
+  display: flex
+  flex-direction: column
+  min-width: 0
+  height: 100%
+  padding: 18px 14px 18px 20px
+  overflow-y: auto
+  border-right: 1px solid var(--border)
+  background: var(--bg-elevated)
+  scrollbar-width: thin
+  scrollbar-color: var(--border-strong) transparent
+
+.app-rail-right
+  grid-area: right
+  min-width: 0
+  background: var(--bg-elevated)
+
+.page
+  grid-area: main
+  display: block
+  width: 100%
+  min-width: 0
+  // The page scrolls; the shell around it does not. That is what keeps the menu and the
+  // header where they are while the page moves under them, and it is why the rail has no
+  // position of its own to be stuck at.
+  overflow-y: auto
+  overscroll-behavior: contain
+  padding: 24px 0 64px
+  box-sizing: border-box
+
+.footer
+  grid-area: bottom
+
+// Below this the rail cannot stand beside anything, so it lies down across the top of
+// the page, full width, on its own surface — and the page begins underneath rather than
+// a menu's length down. A menu that is only reachable at one width is not a menu.
+$areas-narrow: "top", "rail", "main", "bottom"
+
+@media (max-width: 860px)
+  .app-shell
+    grid-template-areas: $areas-narrow
+    grid-template-columns: minmax(0, 1fr)
+  .app-rail
+    height: auto
+    padding: 12px 14px
+    overflow: visible
+    border-right: 0
+    border-bottom: 1px solid var(--border)
+  .page
+    padding: 18px 0 44px
