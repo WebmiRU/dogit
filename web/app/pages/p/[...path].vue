@@ -483,7 +483,7 @@ async function copyCloneUrl() {
         <NuxtLink class="btn" to="/projects">Back to projects</NuxtLink>
       </div>
 
-      <div v-else class="project-view-content">
+      <template v-else>
         <RepositoryTree
           v-if="view.name === 'tree'"
           :project-id="projectId"
@@ -625,8 +625,8 @@ async function copyCloneUrl() {
           @saved="project = $event"
         />
         <div v-else class="card empty">Unknown view “{{ view.name }}”.</div>
-        </div>
-    </div>
+      </template>
+      </div>
     </template>
   </div>
 </template>
