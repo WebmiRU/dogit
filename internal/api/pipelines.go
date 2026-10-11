@@ -435,6 +435,27 @@ func expandBuild(build map[string]any, variables map[string]string) map[string]a
 	return expanded
 }
 
+// imageNameForJob is what this job's image ends up being called.
+//
+// A name the project wrote is the answer, not a default to be improved on. A build stage
+// may declare several named outputs and each carries its own image, and a name worked out
+// from the project gives every one of them the same: two builds push the same tag, the
+// second replaces the first, and both jobs record a digest for an image that only one of
+// them can still pull. The failure is quiet — each build reports its own digest, so the
+// numbers look right and the thing anybody can pull is not what either of them pushed.
+//
+// The worked-out name is still what a job that named nothing gets, which is every
+// configuration written before a build stage could say.
+func imageNameForJob(job *store.Job, credentials map[string]any) string {
+	if job != nil {
+		if name, ok := job.Build["image"].(string); ok && strings.TrimSpace(name) != "" {
+			return name
+		}
+	}
+	name, _ := credentials["image"].(string)
+	return strings.TrimSpace(name)
+}
+
 // variablesFor is what a run's scripts are told about the run itself.
 //
 // Written here rather than in the runner because the runner is told the answer, not
@@ -897,8 +918,8 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 		// is the thing that produced the image: everything said about it afterwards
 		// — a notification, a page, an audit — has to be able to name it, and a name
 		// that only exists in a reply the runner will never see is no name at all.
-		if image, ok := credentials["image"].(string); ok && image != "" {
-			job.Build["image"] = image
+		if name := imageNameForJob(job, credentials); name != "" && job.Build["image"] != name {
+			job.Build["image"] = name
 			if err := s.store.Pipelines().SetJobBuild(r.Context(), job.ID, job.Build); err != nil {
 				s.log.Warn("record what a job produces", "job", job.ID, "error", err)
 			}
