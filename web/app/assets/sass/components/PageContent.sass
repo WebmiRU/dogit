@@ -1,12 +1,9 @@
-// One content measure for every route using the default layout.
-// The outer main fills the space beside the global navigation; its inner wrapper
-// owns the readable measure so page-specific components cannot widen the whole page.
+// Shared content measure, used by every route inside the default layout.
+// On wide monitors the shell keeps its rail at the left and this 1200px content
+// begins directly beside it; it is not centred in the unused width of a 4K screen.
 
 .page
-  display: block
-  flex: 1 1 auto
   width: 100%
-  min-width: 0
   max-width: none
   margin: 0
   padding: 24px 0 64px
@@ -17,25 +14,16 @@
 
 .page-content
   width: 100%
-  max-width: 1200px
+  max-width: $content-max-width
   min-width: 0
-  margin: 0 auto
+  margin: 0
   padding: 0 20px
   box-sizing: border-box
 
-.page-content.project-page-content
-  padding-right: 28px
-  padding-left: 28px
-
-@media (max-width: 1050px)
-  .page-content.project-page-content
-    padding-right: 18px
-    padding-left: 18px
+@media (max-width: 860px)
+  .page
+    padding: 18px 0 44px
 
 @media (max-width: 760px)
   .page.page-project-layout
     padding-top: 16px
-    padding-bottom: 44px
-  .page-content.project-page-content
-    padding-right: 12px
-    padding-left: 12px
