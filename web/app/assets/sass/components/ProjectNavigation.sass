@@ -2,12 +2,6 @@
 // The global application menu is hidden on project routes so this is the single,
 // consistent navigation rail for repository and delivery pages.
 
-.page.page-wide
-  width: 100%
-  max-width: 1200px
-  margin: 0 auto
-  padding: 22px 20px 64px
-
 .project-workspace
   display: grid
   grid-template-columns: 232px minmax(0, 1fr)
@@ -195,7 +189,7 @@
   min-width: 0
 
 @media (max-width: 1050px)
-  .page.page-wide
+  .page-content.project-page-content
     padding-right: 18px
     padding-left: 18px
   .project-workspace
@@ -205,8 +199,12 @@
     padding-right: 12px
 
 @media (max-width: 760px)
-  .page.page-wide
-    padding: 16px 12px 44px
+  .page.page-project-layout
+    padding-top: 16px
+    padding-bottom: 44px
+  .page-content.project-page-content
+    padding-right: 12px
+    padding-left: 12px
   .project-workspace
     grid-template-columns: minmax(0, 1fr)
     gap: 16px
