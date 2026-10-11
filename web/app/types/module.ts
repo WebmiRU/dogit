@@ -40,6 +40,14 @@ export interface SettingSpec {
    * the same row — another field of this list, or another setting at the same level.
    */
   show_if?: SettingCondition
+  /**
+   * Drawn instead of the control when this setting's value comes from the level above and
+   * this level has not chosen one of its own.
+   *
+   * A note, not a control: the value belongs to the level that chose it, and a project that
+   * draws the group's choice in its own form looks like it has chosen something.
+   */
+  inherited_note?: string
 }
 
 /** Which values of a sibling field show another one. */

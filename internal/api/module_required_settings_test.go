@@ -112,3 +112,28 @@ func TestShowIfSurvivesAManifestWrittenByHand(t *testing.T) {
 		t.Error("the field that governs the others was itself made conditional")
 	}
 }
+
+// The note that replaces an inherited control has to survive the manifest too, and has to
+// come back empty rather than as a string nothing can act on.
+//
+// The failure this guards is quiet twice over: a module writes its manifest as JSON it
+// assembles itself, so a tag nobody notices is missing parses as no note and every control
+// keeps drawing itself; and a note that reached the page with no condition attached would be
+// drawn over a value the level did choose, telling a reader their decision came from above.
+func TestInheritedNoteSurvivesAManifestWrittenByHand(t *testing.T) {
+	var caps models.Manifest
+	raw := `{"version":"0.1.0","settings":[
+		{"key":"image_registry","type":"registry","label":"Registry",
+		 "inherited_note":"same as the group above"},
+		{"key":"database_url","type":"text","label":"Database"}
+	]}`
+	if err := json.Unmarshal([]byte(raw), &caps); err != nil {
+		t.Fatalf("the manifest a module writes did not parse: %v", err)
+	}
+	if got := caps.Settings[0].InheritedNote; got != "same as the group above" {
+		t.Errorf("the note came back as %q, want the one the module wrote", got)
+	}
+	if got := caps.Settings[1].InheritedNote; got != "" {
+		t.Errorf("a setting that wrote no note came back with %q, want none", got)
+	}
+}

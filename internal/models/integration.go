@@ -321,6 +321,23 @@ type SettingSpec struct {
 	// setting at the same level. A key that names nothing visible hides nothing, and
 	// the core refuses such a spec rather than shipping a field that can never appear.
 	ShowIf *SettingCondition `json:"show_if,omitempty"`
+
+	// InheritedNote is what is drawn instead of the control, when this setting carries a
+	// value from the level above and this level has not chosen one of its own.
+	//
+	// It exists because an empty box is the wrong thing to show somebody about a value they
+	// did not set. The reader is told the field is blank, and the field is not: the group
+	// chose a registry and the project inherits it, and what the project page should say is
+	// which registry, not that it needs one.
+	//
+	// Optional, and optional is the safe direction — a module that has not asked for this
+	// keeps the control it has always drawn, so nothing about an existing module changes
+	// because a field appeared in a struct.
+	//
+	// A note rather than a control, deliberately: the value belongs to the level that chose
+	// it, and a project that draws the group's choice in its own form looks like it has
+	// chosen something.
+	InheritedNote string `json:"inherited_note,omitempty"`
 }
 
 // SettingCondition says which values of a sibling field show another one.

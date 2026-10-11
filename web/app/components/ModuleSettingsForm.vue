@@ -165,6 +165,25 @@ function visibleSettings(): SettingSpec[] {
 }
 
 /**
+ * What to draw in place of a control this level has not decided.
+ *
+ * Three things must hold, and each of them is the difference between a note and a lie: the
+ * module asked for one, there is something above to point at, and this level has not chosen
+ * a value of its own. A level that has decided draws its decision, because that is what a
+ * reader came to see — and a note drawn over a chosen value would say the group chose
+ * something this level overrode a moment ago.
+ *
+ * Empty is the answer in every other case, including the two nobody notices when they are
+ * wrong: a setting with nothing above it says nothing rather than claiming to inherit from
+ * an empty row, and a setting nobody wrote a note for draws the control it always drew.
+ */
+function inheritedNoteFor(spec: SettingSpec): string {
+  if (!spec.inherited_note) return ''
+  if (String(values.value[spec.key] ?? '').trim() !== '') return ''
+  return String(inheritedValues.value[spec.key] ?? '').trim() !== '' ? spec.inherited_note : ''
+}
+
+/**
  * The fields a module declared, minus the ones this page must not show.
  *
  * A row's identity is one of those: it is the core's own field, written for the core and
@@ -1338,6 +1357,9 @@ function chooseRegistry(spec: SettingSpec, row: SettingEntry, index: number,
           </button>
         </div>
 
+        <p v-else-if="inheritedNoteFor(spec)" class="setting-inherited-note muted small">
+          {{ inheritedNoteFor(spec) }}
+        </p>
         <div v-else class="setting-control">
           <select v-if="spec.type === 'enum'" v-model="values[spec.key]">
             <option v-for="option in spec.options" :key="option" :value="option">
