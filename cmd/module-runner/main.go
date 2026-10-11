@@ -544,14 +544,18 @@ func whereTheJobLooks(cfg config, workspace string) ([]runner.Volume, string) {
  * nothing in it at all, which reads as though nobody tried.
  */
 func failJob(ctx context.Context, core *coreClient, jobID int64, started time.Time, reason error) {
-	core.log(ctx, jobID, "err", fmt.Sprintf("this job did not run: %v\n", reason))
-	core.finish(ctx, jobID, "failed", time.Since(started), reason.Error())
+	reportCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	core.log(reportCtx, jobID, "err", fmt.Sprintf("this job did not run: %v\n", reason))
+	core.finish(reportCtx, jobID, "failed", time.Since(started), reason.Error())
 	log.Printf("module-runner: job %d failed: %v", jobID, reason)
 }
 
 func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg config, answer claim) {
 	job := answer.Job
 	started := time.Now()
+	jobCtx, cancelJob := context.WithTimeout(ctx, cfg.jobTimeout())
+	defer cancelJob()
 
 	log.Printf("module-runner: job %d (%s) in %s", job.ID, job.Name, job.ProjectPath)
 
@@ -575,12 +579,12 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	// The checkout happens on this machine rather than inside the job's container:
 	// a container that is only allowed to run a script has no business being
 	// allowed to clone.
-	if err := checkout(ctx, cfg, answer, workspace); err != nil {
+	if err := checkout(jobCtx, cfg, answer, workspace); err != nil {
 		failJob(ctx, core, job.ID, started, fmt.Errorf("cannot check out %s: %w", job.ProjectPath, err))
 		return
 	}
 
-	handle, err := runtime.Prepare(ctx, spec)
+	handle, err := runtime.Prepare(jobCtx, spec)
 	if err != nil {
 		failJob(ctx, core, job.ID, started, fmt.Errorf("cannot prepare the job's environment: %w", err))
 		return
@@ -612,10 +616,15 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 		buildDone := make(chan struct{})
 		go func() {
 			defer close(buildDone)
-			tag, err := buildAndPush(ctx, cfg, workspace, answer.Registry, job.Build, out,
+			tag, err := buildAndPush(jobCtx, cfg, workspace, answer.Registry, job.Build, out,
 				func(phase, message string) {
-					if err := core.progress(ctx, job.ID, phase, message); err != nil {
-						log.Printf("module-runner: could not report %s: %v", phase, err)
+					outputName, _ := job.Build["__dogit_output_name"].(string)
+					phaseName := namedOutputPhase(job.Build, phase)
+					message = namedOutputMessage(outputName, phase, message, answer.Registry)
+					// The work context may already have expired; its last error still needs to
+					// reach the core, so use the parent context for this short report.
+					if err := core.progress(ctx, job.ID, phaseName, message); err != nil {
+						log.Printf("module-runner: could not report %s: %v", phaseName, err)
 					}
 				}, jobEnvironment(job, answer.Registry))
 			if err != nil {
@@ -628,7 +637,7 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 		buildWait = buildDone
 	}
 
-	result := runtime.Stream(ctx, handle, spec, out, errs)
+	result := runtime.Stream(jobCtx, handle, spec, out, errs)
 
 	// Whatever is still buffered goes now. A job that finishes in less time than
 	// the flush interval never reaches one, and its last lines — usually the ones
@@ -642,20 +651,30 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 	if buildWait != nil {
 		select {
 		case <-buildWait:
-		case <-ctx.Done():
-			buildErr = errors.New("the build was cut short when the job was stopping")
+		case <-jobCtx.Done():
+			// The channel close synchronizes with the worker's final error write.
+			// Docker commands use jobCtx and must return after the deadline.
+			<-buildWait
+			if buildErr == nil {
+				buildErr = fmt.Errorf("the image build/push stopped at the job deadline: %w", jobCtx.Err())
+			}
 		}
 	}
 
 	status := "success"
 	message := resultMessage(result)
-	if result.Status != runner.StatusSuccess || buildErr != nil {
+	if jobCtx.Err() != nil && buildErr == nil {
+		message = fmt.Sprintf("the job timed out after %s: %v", cfg.jobTimeout(), jobCtx.Err())
+	}
+	if result.Status != runner.StatusSuccess || buildErr != nil || jobCtx.Err() != nil {
 		status = "failed"
 	}
 	if buildErr != nil {
 		// Said in the log too: the job's verdict is one line on a page, and this is
 		// the line that says why.
-		core.log(ctx, job.ID, "err", fmt.Sprintf("build failed: %v\n", buildErr))
+		reportCtx, cancelReport := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		core.log(reportCtx, job.ID, "err", fmt.Sprintf("build failed: %v\n", buildErr))
+		cancelReport()
 		if result.Status == runner.StatusSuccess {
 			message = buildErr.Error()
 		}
@@ -666,7 +685,9 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 		core.log(ctx, job.ID, "out", fmt.Sprintf("image pushed: %s\n", pushed))
 	}
 
-	core.finish(ctx, job.ID, status, time.Since(started), message)
+	reportCtx, cancelReport := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	core.finish(reportCtx, job.ID, status, time.Since(started), message)
+	cancelReport()
 	log.Printf("module-runner: job %d %s in %s", job.ID, status, time.Since(started).Round(time.Second))
 }
 
@@ -1218,6 +1239,33 @@ func (t *tailWriter) Write(data []byte) (int, error) {
 // It is read from the output rather than asked of the registry: the push has just
 // happened, the line is the authority on what was stored, and asking again would be
 // a second request to learn something already in hand.
+func namedOutputPhase(build map[string]any, phase string) string {
+	name, _ := build["__dogit_output_name"].(string)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return phase
+	}
+	return phase + ":" + name
+}
+
+func namedOutputMessage(outputName, phase, message string, registry map[string]any) string {
+	if outputName == "" {
+		return message
+	}
+	switch phase {
+	case "build":
+		if strings.HasPrefix(message, "building ") {
+			return "building image " + outputName + " — " + strings.TrimPrefix(message, "building ")
+		}
+	case "push":
+		if strings.HasPrefix(message, "pushing to ") {
+			address, _ := registry["url"].(string)
+			return "pushing image " + outputName + " to " + registryHost(address)
+		}
+	}
+	return "image " + outputName + ": " + message
+}
+
 func digestOf(output string) string {
 	match := regexp.MustCompile(`digest: (sha256:[0-9a-f]+)`).FindStringSubmatch(output)
 	if len(match) < 2 {
