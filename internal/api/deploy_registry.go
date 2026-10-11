@@ -398,6 +398,31 @@ func (s *Server) placesRegistry(ctx context.Context, project *models.Project,
 		}
 		return ""
 	}
+	// The level's own registry, which is where a place looks first and the only place it
+	// looks when the level has decided.
+	//
+	// The per-place field below is a fallback and is going away, but it cannot go in the same
+	// commit that stops reading it: the lift refused to migrate a level whose places named
+	// different registries, because choosing one of them is a decision about where a cluster
+	// pulls from and the only reader of that decision is a cluster. Those levels still hold
+	// their answer per place, so the reader that answers for them is still here.
+	//
+	// It answers only when the level said nothing. A level that has chosen must be the answer
+	// even where its old per-place rows still say something else, because those rows are what
+	// it said before and the migration left them behind on purpose.
+	if raw, ok := settings[levelRegistrySetting]; ok {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			if log != nil {
+				log("  registry:   the level's registry is not an address (%v)\n", err)
+			}
+			return ""
+		}
+		if address := registryAddressOf(text); address != "" {
+			return address
+		}
+	}
+
 	raw, ok := settings["clusters"]
 	if !ok {
 		return ""
@@ -431,7 +456,13 @@ func (s *Server) placesRegistry(ctx context.Context, project *models.Project,
 }
 
 // placeRegistryField is the field, inside a place's row, that names its registry.
+//
+// Superseded by levelRegistrySetting and read only for levels the lift left behind.
 const placeRegistryField = "registry"
+
+// levelRegistrySetting is the setting, read at the group or project level, that names the
+// registry everything of that level's deploys to.
+const levelRegistrySetting = "image_registry"
 
 // placeNamespaceField is the field, inside a place's row, that names the namespace the
 // place deploys into.

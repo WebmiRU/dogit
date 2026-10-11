@@ -439,3 +439,65 @@ func (f *placeRegistryFixture) placeRegistryCredential(t *testing.T, place strin
 	s := &Server{store: f.store, cfg: &config.Config{}, log: logger.Discard()}
 	return s.placeRegistryCredential(t.Context(), f.project, f.deployer, place, nil)
 }
+
+// A level's own registry answers before anything written inside its places.
+//
+// The lift moved the address out of every place and up to the level, and a level that has
+// decided must be the answer even where its old per-place rows still carry something else:
+// those rows say what it said before, and the migration left them behind on purpose rather
+// than guess between them. A resolver that read the old row first would deploy to a registry
+// the project has already stopped using, and the log would say nothing about it.
+func TestTheLevelsRegistryAnswersBeforeTheOnesItsPlacesStillCarry(t *testing.T) {
+	f := newModuleFixture(t)
+	if _, err := f.store.Pool().Exec(t.Context(),
+		`DELETE FROM integrations WHERE kind = 'deploy:kubernetes'`); err != nil {
+		t.Fatalf("clear the old modules: %v", err)
+	}
+
+	module, err := f.store.Integrations().Register(t.Context(), "deploy:kubernetes",
+		dbtest.Unique("kubernetes"), "http://module-deploy:8094",
+		models.Manifest{Settings: []models.SettingSpec{
+			{Key: "clusters", Type: "list", Items: &models.SettingItems{Identify: []string{"name"}}},
+			{Key: levelRegistrySetting, Type: "registry", Inheritable: true},
+		}})
+	if err != nil {
+		t.Fatalf("register the module: %v", err)
+	}
+	t.Cleanup(func() { deleteIntegration(t, f, module.ID) })
+
+	project := dbtest.NewProject(t, f.store, "level-registry", nil)
+	ctx := t.Context()
+
+	// Both places still carry the old address, and neither of them is the one the level chose.
+	if err := f.store.Integrations().SetSetting(ctx, module.ID, store.ScopeProject, &project.ID,
+		"clusters",
+		json.RawMessage(`[{"name":"dev","registry":"https://old.example.com"},`+
+			`{"name":"prod","registry":"https://old.example.com"}]`)); err != nil {
+		t.Fatalf("write the old per-place registry: %v", err)
+	}
+	if err := f.store.Integrations().SetSetting(ctx, module.ID, store.ScopeProject, &project.ID,
+		levelRegistrySetting, json.RawMessage(`"https://chosen.example.com"`)); err != nil {
+		t.Fatalf("write the level's registry: %v", err)
+	}
+
+	for _, place := range []string{"dev", "prod"} {
+		got := f.server.placesRegistry(ctx, project, module, place, nil)
+		// Scheme-less: registryAddressOf is what every other reader goes through, and an
+		// answer that kept "https://" here and not there is two spellings of one address.
+		if got != "chosen.example.com" {
+			t.Errorf("place %q resolved to %q, want the one the level chose", place, got)
+		}
+	}
+
+	// And a level that has not decided still answers from its places, because the lift
+	// refused to migrate levels whose places disagreed and those levels have to keep working.
+	other := dbtest.NewProject(t, f.store, "level-registry-fallback", nil)
+	if err := f.store.Integrations().SetSetting(ctx, module.ID, store.ScopeInstance, nil,
+		"clusters",
+		json.RawMessage(`[{"name":"dev","registry":"https://kept.example.com"}]`)); err != nil {
+		t.Fatalf("write the inherited places: %v", err)
+	}
+	if got := f.server.placesRegistry(ctx, other, module, "dev", nil); got != "kept.example.com" {
+		t.Errorf("a level that decided nothing resolved to %q, want the one its place carries", got)
+	}
+}
