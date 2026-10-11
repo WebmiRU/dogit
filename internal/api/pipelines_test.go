@@ -31,13 +31,17 @@ stages:
       module: deploy:kubernetes
       target: production
       manifests: [k8s/deployment.yaml]
+  - name: verify
+    commands:
+      - shell:
+          command: echo verify
 `))
 	if err != nil {
 		t.Fatalf("parse stage-first config: %v", err)
 	}
 	jobs := jobsFrom(config, pipeline.Ref{Name: "main", SHA: "0123456789abcdef"}, "")
-	if len(jobs) != 3 {
-		t.Fatalf("jobs = %+v, want prepare, build and deploy", jobs)
+	if len(jobs) != 4 {
+		t.Fatalf("jobs = %+v, want prepare, build, deploy and verify", jobs)
 	}
 	if jobs[0].Name != "prepare" || jobs[0].StageOrder != 0 || jobs[0].BreakOnError || !jobs[0].BreakOnErrorSet {
 		t.Fatalf("prepare job did not preserve its error policy: %+v", jobs[0])
@@ -50,6 +54,9 @@ stages:
 	}
 	if jobs[2].Stage != "deploy" || jobs[2].StageOrder != 2 || jobs[2].Deploy == nil {
 		t.Fatalf("deploy job = %+v", jobs[2])
+	}
+	if jobs[3].Stage != "verify" || jobs[3].StageOrder != 3 || jobs[3].Name != "verify" {
+		t.Fatalf("post-deploy verify job = %+v, want stage order 3", jobs[3])
 	}
 }
 func TestARunNobodyStartedStillHasSomebodyToBlame(t *testing.T) {

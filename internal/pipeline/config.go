@@ -379,9 +379,6 @@ func parseMapStageDefinitions(raw []*yaml.Node) (*Config, error) {
 	if buildAt >= 0 && deployAt >= 0 && deployAt < buildAt {
 		return nil, fmt.Errorf("stage deploy cannot appear before stage build")
 	}
-	if deployAt >= 0 && deployAt != len(config.StageSpecs)-1 {
-		return nil, fmt.Errorf("stage deploy must be last so all required stages finish before deployment")
-	}
 	return config, nil
 }
 
@@ -467,9 +464,6 @@ func parseStageDefinitions(raw []*yaml.Node) (*Config, error) {
 	}
 	if buildAt >= 0 && deployAt >= 0 && deployAt < buildAt {
 		return nil, fmt.Errorf("stage deploy cannot appear before stage build")
-	}
-	if deployAt >= 0 && deployAt != len(config.StageSpecs)-1 {
-		return nil, fmt.Errorf("stage deploy must be last so all required stages finish before deployment")
 	}
 	return config, nil
 }

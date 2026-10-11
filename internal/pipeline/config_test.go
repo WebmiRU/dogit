@@ -498,10 +498,8 @@ stages:
 }
 
 
-// Deployment must be the final stage. Otherwise an accidentally listed check after deploy
-// would give the configuration the appearance of validating a release before rolling it out.
-func TestMapStagesRejectStageAfterDeploy(t *testing.T) {
-	_, err := Parse([]byte(`
+func TestMapStagesAllowStageAfterDeploy(t *testing.T) {
+	config, err := Parse([]byte(`
 stages:
   build:
     api: {image: registry.example/myapp/api}
@@ -514,13 +512,16 @@ stages:
       - shell:
           command: ./ci/verify.sh
 `))
-	if err == nil || !strings.Contains(err.Error(), "stage deploy must be last") {
-		t.Fatalf("error = %v, want deploy-last validation error", err)
+	if err != nil {
+		t.Fatalf("parse pipeline with a post-deploy stage: %v", err)
+	}
+	if got, want := strings.Join(config.Stages, ","), "build,deploy,verify"; got != want {
+		t.Fatalf("stage order = %q, want %q", got, want)
 	}
 }
 
-func TestListStagesRejectStageAfterDeploy(t *testing.T) {
-	_, err := Parse([]byte(`
+func TestListStagesAllowStageAfterDeploy(t *testing.T) {
+	config, err := Parse([]byte(`
 stages:
   - name: build
     build:
@@ -535,7 +536,10 @@ stages:
       - shell:
           command: ./ci/verify.sh
 `))
-	if err == nil || !strings.Contains(err.Error(), "stage deploy must be last") {
-		t.Fatalf("error = %v, want deploy-last validation error", err)
+	if err != nil {
+		t.Fatalf("parse list-style pipeline with a post-deploy stage: %v", err)
+	}
+	if got, want := strings.Join(config.Stages, ","), "build,deploy,verify"; got != want {
+		t.Fatalf("stage order = %q, want %q", got, want)
 	}
 }
