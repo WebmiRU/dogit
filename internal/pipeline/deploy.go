@@ -102,6 +102,12 @@ type DeploySpec struct {
 
 	// Timeout is how long to wait. Empty means the target's own.
 	Timeout string `yaml:"timeout"`
+
+	// Artifact provenance is set by the core when somebody chooses an already-built
+	// artifact in the UI. YAML cannot set these fields or provide its own image digests.
+	ArtifactPipelineID int64             `yaml:"-" json:"ArtifactPipelineID,omitempty"`
+	ArtifactJobID      int64             `yaml:"-" json:"ArtifactJobID,omitempty"`
+	ArtifactImages     map[string]string `yaml:"-" json:"ArtifactImages,omitempty"`
 }
 
 // DeployStep is one one-shot job, before or after the rollout.

@@ -409,6 +409,8 @@ func (s *Server) projectRoutes() chi.Router {
 	// page then asks the module at the address it published.
 	projects.Get(base+"/packages", s.handleProjectImages)
 	projects.Get(base+"/artifacts", s.handleListBuildArtifacts)
+	projects.Get(base+"/artifacts/{jobID}/deploy-options", s.handleArtifactDeployOptions)
+	projects.Post(base+"/artifacts/{jobID}/deploy", s.handleDeployArtifact)
 
 	// Pipelines. A run is a run whether it came from a push or from a person, and
 	// both end up here.

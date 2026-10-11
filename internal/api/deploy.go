@@ -177,6 +177,27 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		return fmt.Errorf("this job carries no deployment to carry out")
 	}
 
+	// A manual artifact deploy carries immutable image references and provenance on the
+	// deploy job. Verify that provenance before sending the job to a module; the ref and
+	// manifests of the synthetic run must still be the source artifact's exact commit.
+	var artifactSourceRun *store.Pipeline
+	var artifactSourceJob *store.Job
+	if spec.ArtifactPipelineID != 0 || spec.ArtifactJobID != 0 {
+		if spec.ArtifactPipelineID <= 0 || spec.ArtifactJobID <= 0 || len(spec.ArtifactImages) == 0 {
+			return fmt.Errorf("the selected artifact's provenance or pinned image references are incomplete")
+		}
+		artifactSourceRun, err = s.store.Pipelines().PipelineByID(ctx, spec.ArtifactPipelineID)
+		if err != nil || artifactSourceRun.ProjectID != project.ID ||
+			artifactSourceRun.SHA != pipelineRun.SHA {
+			return fmt.Errorf("the selected artifact does not belong to this deployment's source commit")
+		}
+		artifactSourceJob, err = s.store.Pipelines().JobByID(ctx, spec.ArtifactJobID)
+		if err != nil || artifactSourceJob.ProjectID != project.ID ||
+			artifactSourceJob.PipelineID != artifactSourceRun.ID {
+			return fmt.Errorf("the selected artifact's source job could not be verified")
+		}
+	}
+
 	// The newline is in the format string, not added here: appendJobOutput marks each
 	// line it is given, and a line that has already ended gets an empty one after it,
 	// which reads as though the deployment paused between every step.
@@ -194,32 +215,49 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	log("Deploying to %s\n", spec.Target)
 	log("  module:    %s\n", spec.Module)
 
-	// Named outputs are collected as a complete set. No module request is made until
-	// every required image was built, pushed and recorded with its digest. Legacy pipeline
-	// formats retain their single-image behaviour below.
+	// A manually selected artifact already has a pushed digest. Its complete set is carried
+	// in the job, so a subsequent tag move cannot change what the user confirmed.
+	// Pipeline-triggered deployments resolve the same set from their own build jobs below.
 	outputs := config.NamedBuildOutputs()
 	imageVariables := map[string]string{}
 	resolvedOutputs := map[string]string{}
 	var image string
 	var err error
 	if len(outputs) > 0 {
-		images, imageErr := s.namedBuildImageReferences(ctx, pipelineRun, outputs)
-		if imageErr != nil {
-			return imageErr
+		var images map[string]string
+		if spec.ArtifactPipelineID > 0 {
+			images = spec.ArtifactImages
+		} else {
+			images, err = s.namedBuildImageReferences(ctx, pipelineRun, outputs)
+			if err != nil {
+				return err
+			}
 		}
-		resolvedOutputs = images
-		image = images[outputs[0].Name]
+		for _, output := range outputs {
+			reference := strings.TrimSpace(images[output.Name])
+			if !isPinnedArtifactReference(reference) {
+				return fmt.Errorf("required image output %q is missing a digest-pinned image reference", output.Name)
+			}
+			resolvedOutputs[output.Name] = reference
+		}
+		image = resolvedOutputs[outputs[0].Name]
 		firstRegistry := imageHost(image)
 		for _, output := range outputs {
-			reference := images[output.Name]
+			reference := resolvedOutputs[output.Name]
 			if !sameRegistry(firstRegistry, imageHost(reference)) {
-				return fmt.Errorf("named outputs currently must be published to the same registry; %q and %q use different registries", outputs[0].Name, output.Name)
+				return fmt.Errorf("named outputs must be published to the same registry; %q and %q use different registries", outputs[0].Name, output.Name)
 			}
 			variable := pipeline.ImageVariableName(output.Name)
 			imageVariables[variable] = reference
 			log("  image output %s: %s=%s\n", output.Name, variable, reference)
 		}
 		log("  images:    %d required outputs are pinned and ready\n", len(outputs))
+	} else if spec.ArtifactPipelineID > 0 {
+		image = strings.TrimSpace(spec.ArtifactImages["image"])
+		if !isPinnedArtifactReference(image) {
+			return fmt.Errorf("the selected artifact has no digest-pinned image reference")
+		}
+		log("  image:     %s (selected artifact; digest recorded after push)\n", image)
 	} else {
 		image, err = s.imageForDeploy(ctx, job, pipelineRun, log)
 		if err != nil {
@@ -255,7 +293,14 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// image under these names, and its record says what became of them.
 	tags := s.deployedImageTags(ctx, repoDir, pipelineRun)
 	preface := prefaceFor(ctx, s, pipelineRun, job.ID, image, tags)
-	if len(outputs) > 0 {
+	if spec.ArtifactPipelineID > 0 && artifactSourceRun != nil {
+		tags = s.deployedImageTags(ctx, repoDir, artifactSourceRun)
+		if len(outputs) > 0 {
+			preface = prefaceForNamedOutputs(ctx, s, artifactSourceRun, job.ID, outputs, resolvedOutputs, tags)
+		} else if artifactSourceJob != nil {
+			preface = prefaceForArtifact(artifactSourceJob, image, tags)
+		}
+	} else if len(outputs) > 0 {
 		preface = prefaceForNamedOutputs(ctx, s, pipelineRun, job.ID, outputs, resolvedOutputs, tags)
 	}
 
@@ -811,6 +856,39 @@ func prefaceFor(ctx context.Context, s *Server, run *store.Pipeline, jobID int64
 		{Phase: "build", Message: builtLine},
 		{Phase: "push", Message: pushed},
 	}
+}
+
+// isPinnedArtifactReference accepts only a content-addressed image reference. A name or
+// mutable tag is not enough for a manual deploy, whose whole purpose is to deploy the exact
+// artifact the user saw in the preview.
+func isPinnedArtifactReference(reference string) bool {
+	_, digest, found := strings.Cut(strings.TrimSpace(reference), "@sha256:")
+	return found && digest != ""
+}
+
+// prefaceForArtifact records that an already-built legacy-format image is being reused.
+// It is attached to the deployment history without pretending this new operation rebuilt it.
+func prefaceForArtifact(source *store.Job, image string, tags []string) []prefaceLine {
+	if source == nil || strings.TrimSpace(image) == "" {
+		return nil
+	}
+	built := fmt.Sprintf("reusing the image artifact from the %q job", source.Name)
+	if source.DurationMS > 0 {
+		built += fmt.Sprintf(" (build took %s)", (time.Duration(source.DurationMS)*time.Millisecond).Round(time.Second))
+	}
+	built += "."
+	name, digest, _ := strings.Cut(image, "@")
+	pushed := fmt.Sprintf("using the previously pushed image %s", name)
+	if tag := strings.TrimSpace(asString(source.Build["tag"])); tag != "" {
+		pushed += ":" + tag
+	} else if len(tags) > 0 {
+		pushed += " (source tag " + strings.Join(tags, ", ") + ")"
+	}
+	if digest != "" {
+		pushed += " pinned to " + digest
+	}
+	pushed += "."
+	return []prefaceLine{{Phase: "build", Message: built}, {Phase: "push", Message: pushed}}
 }
 
 // placeholderFor keeps the old single-image substitution available to pipelines that
