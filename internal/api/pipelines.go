@@ -879,6 +879,21 @@ func (s *Server) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("job claimed", "job", job.ID, "job_name", job.Name,
 		"project", job.ProjectPath, "runner", integration.Kind)
 
+	// The job state is durably Running after ClaimJob, so announce it immediately. Without
+	// this event the artifact list can miss the entire running interval and jump from Waiting
+	// straight to Passed when the build is fast.
+	s.publishPipeline(r.Context(), job.ProjectID, nil, models.EventJobUpdated, map[string]any{
+		"job_id": job.ID,
+		"status": job.Status,
+	})
+	s.publishPipeline(r.Context(), job.ProjectID, nil, models.EventPipelineUpdated, map[string]any{
+		"pipeline_id":  job.PipelineID,
+		"job_name":     job.Name,
+		"status":       job.Status,
+		"run_finished": !s.runStillHasWork(r.Context(), job.PipelineID),
+		"job_id":       job.ID,
+	})
+
 	answer := map[string]any{
 		"job":     s.runnerJobView(r, job),
 		"waiting": s.pendingJobCount(r.Context()),
