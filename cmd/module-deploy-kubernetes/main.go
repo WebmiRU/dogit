@@ -253,7 +253,9 @@ func manifest() map[string]any {
 					"here, and it stays here. Choosing the group is not a pointer into it — nothing " +
 					"records which group's registry a deployment used — so a deployment from March is " +
 					"looked up against what that project deployed, not against what the group says " +
-					"today.",
+					"today. A level that has chosen neither still deploys, from whatever its own " +
+					"places were named before the registry moved up here: where they disagreed, " +
+					"nothing was picked for you. Answering here takes over from them.",
 			},
 			{
 				// The address, drawn only for the choice above that needs one.
@@ -346,32 +348,6 @@ func manifest() map[string]any {
 							"description": "Seconds to wait for this cluster's rollout before a deployment is " +
 								"called stuck. Empty means ten minutes. A project's own configuration may " +
 								"ask for less, and does so for one run.",
-						},
-						{
-							// Published downward, because where a cluster pulls from is a
-							// fact about the cluster and not a secret: a project's page says
-							// it, so that somebody reading a project can see where its images
-							// come from without being an administrator. It is an address, not
-							// a credential — the login for it stays in the core and is never
-							// sent to a page below this one.
-							"key":         "registry",
-							"inheritable": true,
-							"label":       "Registry",
-							"type":        "registry",
-							"description": "Which registry this place pulls its images from, and it has to be " +
-								"named: an empty row is refused with a sentence saying so, rather than " +
-								"deployed from wherever the image happened to be pushed. Name a mirror, " +
-								"or another address for the same images, when this cluster cannot reach " +
-								"the one this instance runs: the path and the digest stay exactly as they " +
-								"were, so what is rolled out is still the thing that was built. One " +
-								"registry per place on purpose — an image that lives in two registries " +
-								"under one name is two images with one name, and only the first one " +
-								"written is ever found. Pick one from the list of registries and it " +
-								"brings its own login; an address that is not on that list is refused " +
-								"until somebody writes it down, because dogit holds no credential for a " +
-								"registry it has never heard of and a cluster left to find that out " +
-								"waits at ImagePullBackOff. A new row starts with whatever the " +
-								"Default registry above says.",
 						},
 						{
 							"key":         "keep_jobs",
