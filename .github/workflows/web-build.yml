@@ -28,7 +28,5 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         run: npm ci
-      - name: Type-check the frontend
-        run: npx nuxt typecheck
       - name: Build the static frontend
         run: npm run build

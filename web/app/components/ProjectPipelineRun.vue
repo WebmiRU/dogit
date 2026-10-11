@@ -372,7 +372,7 @@ function parseLog(text: string): LogLine[] {
     if (stamped) {
       // A line with a moment on it. Kept, because it is the only thing that makes a gap in the
       // log visible — a page that joined halfway through can tell from the times that it did.
-      result.push({ stream: stamped[1] === 'err|' ? 'err' : 'out', at: Number(stamped[2]), text: stamped[3] })
+      result.push({ stream: stamped[1] === 'err|' ? 'err' : 'out', at: Number(stamped[2]), text: stamped[3] ?? '' })
       continue
     }
     // A line without one, which is every line written before the times were added. Shown the
@@ -580,7 +580,7 @@ watch(() => props.runIid, async () => {
                      which is worse than no bar at all. -->
                 <DeploySteps
                   v-if="visibleProgress[selectedJob.id]"
-                  :progress="visibleProgress[selectedJob.id]"
+                  :progress="visibleProgress[selectedJob.id] ?? null"
                   :seen="deploySeen[selectedJob.id]"
                 />
                 <details v-if="selectedJob.script?.length" class="script">
