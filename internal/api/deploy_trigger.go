@@ -658,51 +658,43 @@ func (s *Server) pendingDeploy(ctx context.Context, pipelineID int64) (*store.Jo
 		return nil, false, err
 	}
 
+	// Deploy jobs are in the deploy stage, wherever the author placed that stage.
+	// Only earlier stages can hold it up: a user-defined cleanup stage after deploy must
+	// wait for deployment, not create a circular dependency that prevents deployment.
 	var deploy *store.Job
+	for index := range jobs {
+		job := jobs[index]
+		if job.Deploy != nil && job.Status == store.JobPending {
+			deploy = &jobs[index]
+			break
+		}
+	}
+	if deploy == nil {
+		return nil, false, nil
+	}
+
 	unfinished, failed := 0, false
 	for index := range jobs {
 		job := jobs[index]
-		if job.Deploy != nil {
-			// The first deployment of this run that has not been started yet.
-			//
-			// It used to be the first deployment of the run, full stop, which meant a
-			// configuration with two places in it deployed the first one and left the
-			// second pending for ever: the check found the one that had already run, saw
-			// that it was not waiting for anything, and stopped there. They are taken in
-			// the order the configuration lists them and one at a time — the module
-			// refuses two rollouts into one namespace at the same moment on purpose, and
-			// there is no reason to arrange that deliberately across two.
-			if deploy == nil && job.Status == store.JobPending {
-				deploy = &jobs[index]
-			}
+		if job.ID == deploy.ID || job.StageOrder >= deploy.StageOrder {
 			continue
 		}
-
 		switch job.Status {
 		case store.JobPending, store.JobRunning:
 			unfinished++
 		case store.JobRefused, store.JobSkipped, store.JobSuperseded:
-			// Neither blocks anything. A place that was busy, or switched off, is a
-			// deployment that did not happen, and the places after it in the same run are
-			// not waiting on it. Counting it as a blocker would fail the run over a
-			// cluster that is fine.
+			// A terminal non-failure does not hold up later stages.
 		case store.JobFailed:
-			// A failed job that was allowed to fail is a job that went on. Counting
-			// it as a blocker would make allow_failure mean nothing at all, and it
-			// would mean the same word has two meanings on one page.
 			if !job.AllowFailure {
 				failed = true
 			}
+		case store.JobCanceled, store.JobInterrupted:
+			failed = true
 		}
-	}
-
-	if deploy == nil || deploy.Status != store.JobPending {
-		return nil, false, nil
 	}
 	if unfinished > 0 || failed {
 		return nil, false, nil
 	}
-
 	return deploy, true, nil
 }
 
