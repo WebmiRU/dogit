@@ -1,0 +1,462 @@
+// Shared visual foundation for the live pipeline run page.
+// The separate mock page is gone; only reusable pipeline content styles remain.
+
+.p2-breadcrumbs
+  display: flex
+  align-items: center
+  flex: 0 0 42px
+  gap: 9px
+  padding: 0 14px
+  border-bottom: 1px solid #303037
+  color: #c1c1ca
+  font-size: 11px
+  white-space: nowrap
+
+.p2-breadcrumbs b
+  color: #8d8d98
+  font-weight: 400
+
+.p2-breadcrumbs strong
+  color: #efeff2
+  font-weight: 650
+
+.p2-run-summary
+  position: relative
+  flex: 0 0 auto
+  padding: 14px 14px 8px
+
+.p2-run-summary h1
+  margin: 0 0 4px
+  color: #f5f5f7
+  font-size: 27px
+  line-height: 1.3
+  font-weight: 650
+  letter-spacing: -0.5px
+
+.p2-delete
+  position: absolute
+  top: 17px
+  right: 14px
+  height: 28px
+  padding: 0 13px
+  border: 0
+  border-radius: 7px
+  color: #f3f3f5
+  background: #414148
+  font: inherit
+  font-size: 12px
+
+.p2-summary-status
+  display: flex
+  align-items: center
+  gap: 5px
+  color: #c7c7ce
+  font-size: 12px
+  line-height: 21px
+
+.p2-summary-status strong
+  color: #e8e8ed
+  font-weight: 650
+
+.p2-passed
+  display: inline-flex
+  align-items: center
+  height: 20px
+  padding: 2px 8px
+  border: 0
+  border-radius: 4px
+  background: #1d4227
+  color: #7ee29a
+  font-size: 12px
+  font-weight: 500
+  line-height: 1.4
+  white-space: nowrap
+
+.p2-passed svg
+  width: 16px
+  height: 16px
+  fill: #1f7047
+  stroke: #1b3529
+  stroke-width: 1
+
+.p2-passed svg path
+  fill: none
+  stroke: #153b2a
+  stroke-width: 1.6
+  stroke-linecap: round
+  stroke-linejoin: round
+
+.p2-commit-line
+  display: flex
+  align-items: center
+  gap: 7px
+  min-height: 20px
+  color: #c6c6ce
+  font-size: 12px
+
+.p2-commit-line
+  margin-top: 7px
+
+.p2-commit-line code
+  padding: 1px 4px
+  border-radius: 3px
+  color: #d0d0d7
+  background: #37373e
+  font: 11px/15px ui-monospace, SFMono-Regular, Menlo, monospace
+
+.p2-commit-title
+  color: #c6c6ce
+
+.p2-pipeline-meta
+  display: flex
+  align-items: center
+  gap: 5px
+  min-height: 25px
+  margin-top: 1px
+  color: #c7c7cf
+  font-size: 12px
+
+.p2-tag
+  display: inline-flex
+  align-items: center
+  height: 18px
+  padding: 0 6px
+  border-radius: 12px
+  font-size: 10px
+  line-height: 18px
+
+.p2-tag-green
+  color: #092918
+  background: #45ba82
+
+.p2-tag-blue
+  color: #102238
+  background: #67b7f4
+
+.p2-meta-item
+  display: inline-flex
+  align-items: center
+  gap: 4px
+  margin-left: 1px
+  white-space: nowrap
+
+.p2-meta-item svg
+  width: 14px
+  height: 14px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.4
+
+.p2-content-tabs
+  display: flex
+  flex: 0 0 43px
+  align-items: stretch
+  gap: 0
+  margin: 0 14px
+  border-bottom: 1px solid #303037
+
+.p2-content-tabs > button
+  display: inline-flex
+  align-items: center
+  gap: 5px
+  padding: 0 18px
+  margin: 0 0 -1px
+  border: 0
+  border-bottom: 3px solid transparent
+  background: transparent
+  color: #ddddE3
+  font: inherit
+  font-weight: 600
+  white-space: nowrap
+  cursor: pointer
+
+.p2-content-tabs > button.active
+  border-bottom-color: #4f9de8
+  color: #f4f4f6
+
+.p2-content-tabs > button.active::after
+  content: ""
+  position: absolute
+  right: 0
+  bottom: -1px
+  left: 0
+  height: 3px
+  border-radius: 0
+  background: #4f9de8
+  pointer-events: none
+
+.p2-content-tabs > button:focus-visible
+  outline: 2px solid #4f9de8
+  outline-offset: -3px
+
+.p2-content-tabs b
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  width: 28px
+  height: 28px
+  border-radius: 50%
+  background: #777780
+  color: #1b1b20
+  font: inherit
+  font-weight: 600
+
+.p2-pipeline-canvas
+  position: relative
+  flex: 1 1 auto
+  min-height: 300px
+  margin: 14px 14px 0
+  border-radius: 8px
+  background: #28282e
+  overflow: hidden
+
+.p2-stage
+  position: absolute
+  top: 20px
+  width: 222px
+  border-radius: 10px
+  padding: 5px 5px 6px
+  background: #39393f
+
+.p2-stage-title
+  height: 27px
+  padding: 2px 9px 3px
+  color: #efeff3
+  font-size: 12px
+  font-weight: 650
+
+.p2-jobs
+  padding: 4px 5px
+  border-radius: 7px
+  background: #17171d
+
+.p2-job
+  display: flex
+  align-items: center
+  gap: 7px
+  min-width: 0
+  height: 38px
+  padding: 0 5px
+  color: #e2e2e7
+  font-size: 12px
+
+@media (max-width: 900px)
+  .p2-commit-title
+    overflow: hidden
+    text-overflow: ellipsis
+    white-space: nowrap
+  .p2-pipeline-meta
+    flex-wrap: wrap
+  .p2-stage
+    width: 205px
+
+@media (max-width: 620px)
+  .p2-breadcrumbs
+    gap: 5px
+    padding: 0 8px
+    font-size: 10px
+  .p2-run-summary
+    padding-right: 8px
+    padding-left: 8px
+  .p2-run-summary h1
+    font-size: 24px
+  .p2-delete
+    right: 8px
+  .p2-summary-status
+    flex-wrap: wrap
+  .p2-commit-title
+    max-width: 42vw
+  .p2-content-tabs
+    margin: 0 8px
+  .p2-pipeline-canvas
+    margin: 10px 8px 0
+  .p2-stage
+    width: 175px
+
+.p2-content-tabs > button
+  font-size: 14px
+
+.p2-content-tabs b
+  font-size: 14px
+
+.p2-run-summary h1
+  font-size: 30px
+
+.p2-passed
+  font-size: 12px
+
+.p2-tag
+  font-size: 12px
+
+.p2-jobs-table-wrap
+  flex: 1 1 auto
+  min-height: 0
+  margin: 12px 24px 0
+  overflow: auto
+
+.p2-jobs-table
+  width: 100%
+  min-width: 820px
+  color: #e4e4e8
+
+.p2-jobs-table-head
+  display: grid
+  grid-template-columns: 220px minmax(350px, 2.5fr) minmax(170px, 1fr) minmax(120px, 1.4fr) 70px
+  align-items: center
+
+.p2-job-row
+  display: grid
+  grid-template-columns: 220px minmax(350px, 2.5fr) minmax(170px, 1fr) minmax(120px, 1.4fr) 70px
+  align-items: center
+
+.p2-jobs-table-head
+  min-height: 72px
+  border-top: 1px solid #37373e
+  border-bottom: 1px solid #45454d
+  font-weight: 650
+
+.p2-jobs-table-head > span
+  padding: 0 22px
+
+.p2-jobs-table-head > span:last-child
+  padding: 0
+
+.p2-job-row
+  min-height: 136px
+  border-bottom: 1px solid #45454d
+
+.p2-job-status
+  display: flex
+  flex-direction: column
+  align-items: flex-start
+  justify-content: center
+  gap: 3px
+  padding: 12px 22px
+
+.p2-job-status .p2-passed
+  height: 18px
+  padding: 0 8px
+  gap: 0
+  font-size: 12px
+  line-height: 18px
+
+.p2-job-status .p2-passed svg
+  width: 12px
+  height: 12px
+
+.p2-job-detail
+  display: inline-flex
+  align-items: center
+  gap: 5px
+  color: #b5b5bf
+  line-height: 1.3
+  white-space: nowrap
+
+.p2-job-detail svg
+  width: 18px
+  height: 18px
+  flex: 0 0 18px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.6
+  stroke-linecap: round
+  stroke-linejoin: round
+
+.p2-job-name
+  display: flex
+  min-width: 0
+  flex-direction: column
+  align-items: flex-start
+  justify-content: center
+  gap: 7px
+  padding: 12px 22px
+
+.p2-job-name a
+  color: #8fbee9
+  text-decoration: none
+  white-space: nowrap
+
+.p2-job-tags
+  display: flex
+  flex-wrap: wrap
+  gap: 6px
+
+.p2-job-tags > span
+  display: inline-flex
+  align-items: center
+  gap: 5px
+  padding: 2px 7px
+  border-radius: 5px
+  background: #37373e
+  color: #bdbdc6
+  line-height: 1.3
+  white-space: nowrap
+
+.p2-job-tags > span:first-child
+  background: #303136
+  color: var(--info, #8bbdff)
+
+.p2-job-tags > span:last-child
+  background: #262b36
+  color: var(--text-muted, #b6bdc8)
+
+.p2-job-tags svg
+  width: 17px
+  height: 17px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.5
+  stroke-linecap: round
+  stroke-linejoin: round
+
+.p2-job-stage
+  align-self: stretch
+  display: flex
+  align-items: flex-start
+  padding: 20px 22px
+  color: #bcbcc5
+
+.p2-job-coverage
+  align-self: stretch
+
+.p2-tests-empty
+  flex: 1 1 auto
+  min-height: 300px
+  margin: 12px 24px 0
+  border-top: 1px solid #37373e
+
+@media (max-width: 900px)
+  .p2-jobs-table-wrap
+    margin-right: 14px
+    margin-left: 14px
+  .p2-jobs-table-head
+    grid-template-columns: 170px minmax(300px, 2.5fr) minmax(120px, 1fr) minmax(70px, 1fr) 60px
+  .p2-job-row
+    grid-template-columns: 170px minmax(300px, 2.5fr) minmax(120px, 1fr) minmax(70px, 1fr) 60px
+  .p2-job-status
+    padding-right: 12px
+    padding-left: 12px
+  .p2-job-name
+    padding-right: 12px
+    padding-left: 12px
+  .p2-job-stage
+    padding-right: 12px
+    padding-left: 12px
+
+@media (max-width: 620px)
+  .p2-jobs-table-wrap
+    margin-right: 8px
+    margin-left: 8px
+  .p2-jobs-table-head
+    grid-template-columns: 150px minmax(260px, 2.5fr) minmax(100px, 1fr) minmax(50px, 1fr) 58px
+  .p2-job-row
+    grid-template-columns: 150px minmax(260px, 2.5fr) minmax(100px, 1fr) minmax(50px, 1fr) 58px
+  .p2-job-status
+    padding-right: 8px
+    padding-left: 8px
+  .p2-job-name
+    padding-right: 8px
+    padding-left: 8px
+  .p2-job-stage
+    padding-right: 8px
+    padding-left: 8px

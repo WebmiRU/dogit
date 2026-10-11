@@ -130,7 +130,7 @@ try {
 
   // --- repository tree -------------------------------------------------
   await page.click('.project-card h3 a')
-  await page.waitForSelector('.repo-tabs', { timeout: 15000 })
+  await page.waitForSelector('.project-sidebar', { timeout: 15000 })
   await new Promise((resolve) => setTimeout(resolve, 700))
 
   // The clone box shows the command and the URL in separate elements; the URL

@@ -121,7 +121,7 @@ function partIsActive(item: NavItem, part: NavChild): boolean {
   return route.path.startsWith(`${part.to}/`)
 }
 
-/** Project pages keep the repository tabs; the sidebar only highlights sections. */
+/** Project pages use their own section navigation; the global sidebar highlights Projects. */
 const onRepository = computed(() => route.path.startsWith('/p/'))
 </script>
 

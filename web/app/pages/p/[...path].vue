@@ -3,13 +3,12 @@
  * What identifies this page to Nuxt.
  *
  * By default a page is keyed by its whole address, so moving from Notifications to
- * Pipelines tore down this component and built it again — the header, the tabs and
- * all — and every one of those was thrown away and redrawn in front of the reader.
+ * Pipelines tore down this component and built it again — the header, navigation and
+ * content — and every one of those was thrown away and redrawn in front of the reader.
  *
- * The key here is the repository and nothing below it. The tabs are one component
- * choosing between children, which is what they are: moving between them swaps what
- * is under the tabs and leaves the tabs themselves where they were, while moving to
- * another repository rebuilds the page as it should.
+ * The key here is the repository and nothing below it. The project navigation and
+ * its page content are one component: changing sections swaps the content without
+ * rebuilding the project header and navigation, while another repository rebuilds it.
  */
 definePageMeta({
   key: (route) => route.path.split('/-/')[0] ?? route.path,
@@ -34,7 +33,6 @@ import type {
   TreeResponse,
 } from '~/types/repository'
 import type { MergeRequest } from '~/types/merge_requests'
-import Pipeline2Preview from '~/components/Pipeline2Preview.vue'
 
 interface ProjectResponse {
   project: ProjectSummary
@@ -238,17 +236,24 @@ async function switchRef(next: string) {
   await navigateTo(repoViewUrl(project.value.path, 'tree', next))
 }
 
-const tabs = computed(() => {
+interface ProjectNavigationItem {
+  label: string
+  to: string
+  match: string
+}
+
+interface ProjectNavigationGroup {
+  key: 'repository' | 'build' | 'operate' | 'project'
+  label: string
+  items: ProjectNavigationItem[]
+}
+
+const navigationGroups = computed<ProjectNavigationGroup[]>(() => {
   if (!project.value) return []
-  const base = `/p/${project.value.path}`
 
-  // Every tab carries the ref, so a chosen branch does not reset when moving
-  // between Code and Commits.
   const path = project.value.path
-
-  // With no code yet there is nothing for the repository tabs to show, but a
-  // project can still have settings to change and images to push.
-  const codeTabs = repositoryIsEmpty.value ? [] : [
+  const base = `/p/${path}`
+  const repositoryItems: ProjectNavigationItem[] = repositoryIsEmpty.value ? [] : [
     { label: 'Code', to: repoViewUrl(path, 'tree', activeRef.value), match: 'tree' },
     { label: 'Commits', to: repoViewUrl(path, 'commits', activeRef.value), match: 'commits' },
     { label: 'Branches', to: repoViewUrl(path, 'branches', activeRef.value), match: 'branches' },
@@ -257,27 +262,44 @@ const tabs = computed(() => {
     { label: 'Merge requests', to: repoViewUrl(path, 'merge_requests', activeRef.value), match: 'merge_requests' },
   ]
 
-  return [
-    ...codeTabs,
-    // Images live outside the repository: a branch has nothing to do with an image,
-    // and a tag that was never built has no page to show. So this one carries no ref.
-    { label: 'Pipelines', to: `${base}/-/pipelines`, match: 'pipelines' },
-    { label: 'Artifacts', to: `${base}/-/artifacts`, match: 'artifacts' },
-    { label: 'pipeline2', to: `${base}/-/pipeline2`, match: 'pipeline2' },
-    { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
-    // Deployments sit outside the repository for the same reason images do: a commit
-    // is not what runs, and a branch has nothing to say about which cluster it went
-    // to. So no ref on this one either.
-    //
-    // Deploy comes before Notifications because both are about what this instance
-    // did to the world rather than about the code, and deploying is the one people
-    // are here for. Notifications is present whether or not anything is installed:
-    // a tab that only exists once a module is there cannot introduce the idea.
-    { label: 'Deploy', to: `${base}/-/deploy`, match: 'deploy' },
-    { label: 'Notifications', to: `${base}/-/notifications`, match: 'notifications' },
-    { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
-  ]
+  const groups: ProjectNavigationGroup[] = []
+  if (repositoryItems.length) {
+    groups.push({ key: 'repository', label: 'Repository', items: repositoryItems })
+  }
+
+  groups.push(
+    {
+      key: 'build',
+      label: 'Build',
+      items: [
+        { label: 'Pipelines', to: `${base}/-/pipelines`, match: 'pipelines' },
+        { label: 'Artifacts', to: `${base}/-/artifacts`, match: 'artifacts' },
+        { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
+      ],
+    },
+    {
+      key: 'operate',
+      label: 'Operate',
+      items: [
+        { label: 'Deploy', to: `${base}/-/deploy`, match: 'deploy' },
+        { label: 'Notifications', to: `${base}/-/notifications`, match: 'notifications' },
+      ],
+    },
+    {
+      key: 'project',
+      label: 'Project',
+      items: [
+        { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
+      ],
+    },
+  )
+  return groups
 })
+
+function isNavigationItemActive(match: string) {
+  if (match === 'tree') return ['tree', 'blob', 'edit'].includes(view.value.name)
+  return view.value.name === match
+}
 
 /** Clone URL shown in the header. */
 const cloneUrl = computed(() => project.value?.ssh_url ?? '')
@@ -331,16 +353,61 @@ async function copyCloneUrl() {
         </div>
       </div>
 
-      <nav v-if="tabs.length" class="repo-tabs">
-        <NuxtLink
-          v-for="tab in tabs"
-          :key="tab.match"
-          :to="tab.to"
-          :class="{ active: view.name === tab.match }"
-        >
-          {{ tab.label }}
-        </NuxtLink>
-      </nav>
+      <div class="project-workspace">
+        <aside class="project-sidebar">
+          <div class="project-sidebar-caption">Project</div>
+          <div class="project-sidebar-project">
+            <span class="project-sidebar-mark" aria-hidden="true">
+              {{ (project.name || project.path).slice(0, 1).toUpperCase() }}
+            </span>
+            <span class="project-sidebar-project-name">
+              <strong>{{ project.name || project.path.split('/').pop() }}</strong>
+              <small>{{ project.path }}</small>
+            </span>
+          </div>
+
+          <nav class="project-nav" aria-label="Project navigation">
+            <section
+              v-for="group in navigationGroups"
+              :key="group.key"
+              class="project-nav-group"
+            >
+              <h2 class="project-nav-group-title">
+                <svg v-if="group.key === 'repository'" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="m2 4 6-2.5L14 4v8l-6 2.5L2 12z M2 4l6 3 6-3 M8 7v7.5" />
+                </svg>
+                <svg v-else-if="group.key === 'build'" viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="1.5" y="1.5" width="4" height="4" rx="0.7" />
+                  <rect x="10.5" y="10.5" width="4" height="4" rx="0.7" />
+                  <path d="M5.5 3.5h3v9h2" />
+                </svg>
+                <svg v-else-if="group.key === 'operate'" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 1.5v9m0 0 3-3m-3 3-3-3M2 13.5h12" />
+                </svg>
+                <svg v-else viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M6 1.5h4l.6 2 1.6.9 2-.5 1.2 2.1-1.4 1.5v1.8l1.4 1.5-1.2 2.1-2-.5-1.6.9-.6 2H6l-.6-2-1.6-.9-2 .5-1.2-2.1L2 9.3V7.5L.6 6l1.2-2.1 2 .5 1.6-.9z" transform="translate(.5 0) scale(.94)" />
+                  <circle cx="8" cy="8" r="2" />
+                </svg>
+                <span>{{ group.label }}</span>
+              </h2>
+              <div class="project-nav-links">
+                <NuxtLink
+                  v-for="item in group.items"
+                  :key="item.match"
+                  :to="item.to"
+                  class="project-nav-item"
+                  :class="{ 'is-active': isNavigationItemActive(item.match) }"
+                  :aria-current="isNavigationItemActive(item.match) ? 'page' : undefined"
+                >
+                  {{ item.label }}
+                </NuxtLink>
+              </div>
+            </section>
+          </nav>
+        </aside>
+
+        <div class="project-workspace-main">
+
 
       <div v-if="repositoryIsEmpty" class="card empty-repo">
         <h2>This repository is empty</h2>
@@ -357,7 +424,7 @@ async function copyCloneUrl() {
         <NuxtLink class="btn" to="/projects">Back to projects</NuxtLink>
       </div>
 
-      <div v-else style="margin-top: 16px">
+      <div v-else class="project-view-content">
         <RepositoryTree
           v-if="view.name === 'tree'"
           :project-id="projectId"
@@ -454,7 +521,6 @@ async function copyCloneUrl() {
         />
         <!-- A run has its own page: watching the log is what people come for, and
              a list that also did that would do neither thing well. -->
-        <Pipeline2Preview v-else-if="view.name === 'pipeline2'" :project-path="project.path" />
         <ProjectPipelineRun
           v-else-if="view.name === 'pipelines' && view.rest[0]"
           :project-id="projectId"
@@ -500,7 +566,9 @@ async function copyCloneUrl() {
           @saved="project = $event"
         />
         <div v-else class="card empty">Unknown view “{{ view.name }}”.</div>
+        </div>
       </div>
+    </div>
     </template>
   </div>
 </template>

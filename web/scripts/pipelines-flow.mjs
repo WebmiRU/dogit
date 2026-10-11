@@ -52,8 +52,8 @@ try {
   await page.waitForSelector('.pipeline-list, .card.empty', { timeout: 15000 })
   await new Promise((resolve) => setTimeout(resolve, 800))
 
-  const tabs = await page.$$eval('.repo-tabs a', (nodes) => nodes.map((node) => node.textContent.trim()))
-  check(tabs.includes('Pipelines'), `the tab is there: ${tabs.join(' / ')}`, failures)
+  const tabs = await page.$$eval('.project-nav-item', (nodes) => nodes.map((node) => node.textContent.trim()))
+  check(tabs.includes('Pipelines'), `the navigation item is there: ${tabs.join(' / ')}`, failures)
 
   step('start a run from the page')
   await page.$$eval('button', (nodes) =>
