@@ -230,23 +230,46 @@ func manifest() map[string]any {
 					"a command arrives once or not at all. Empty means five minutes.",
 			},
 			{
-				// The value a new place starts with, and the only thing this setting is.
+				// Which registry this level deploys to, decided once rather than per place.
 				//
-				// It is a default for creation, not a pointer: nothing reads it during a
-				// deployment, so changing it moves no place and a place that was created
-				// while it said something keeps saying that. The alternative — a "the
-				// default registry" switch that places follow — is a thing nobody can
-				// point at afterwards: a deployment from March is looked up and its
-				// registry is whatever the setting says today, which is a history that
-				// rewrites itself.
-				"key":   "registry",
-				"label": "Default registry",
+				// It was per place, and one place per registry with a project's images in
+				// more than one registry under one name is two images with one name. The
+				// question "where does this project deploy from" had as many answers as
+				// there were places, and a reader comparing two places had to know that
+				// was deliberate before they read anything else.
+				//
+				// Two choices and no third. "The group" is not a registry the level below
+				// goes and reads: it is this setting left at its first value, which is the
+				// only way a project gets its registry from a group without anybody
+				// writing it down twice.
+				"key":   "registry_source",
+				"label": "Registry",
+				"type":  "enum",
+				"default": "group",
+				"inheritable": true,
+				"options": []string{"group", "own"},
+				"description": "Where this level's images live. \"The group\" takes whatever the level " +
+					"above chose and keeps taking it when that changes; \"mine\" is a decision written " +
+					"here, and it stays here. Choosing the group is not a pointer into it — nothing " +
+					"records which group's registry a deployment used — so a deployment from March is " +
+					"looked up against what that project deployed, not against what the group says " +
+					"today.",
+			},
+			{
+				// The address, drawn only for the choice above that needs one.
+				"key":   "image_registry",
+				"label": "Registry",
 				"type":  "registry",
-				"description": "What a place offered for the first time starts with. It applies to " +
-					"rows added from now on and to nothing else: no deployment reads it, changing it " +
-					"moves no place, and a place that names a registry keeps that one whatever this " +
-					"says. Left empty, a new place starts empty too — which is a row somebody has to " +
-					"fill in, on purpose.",
+				"inheritable": true,
+				"inherited_note": "the group's — this project did not choose one of its own",
+				"show_if": map[string]any{"key": "registry_source", "in": []string{"own"}},
+				"description": "Which registry this level's images are named under and pushed to, " +
+					"and which its clusters pull from. It has to be named: an empty row is refused " +
+					"with a sentence saying so, rather than deployed from wherever the image happened " +
+					"to be pushed. Pick one from the list of registries and it brings its own login; " +
+					"an address that is not on that list is refused until somebody writes it down, " +
+					"because dogit holds no credential for a registry it has never heard of and a " +
+					"cluster left to find that out waits at ImagePullBackOff.",
 			},
 			{
 				"key":   "clusters",
