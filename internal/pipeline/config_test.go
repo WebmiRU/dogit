@@ -411,3 +411,88 @@ func TestRulesTellTagsFromBranches(t *testing.T) {
 		})
 	}
 }
+
+
+// TestMapStagesExposeStableNamedBuildOutputs exercises the concise map-stage syntax.
+// Each output becomes its own build job; its name also controls the manifest variable.
+func TestMapStagesExposeStableNamedBuildOutputs(t *testing.T) {
+	config, err := Parse([]byte(`
+variables:
+  IMAGE_FLAVOUR: stable
+stages:
+  build:
+    worker:
+      image: registry.example/myapp/worker
+      dockerfile: Dockerfile.worker
+      context: .
+      tag: "${CI_COMMIT_SHORT_SHA}"
+    forker:
+      image: registry.example/myapp/forker
+      dockerfile: Dockerfile.forker
+      context: .
+      tag: "${CI_COMMIT_SHORT_SHA}"
+  verify:
+    commands:
+      - shell:
+          command: ./ci/verify.sh
+  deploy:
+    module: kubernetes
+    target: production
+    manifests:
+      - k8s/worker.yaml
+`))
+	if err != nil {
+		t.Fatalf("parse map-style stages: %v", err)
+	}
+	if got, want := strings.Join(config.Stages, ","), "build,verify,deploy"; got != want {
+		t.Fatalf("stage order = %q, want %q", got, want)
+	}
+	outputs := config.NamedBuildOutputs()
+	if len(outputs) != 2 || outputs[0].Name != "worker" || outputs[1].Name != "forker" {
+		t.Fatalf("named outputs = %+v, want worker then forker", outputs)
+	}
+	if ImageVariableName(outputs[0].Name) != "BUILD_WORKER_IMAGE_URL" ||
+		ImageVariableName(outputs[1].Name) != "BUILD_FORKER_IMAGE_URL" {
+		t.Fatalf("generated variable names are not stable: %s, %s",
+			ImageVariableName(outputs[0].Name), ImageVariableName(outputs[1].Name))
+	}
+	if len(config.StageSpecs[1].Commands) != 1 || config.Deploy.Target != "production" {
+		t.Fatalf("verify or deploy stage was not parsed: %+v", config.StageSpecs)
+	}
+}
+
+func TestMapStagesRejectOutputVariableCollisions(t *testing.T) {
+	_, err := Parse([]byte(`
+stages:
+  build:
+    web-api: {image: registry.example/myapp/web}
+    web_api: {image: registry.example/myapp/api}
+`))
+	if err == nil || !strings.Contains(err.Error(), "produce the same variable") {
+		t.Fatalf("error = %v, want normalized output-name collision", err)
+	}
+}
+
+func TestMapStagesRejectUnsafeOutputNames(t *testing.T) {
+	for _, name := range []string{"_api", "-worker", "web.api", "web api", ""} {
+		data := "stages:\\n  build:\\n    \\"" + name + "\\": {image: registry.example/myapp/app}\\n"
+		if _, err := Parse([]byte(data)); err == nil {
+			t.Errorf("output name %q was accepted", name)
+		}
+	}
+}
+
+func TestMapStagesRejectDeployBeforeBuild(t *testing.T) {
+	_, err := Parse([]byte(`
+stages:
+  deploy:
+    module: kubernetes
+    target: production
+    manifests: [k8s/deployment.yaml]
+  build:
+    api: {image: registry.example/myapp/api}
+`))
+	if err == nil || !strings.Contains(err.Error(), "deploy cannot appear before build") {
+		t.Fatalf("error = %v, want build/deploy ordering error", err)
+	}
+}

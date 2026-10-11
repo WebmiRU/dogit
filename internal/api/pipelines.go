@@ -399,6 +399,12 @@ func (s *Server) pipelineConfig(ctx context.Context, repoDir, sha string) (*pipe
 		return nil, errBadRequestf("%s at %s could not be read: %v",
 			pipeline.ConfigFileName, shortSHA(sha), err)
 	}
+	// Generated image variables and referenced manifests are checked at configuration
+	// time, so a typo cannot survive until after expensive builds have run.
+	if err := s.validateBuildImageReferences(ctx, repoDir, sha, config); err != nil {
+		return nil, errBadRequestf("%s at %s has invalid build-image references: %v",
+			pipeline.ConfigFileName, shortSHA(sha), err)
+	}
 	return config, nil
 }
 
@@ -526,6 +532,23 @@ func stageJobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []sto
 
 	for order, spec := range config.StageSpecs {
 		if only != "" && spec.Name != only {
+			continue
+		}
+		// A map-style build stage may have several named outputs. Each is an ordinary
+		// job in the same stage: they may build concurrently, but every later stage waits
+		// until all outputs have finished successfully.
+		if spec.Name == "build" && len(spec.BuildOutputs) > 0 {
+			for _, output := range spec.BuildOutputs {
+				jobs = append(jobs, store.Job{
+					Name:            output.Name,
+					Stage:           "build",
+					StageOrder:      order,
+					Image:           "alpine:3.21",
+					BreakOnError:    spec.BreaksOnError(),
+					BreakOnErrorSet: true,
+					Build:           expandBuild(output.Build, variables),
+				})
+			}
 			continue
 		}
 		if spec.Name == "deploy" {

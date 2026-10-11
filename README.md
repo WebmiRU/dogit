@@ -287,6 +287,54 @@ The module has no Composer-client authentication and does not support package pu
 Configure the primary/additional upstreams and the filesystem/S3 backend in **Admin → Modules → composer → Settings**.
 See the **Packages** tab there for cached metadata, versions, ZIP status, sizes, and last fetch times.
 
+## Pipelines and named image outputs
+
+The compact stage-map form of `.dogit-ci.yml` supports several independently built
+images as outputs of one `build` stage. The output name is stable and is also exposed
+to deployment manifests as `BUILD_<NAME>_IMAGE_URL`. For example:
+
+```yaml
+stages:
+  build:
+    worker:
+      image: registry.example/myapp/worker
+      dockerfile: Dockerfile.worker
+      context: .
+      tag: "${CI_COMMIT_SHORT_SHA}"
+    forker:
+      image: registry.example/myapp/forker
+      dockerfile: Dockerfile.forker
+      context: .
+      tag: "${CI_COMMIT_SHORT_SHA}"
+  verify:
+    commands:
+      - shell:
+          command: ./ci/verify.sh
+  deploy:
+    module: kubernetes
+    target: production
+    manifests:
+      - k8s/deployment.yaml
+      - k8s/worker.yaml
+```
+
+A Kubernetes manifest refers to an output directly, without a separate mapping table:
+
+```yaml
+containers:
+  - name: worker
+    image: ${BUILD_WORKER_IMAGE_URL}
+```
+
+Dogit validates output names, referenced manifests and generated image variables before
+creating pipeline jobs. Every output is a separate build job. Outputs may build in parallel,
+but later stages wait for the whole previous stage. All required builds and checks must
+succeed before Dogit sends one deployment request containing every prepared manifest.
+If any required image fails to build or push, no deployment request is sent; other images
+already pushed remain ordinary registry artifacts. Generated image variables contain
+digest-pinned references, not floating tags. Kubernetes apply/rollout results are observed
+and logged; failures do not trigger an automatic rollback.
+
 ## Database
 
 PostgreSQL 19, one cluster for everything. Modules that declare `"database": true`
@@ -304,5 +352,5 @@ cluster to back up and operate.
 ## Not implemented yet
 
 - Editing files from the browser, merge requests and conflict resolution
-- CI job execution, artifacts and deployments
+- Arbitrary downloadable file artifacts (image build outputs and deployments are supported)
 - Real modules; `cache:demo` is a reference implementation only

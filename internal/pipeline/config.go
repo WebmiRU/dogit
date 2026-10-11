@@ -80,11 +80,56 @@ type JobSpec struct {
 
 
 type StageSpec struct {
-	Name        string         `yaml:"name"`
-	BreakOnError *bool          `yaml:"break_on_error"`
-	Commands    []StageCommand `yaml:"commands"`
-	Build       map[string]any `yaml:"build"`
-	Deploy      *DeploySpec    `yaml:"-"`
+	Name         string            `yaml:"name"`
+	BreakOnError *bool             `yaml:"break_on_error"`
+	Commands     []StageCommand    `yaml:"commands"`
+	Build        map[string]any    `yaml:"build"`
+	BuildOutputs []BuildOutputSpec `yaml:"-"`
+	Deploy       *DeploySpec       `yaml:"-"`
+}
+
+// BuildOutputSpec is one named image built by the build stage. The name comes from
+// the key under stages.build rather than a second output field: it is the stable
+// identifier manifests use as BUILD_<NAME>_IMAGE_URL.
+type BuildOutputSpec struct {
+	Name  string
+	Build map[string]any
+}
+
+// ImageVariableName is the deterministic variable name exposed for one build output.
+// Hyphens and underscores share one spelling; callers validate collisions before use.
+func ImageVariableName(output string) string {
+	return "BUILD_" + strings.ToUpper(strings.ReplaceAll(output, "-", "_")) + "_IMAGE_URL"
+}
+
+// ValidBuildOutputName reports whether a name can safely be used in a generated variable.
+func ValidBuildOutputName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index, char := range name {
+		letter := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
+		if index == 0 {
+			if !letter {
+				return false
+			}
+			continue
+		}
+		if letter || (char >= '0' && char <= '9') || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// NamedBuildOutputs returns outputs in the order the project declared them.
+func (c *Config) NamedBuildOutputs() []BuildOutputSpec {
+	outputs := []BuildOutputSpec{}
+	for _, stage := range c.StageSpecs {
+		outputs = append(outputs, stage.BuildOutputs...)
+	}
+	return outputs
 }
 
 type StageCommand struct {
@@ -181,6 +226,153 @@ func hasStageDefinitions(raw []*yaml.Node) bool {
 		}
 	}
 	return false
+}
+
+// hasMapStageDefinitions recognizes the compact stage map syntax:
+//
+//   stages:
+//     build:
+//       api: {image: registry.example/app}
+//     deploy:
+//       module: kubernetes
+//
+// The older list-of-stage-objects syntax remains supported below.
+func hasMapStageDefinitions(raw []*yaml.Node) bool {
+	for i := 0; i+1 < len(raw); i += 2 {
+		if raw[i].Value == "stages" && raw[i+1].Kind == yaml.MappingNode {
+			return true
+		}
+	}
+	return false
+}
+
+// parseMapStageDefinitions reads one stage per mapping key, preserving YAML order.
+// The build stage contains named image outputs; ordinary stages contain commands;
+// deploy is a deployment specification directly, not another nested deploy block.
+func parseMapStageDefinitions(raw []*yaml.Node) (*Config, error) {
+	config := &Config{Variables: map[string]any{}, Jobs: map[string]JobSpec{}}
+	var stagesNode *yaml.Node
+	for i := 0; i+1 < len(raw); i += 2 {
+		key, value := raw[i].Value, raw[i+1]
+		switch key {
+		case "stages":
+			stagesNode = value
+		case "variables":
+			if err := value.Decode(&config.Variables); err != nil {
+				return nil, fmt.Errorf("variables: %w", err)
+			}
+		case "notify":
+			notify, err := parseNotify(value)
+			if err != nil {
+				return nil, fmt.Errorf("notify: %w", err)
+			}
+			config.Notify = notify
+		default:
+			return nil, fmt.Errorf("top-level key %q is not supported with map-style stages; use stages, variables or notify", key)
+		}
+	}
+	if stagesNode == nil || stagesNode.Kind != yaml.MappingNode || len(stagesNode.Content) == 0 {
+		return nil, fmt.Errorf("stages must be a non-empty map of stage names to stage definitions")
+	}
+
+	seenStages := map[string]bool{}
+	seenOutputs := map[string]string{}
+	buildAt, deployAt := -1, -1
+	for index := 0; index+1 < len(stagesNode.Content); index += 2 {
+		name := strings.TrimSpace(stagesNode.Content[index].Value)
+		node := stagesNode.Content[index+1]
+		if name == "" {
+			return nil, fmt.Errorf("stages[%d] has an empty name", index/2)
+		}
+		if seenStages[name] {
+			return nil, fmt.Errorf("stage %q is listed more than once", name)
+		}
+		seenStages[name] = true
+
+		spec := StageSpec{Name: name}
+		switch name {
+		case "build":
+			buildAt = len(config.StageSpecs)
+			if node.Kind != yaml.MappingNode || len(node.Content) == 0 {
+				return nil, fmt.Errorf("stages.build must map output names to build definitions")
+			}
+			for outputIndex := 0; outputIndex+1 < len(node.Content); outputIndex += 2 {
+				outputName := strings.TrimSpace(node.Content[outputIndex].Value)
+				outputNode := node.Content[outputIndex+1]
+				if !ValidBuildOutputName(outputName) {
+					return nil, fmt.Errorf("stages.build output %q must start with a letter and contain only letters, digits, _ or -", outputName)
+				}
+				variable := ImageVariableName(outputName)
+				if earlier, exists := seenOutputs[variable]; exists {
+					return nil, fmt.Errorf("build outputs %q and %q produce the same variable %s", earlier, outputName, variable)
+				}
+				seenOutputs[variable] = outputName
+				if outputNode.Kind != yaml.MappingNode {
+					return nil, fmt.Errorf("stages.build.%s must be a build definition block", outputName)
+				}
+				build := map[string]any{}
+				if err := outputNode.Decode(&build); err != nil {
+					return nil, fmt.Errorf("stages.build.%s: %w", outputName, err)
+				}
+				if len(build) == 0 {
+					return nil, fmt.Errorf("stages.build.%s is empty", outputName)
+				}
+				if _, ok := build["image"]; !ok {
+					return nil, fmt.Errorf("stages.build.%s must declare image", outputName)
+				}
+				spec.BuildOutputs = append(spec.BuildOutputs, BuildOutputSpec{Name: outputName, Build: build})
+			}
+		case "deploy":
+			deployAt = len(config.StageSpecs)
+			deploy, err := parseDeploy(node)
+			if err != nil {
+				return nil, fmt.Errorf("stages.deploy: %w", err)
+			}
+			spec.Deploy = &deploy
+			config.Deploy = deploy
+			config.Deploys = append(config.Deploys, deploy)
+		default:
+			if node.Kind != yaml.MappingNode {
+				return nil, fmt.Errorf("stages.%s must be a block", name)
+			}
+			for fieldIndex := 0; fieldIndex+1 < len(node.Content); fieldIndex += 2 {
+				key := node.Content[fieldIndex].Value
+				if key != "commands" && key != "break_on_error" {
+					return nil, fmt.Errorf("stage %q has no field called %q; it knows commands and break_on_error", name, key)
+				}
+			}
+			var decoded struct {
+				BreakOnError *bool          `yaml:"break_on_error"`
+				Commands     []StageCommand `yaml:"commands"`
+			}
+			if err := node.Decode(&decoded); err != nil {
+				return nil, fmt.Errorf("stages.%s: %w", name, err)
+			}
+			if len(decoded.Commands) == 0 {
+				return nil, fmt.Errorf("stage %q must contain at least one command", name)
+			}
+			spec.BreakOnError = decoded.BreakOnError
+			spec.Commands = decoded.Commands
+		}
+		if name == "build" && len(spec.BuildOutputs) == 0 {
+			return nil, fmt.Errorf("stage build must define at least one named image output")
+		}
+		if name == "deploy" && !spec.Deploy.Present {
+			return nil, fmt.Errorf("stage deploy must define module, target and manifests")
+		}
+		for commandIndex, command := range spec.Commands {
+			if command.Shell == nil {
+				return nil, fmt.Errorf("stage %q command %d has no shell command", name, commandIndex+1)
+			}
+		}
+		config.StageSpecs = append(config.StageSpecs, spec)
+		config.Stages = append(config.Stages, name)
+		config.Order = append(config.Order, name)
+	}
+	if buildAt >= 0 && deployAt >= 0 && deployAt < buildAt {
+		return nil, fmt.Errorf("stage deploy cannot appear before stage build")
+	}
+	return config, nil
 }
 
 func parseStageDefinitions(raw []*yaml.Node) (*Config, error) {
@@ -307,6 +499,9 @@ func Parse(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("parse pipeline configuration: %w", err)
 	}
 	raw := topLevelKeys(&document)
+	if hasMapStageDefinitions(raw) {
+		return parseMapStageDefinitions(raw)
+	}
 	if hasStageDefinitions(raw) {
 		return parseStageDefinitions(raw)
 	}
