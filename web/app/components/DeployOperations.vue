@@ -150,6 +150,8 @@ const expandedLogs = ref<Record<number, true>>({})
 const logRequest = ref<Record<number, number>>({})
 /** Older list requests cannot overwrite the result of a newer queue/progress event. */
 let listRequest = 0
+/** Live progress received per operation while a list request may be in flight. */
+const progressRevision: Record<number, number> = {}
 
 /** When this page subscribed, so that a line older than this says a hole was missed. */
 let subscribedAt = Date.now()
@@ -194,7 +196,7 @@ const history = computed(() => {
 })
 
 /** Everything the core sends in one answer is both halves; the sort is by what was begun. */
-function reorder(answer: OperationsAnswer) {
+function reorder(answer: OperationsAnswer, revisionAtStart: Record<number, number>) {
   const wasQueued = new Set(operations.value.filter((one) => one.queued).map((one) => one.job_id))
   // The core's queue state is authoritative. A progress snapshot may contain phases from before
   // the job started waiting; that is history, not evidence it is running now.
@@ -259,7 +261,7 @@ function reorder(answer: OperationsAnswer) {
   // told otherwise and the core says the same, and the two agreeing is the normal case.
   const restored = { ...watching.value }
   for (const operation of next) {
-    if (!operation.running || !operation.progress) continue
+    if (!isLiveOperation(operation) || !operation.progress) continue
     const snapshot = lateProgress(operation)
     if (!snapshot) continue
 
@@ -271,12 +273,17 @@ function reorder(answer: OperationsAnswer) {
 
     const heard = new Set(mine.seen.map((line) => `${line.phase}\u0000${line.message}`))
     const missing = snapshot.seen.filter((line) => !heard.has(`${line.phase}\u0000${line.message}`))
+    const liveChangedDuringFetch =
+      (progressRevision[operation.job_id] ?? 0) > (revisionAtStart[operation.job_id] ?? 0)
     restored[operation.job_id] = {
       ...mine,
       kind: mine.kind ?? snapshot.kind,
-      progress: snapshot.progress,
-      seen: [...mine.seen, ...missing],
-      phases: [...new Set([...mine.phases, ...snapshot.phases])],
+      // If the socket spoke after this request began, its phase set is newer than the
+      // snapshot. Otherwise the snapshot is authoritative: unioning the two sets could
+      // resurrect an image-build phase that had already closed.
+      progress: liveChangedDuringFetch ? mine.progress : snapshot.progress,
+      seen: liveChangedDuringFetch ? [...missing, ...mine.seen] : [...mine.seen, ...missing],
+      phases: liveChangedDuringFetch ? mine.phases : snapshot.phases,
     }
   }
   watching.value = restored
@@ -284,13 +291,14 @@ function reorder(answer: OperationsAnswer) {
 
 async function load() {
   const request = ++listRequest
+  const revisionAtStart = { ...progressRevision }
   loading.value = true
   try {
     const answer = await api.get<OperationsAnswer>(
       `/projects/${props.projectId}/deploy-operations?${query.value}`)
     if (request !== listRequest) return
     reason.value = answer.reason ?? ''
-    reorder(answer)
+    reorder(answer, revisionAtStart)
     error.value = ''
     void loadOperationPlans()
     // The log of anything under way that this page did not watch. One request per operation,
@@ -368,6 +376,7 @@ function note(payload: Record<string, unknown>) {
   if (typeof payload.message !== 'string' || !payload.message) return
   const jobID = Number(payload.job_id ?? 0)
   if (!jobID) return
+  progressRevision[jobID] = (progressRevision[jobID] ?? 0) + 1
 
   // A line older than the moment this page subscribed is a line the fetch that drew this list did
   // not have. The log would then begin in the middle and look whole, which is the one thing a
