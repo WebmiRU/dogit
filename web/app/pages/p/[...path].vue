@@ -238,6 +238,7 @@ async function switchRef(next: string) {
 
 interface ProjectNavigationItem {
   label: string
+  icon: 'code' | 'history' | 'branch' | 'tag' | 'compare' | 'merge' | 'pipeline' | 'artifact' | 'package' | 'deploy' | 'bell' | 'settings'
   to: string
   match: string
 }
@@ -254,12 +255,12 @@ const navigationGroups = computed<ProjectNavigationGroup[]>(() => {
   const path = project.value.path
   const base = `/p/${path}`
   const repositoryItems: ProjectNavigationItem[] = repositoryIsEmpty.value ? [] : [
-    { label: 'Code', to: repoViewUrl(path, 'tree', activeRef.value), match: 'tree' },
-    { label: 'Commits', to: repoViewUrl(path, 'commits', activeRef.value), match: 'commits' },
-    { label: 'Branches', to: repoViewUrl(path, 'branches', activeRef.value), match: 'branches' },
-    { label: 'Tags', to: repoViewUrl(path, 'tags', activeRef.value), match: 'tags' },
-    { label: 'Compare', to: repoViewUrl(path, 'compare', activeRef.value), match: 'compare' },
-    { label: 'Merge requests', to: repoViewUrl(path, 'merge_requests', activeRef.value), match: 'merge_requests' },
+    { label: 'Code', icon: 'code', to: repoViewUrl(path, 'tree', activeRef.value), match: 'tree' },
+    { label: 'Commits', icon: 'history', to: repoViewUrl(path, 'commits', activeRef.value), match: 'commits' },
+    { label: 'Branches', icon: 'branch', to: repoViewUrl(path, 'branches', activeRef.value), match: 'branches' },
+    { label: 'Tags', icon: 'tag', to: repoViewUrl(path, 'tags', activeRef.value), match: 'tags' },
+    { label: 'Compare', icon: 'compare', to: repoViewUrl(path, 'compare', activeRef.value), match: 'compare' },
+    { label: 'Merge requests', icon: 'merge', to: repoViewUrl(path, 'merge_requests', activeRef.value), match: 'merge_requests' },
   ]
 
   const groups: ProjectNavigationGroup[] = []
@@ -272,24 +273,24 @@ const navigationGroups = computed<ProjectNavigationGroup[]>(() => {
       key: 'build',
       label: 'Build',
       items: [
-        { label: 'Pipelines', to: `${base}/-/pipelines`, match: 'pipelines' },
-        { label: 'Artifacts', to: `${base}/-/artifacts`, match: 'artifacts' },
-        { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
+        { label: 'Pipelines', icon: 'pipeline', to: `${base}/-/pipelines`, match: 'pipelines' },
+        { label: 'Artifacts', icon: 'artifact', to: `${base}/-/artifacts`, match: 'artifacts' },
+        { label: 'Images', icon: 'package', to: `${base}/-/packages`, match: 'packages' },
       ],
     },
     {
       key: 'operate',
       label: 'Operate',
       items: [
-        { label: 'Deploy', to: `${base}/-/deploy`, match: 'deploy' },
-        { label: 'Notifications', to: `${base}/-/notifications`, match: 'notifications' },
+        { label: 'Deploy', icon: 'deploy', to: `${base}/-/deploy`, match: 'deploy' },
+        { label: 'Notifications', icon: 'bell', to: `${base}/-/notifications`, match: 'notifications' },
       ],
     },
     {
       key: 'project',
       label: 'Project',
       items: [
-        { label: 'Settings', to: `${base}/-/settings`, match: 'settings' },
+        { label: 'Settings', icon: 'settings', to: `${base}/-/settings`, match: 'settings' },
       ],
     },
   )
@@ -399,7 +400,61 @@ async function copyCloneUrl() {
                   :class="{ 'is-active': isNavigationItemActive(item.match) }"
                   :aria-current="isNavigationItemActive(item.match) ? 'page' : undefined"
                 >
-                  {{ item.label }}
+                  <span class="project-nav-item-icon" aria-hidden="true">
+                    <svg viewBox="0 0 16 16">
+                      <template v-if="item.icon === 'code'">
+                        <path d="M4 2.5h5l3 3v8H4z" />
+                        <path d="M9 2.5v3h3M6 8l-1.5 1.5L6 11M10 8l1.5 1.5L10 11" />
+                      </template>
+                      <template v-else-if="item.icon === 'history'">
+                        <circle cx="8" cy="8" r="5.5" />
+                        <path d="M8 4.5v3.7l2.5 1.5M2.5 4.5v-2M2.5 4.5h2" />
+                      </template>
+                      <template v-else-if="item.icon === 'branch'">
+                        <circle cx="4" cy="3" r="1.5" />
+                        <circle cx="4" cy="13" r="1.5" />
+                        <circle cx="12" cy="5" r="1.5" />
+                        <path d="M4 4.5v7M4 8c0-2 1.8-3 4-3h2.5" />
+                      </template>
+                      <template v-else-if="item.icon === 'tag'">
+                        <path d="M2.5 3h5l6 6-4.5 4.5-6-6z" />
+                        <circle cx="5.5" cy="5.5" r=".8" />
+                      </template>
+                      <template v-else-if="item.icon === 'compare'">
+                        <path d="M2 4h10M9.5 1.5 12 4 9.5 6.5M14 12H4M6.5 9.5 4 12l2.5 2.5" />
+                      </template>
+                      <template v-else-if="item.icon === 'merge'">
+                        <circle cx="4" cy="3" r="1.5" />
+                        <circle cx="4" cy="13" r="1.5" />
+                        <circle cx="12" cy="8" r="1.5" />
+                        <path d="M4 4.5v7M4 5c0 2 1.8 3 4 3h2.5" />
+                      </template>
+                      <template v-else-if="item.icon === 'pipeline'">
+                        <rect x="1.8" y="2" width="4" height="4" rx=".7" />
+                        <rect x="10.2" y="10" width="4" height="4" rx=".7" />
+                        <path d="M5.8 4h2.5v8h1.9" />
+                      </template>
+                      <template v-else-if="item.icon === 'artifact'">
+                        <path d="M3 1.8h6l3 3v9.4H3z" />
+                        <path d="M9 1.8v3h3M8 7v4m-2-2 2 2 2-2" />
+                      </template>
+                      <template v-else-if="item.icon === 'package'">
+                        <path d="m8 1.8 5.5 2.8v6.8L8 14.2l-5.5-2.8V4.6zM2.5 4.6 8 7.5l5.5-2.9M8 7.5v6.7" />
+                      </template>
+                      <template v-else-if="item.icon === 'deploy'">
+                        <path d="M4 11.5H3a2.5 2.5 0 0 1 .3-5 4.8 4.8 0 0 1 9.2 1.2 2 2 0 0 1 .1 3.8H11" />
+                        <path d="M8 14V7.5M5.5 10l2.5-2.5 2.5 2.5" />
+                      </template>
+                      <template v-else-if="item.icon === 'bell'">
+                        <path d="M12 6.5a4 4 0 0 0-8 0c0 4.5-1.5 4.5-1.5 5.5h11C13.5 11 12 11 12 6.5ZM6.5 14h3" />
+                      </template>
+                      <template v-else>
+                        <path d="M6 1.8h4l.5 1.8 1.4.8 1.8-.5 1 1.8-1.2 1.4v1.6l1.2 1.4-1 1.8-1.8-.5-1.4.8-.5 1.8H6l-.5-1.8-1.4-.8-1.8.5-1-1.8 1.2-1.4V7.1L1.3 5.7l1-1.8 1.8.5 1.4-.8z" transform="translate(.5 .1) scale(.94)" />
+                        <circle cx="8" cy="8" r="2" />
+                      </template>
+                    </svg>
+                  </span>
+                  <span class="project-nav-item-label">{{ item.label }}</span>
                 </NuxtLink>
               </div>
             </section>
