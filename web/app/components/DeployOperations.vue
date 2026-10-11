@@ -998,10 +998,12 @@ watchEvents({
     if (!Array.isArray(steps) || !steps.length) return
     const rows = steps as { key: string; label: string }[]
     const jobID = Number(event.payload?.job_id ?? 0)
-    if (jobID > 0) {
+    if (jobID > 0 && event.payload?.job_specific === true) {
       plans.value = { ...plans.value, [String(jobID)]: rows }
       operationPlansLoaded.value = { ...operationPlansLoaded.value, [jobID]: true }
     } else {
+      // Older and aggregate plan events remain a fallback. Each card fetches its own
+      // SHA/target plan over HTTP so a multi-place pipeline cannot lend its plan to another.
       const kind = event.payload?.kind === 'revert' ? 'revert' : 'deploy'
       plans.value = { ...plans.value, [kind]: rows }
     }

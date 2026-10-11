@@ -1343,7 +1343,7 @@ func (s *Server) publishDeployPlan(ctx context.Context, project *models.Project,
 			continue
 		}
 		s.publishPipeline(ctx, project.ID, nil, models.EventDeployPlan, map[string]any{
-			"job_id": job.ID, "pipeline_iid": run.IID, "kind": "deploy",
+			"job_id": job.ID, "job_specific": true, "pipeline_iid": run.IID, "kind": "deploy",
 			"steps": deployStepsFor("", len(spec.Manifests), len(spec.Pre), len(spec.Post)),
 		})
 		return
