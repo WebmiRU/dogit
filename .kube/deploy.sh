@@ -43,6 +43,8 @@ export KUBECONFIG
 
 app_image="${DOGIT_APP_IMAGE:-yudole/dogit:dev-app}"
 web_image="${DOGIT_WEB_IMAGE:-yudole/dogit:dev-web}"
+# A separate repository, built from ./runner, and the third image this script owns.
+runner_image="${DOGIT_RUNNER_IMAGE:-yudole/runner:dev}"
 # What the manifests are actually written out with. It starts as the plain name so that
 # nothing can trip over an unset variable under `set -u`; resolve_images replaces it with
 # the digest-addressed form before anything is applied.
@@ -185,6 +187,17 @@ build() {
   docker build --provenance=false -t "$app_image" -t "$(commit_tag "$app_image")" "$root"
   say "building ${web_image}"
   docker build --provenance=false -t "$web_image" -t "$(commit_tag "$web_image")" "$root/web"
+  # The runner too, and it was left out for a long time.
+  #
+  # It is a separate image in a separate repository, so nothing about "the code was deployed"
+  # ever reached it: a change to the runner was merged, tested against a runner rebuilt by
+  # hand, and put on a stand whose runner had been built before the change existed. Nothing
+  # said so. Every symptom was an absence — a job log that did not end with the line it should
+  # have, a digest the core asked for and never received — and an absence reads as a bug in
+  # whatever wrote the last line that did appear.
+  say "building ${runner_image}"
+  docker build --provenance=false --build-arg "VERSION=$(stand_commit)" \
+    -t "$runner_image" -t "$(commit_tag "$runner_image")" "$root/runner"
 }
 
 # The image as the cluster should hold it: the name, with the digest it currently resolves
@@ -300,7 +313,9 @@ report_running() {
 # heard of this tag, whether the node is up at all — stops being this script's problem.
 push() {
   local image sent served
-  for image in "$app_image" "$web_image"; do
+  # The runner is in this list because leaving it out is what let a stand run a
+  # binary older than the core asking it to work, with nothing to say so.
+  for image in "$app_image" "$web_image" "$runner_image"; do
     say "pushing ${image} and $(commit_tag "$image")"
     # What the push says it left on the registry, read out of its own output.
     sent="$(docker push "$image" 2>&1 | sed -n 's/^.*digest: \(sha256:[0-9a-f]*\).*$/\1/p' | head -1)"

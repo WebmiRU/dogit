@@ -24,7 +24,9 @@ COPY internal ./internal
 # CGO off so the binary is static and the runtime image needs no libc at all. -trimpath so a
 # build from the same source produces the same binary, which is the property that makes
 # "unchanged code, unchanged digest" true of this image as well as of the stand's.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/runner ./cmd/runner
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" \
+        -o /out/runner ./cmd/runner
 
 FROM alpine:3.21
 

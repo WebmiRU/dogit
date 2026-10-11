@@ -77,6 +77,12 @@ type config struct {
 	claim        bool
 }
 
+// Version is overridden at build time with -ldflags "-X ...main.Version=...".
+//
+// Set because the runner is a separate image from the core, rebuilt on a different schedule,
+// and every sign that the two disagree is a missing line rather than a wrong one.
+var Version = "dev"
+
 func main() {
 	cfg := config{}
 
@@ -411,6 +417,16 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 	started := time.Now()
 	claimed := answer.Job
 	log.Printf("runner: job %d (%s, %s) on %s", claimed.ID, claimed.Name, claimed.Stage, claimed.ProjectPath)
+
+	// Which runner did this, in the log somebody reads when it went wrong.
+	//
+	// A runner is a separate image from the core and is rebuilt on a different schedule, so a
+	// job can be carried out by a binary older than the core that asked for it — and every
+	// symptom of that is an absence: a line the job log should end with and does not, a field
+	// the core expected and finds empty. None of them says "wrong build", and all of them
+	// look like a bug in somebody else's code. One line naming the build turns all of them
+	// into a thing that can be read.
+	_ = client.JobLog(ctx, claimed.ID, "stdout", "runner "+Version+" on "+cfg.buildkitHost+"\n")
 
 	breakOnError := claimed.BreakOnError
 	job := &jobs.Job{
