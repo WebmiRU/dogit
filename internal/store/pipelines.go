@@ -37,6 +37,12 @@ const (
 	PipelineCanceled    = "canceled"
 )
 
+// Queue priorities are scheduling hints, not lifecycle statuses.
+const (
+	QueuePriorityLow    = 10
+	QueuePriorityNormal = 100
+)
+
 // Job statuses.
 const (
 	JobPending  = "pending"
@@ -132,10 +138,12 @@ type Job struct {
 	ID           int64      `json:"id"`
 	PipelineID   int64      `json:"pipeline_id"`
 	IID          int        `json:"iid"`
-	Name         string     `json:"name"`
-	Stage        string     `json:"stage"`
-	Status       string     `json:"status"`
-	RunnerID     *uuid.UUID `json:"runner_id,omitempty"`
+	Name          string     `json:"name"`
+	Stage         string     `json:"stage"`
+	StageOrder    int        `json:"stage_order"`
+	Status        string     `json:"status"`
+	QueuePriority int        `json:"queue_priority"`
+	RunnerID      *uuid.UUID `json:"runner_id,omitempty"`
 	Image        string     `json:"image"`
 	Script       []string   `json:"script"`
 	AllowFailure bool       `json:"allow_failure"`
@@ -267,6 +275,9 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 		if job.Stage == "" {
 			job.Stage = "test"
 		}
+		if job.QueuePriority <= 0 {
+			job.QueuePriority = QueuePriorityNormal
+		}
 
 		build, err := jsonbOf(job.Build)
 		if err != nil {
@@ -282,11 +293,12 @@ func (r *PipelineRepo) CreatePipelineWithCandidates(ctx context.Context, project
 		// round trip for a value the database already had.
 		err = tx.QueryRow(ctx, `
 			INSERT INTO jobs (pipeline_id, iid, name, stage, status, image, script,
-			                  allow_failure, needs, build, deploy)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			                  allow_failure, needs, build, deploy, stage_order, queue_priority)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 			RETURNING id`,
 			job.PipelineID, job.IID, job.Name, job.Stage, job.Status, job.Image,
-			job.Script, job.AllowFailure, job.Needs, build, deploy).Scan(&job.ID)
+			job.Script, job.AllowFailure, job.Needs, build, deploy, job.StageOrder,
+			job.QueuePriority).Scan(&job.ID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create job: %w", err)
 		}
@@ -611,7 +623,8 @@ func (r *PipelineRepo) JobsOfPipeline(ctx context.Context, pipelineID int64) ([]
 const jobColumns = `
 	SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.runner_id, j.image,
 	       j.script, j.allow_failure, j.needs, j.build, j.deploy, j.started_at, j.finished_at,
-	       j.duration_ms, j.created_at, j.error, p.project_id, pr.path, p.variables`
+	       j.duration_ms, j.created_at, j.error, p.project_id, pr.path, p.variables,
+	       j.stage_order, j.queue_priority`
 
 // scanJob reads the row the cursor is standing on. It does not step the cursor: the
 // caller is walking a list, and a scan that advanced it would swallow every other row.
@@ -630,7 +643,7 @@ func scanJobRow(row interface{ Scan(...any) error }) (*Job, error) {
 	if err := row.Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
 		&job.RunnerID, &job.Image, &job.Script, &job.AllowFailure, &job.Needs, &build, &deploy,
 		&job.StartedAt, &job.FinishedAt, &job.DurationMS, &job.CreatedAt, &job.Error,
-		&job.ProjectID, &job.ProjectPath, &variables); err != nil {
+		&job.ProjectID, &job.ProjectPath, &variables, &job.StageOrder, &job.QueuePriority); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
 
@@ -681,7 +694,16 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 		WHERE id = (
 			SELECT j.id FROM jobs j
 			WHERE j.status = $3 AND j.deploy IS NULL
-			ORDER BY j.pipeline_id, j.iid
+			  AND NOT EXISTS (
+			      SELECT 1 FROM jobs prior
+			      WHERE prior.pipeline_id = j.pipeline_id
+			        AND prior.stage_order < j.stage_order
+			        AND (
+			          prior.status IN ($4, $5, $6, $7)
+			          OR (prior.status = $8 AND NOT prior.allow_failure)
+			        )
+			  )
+			ORDER BY j.queue_priority DESC, j.created_at, j.id
 			FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
 		)
@@ -689,7 +711,8 @@ func (r *PipelineRepo) ClaimJob(ctx context.Context, runnerID uuid.UUID, tags []
 		-- selected the same pending row before one acquired its lock, the loser must
 		-- not update the winner's now-running row after it wakes.
 		AND status = $3
-		RETURNING id`, JobRunning, runnerID, JobPending).Scan(&id)
+		RETURNING id`, JobRunning, runnerID, JobPending,
+		JobPending, JobRunning, JobCanceled, JobInterrupted, JobFailed).Scan(&id)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}
@@ -815,13 +838,15 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 	// working on it, and cancelling it here would only make two things believe
 	// otherwise — the machine, and whoever reads the log afterwards.
 	if status == JobFailed {
+		// A failure stops later stages, not sibling jobs in the same stage. An explicitly
+		// allowed failure does not block anything downstream.
 		if _, err := r.s.pool.Exec(ctx, `
 			UPDATE jobs SET status = $2, finished_at = now()
-			WHERE pipeline_id = (SELECT pipeline_id FROM jobs WHERE id = $1)
-			  AND id > $1
+			WHERE pipeline_id = (SELECT pipeline_id FROM jobs WHERE id = $1 AND NOT allow_failure)
+			  AND stage_order > (SELECT stage_order FROM jobs WHERE id = $1)
 			  AND status = $3`,
 			id, JobSkipped, JobPending); err != nil {
-			return fmt.Errorf("skip the jobs after a failed one: %w", err)
+			return fmt.Errorf("skip the stages after a failed one: %w", err)
 		}
 	}
 
@@ -860,6 +885,45 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 		return fmt.Errorf("finish pipeline: %w", err)
 	}
 	return nil
+}
+
+
+// DeprioritizeObsoleteBuilds moves pending artifact-producing jobs to the low-priority queue
+// when all deployments in their pipeline have been superseded. A running build is never touched.
+func (r *PipelineRepo) DeprioritizeObsoleteBuilds(ctx context.Context, pipelineID int64) ([]int64, error) {
+	rows, err := r.s.pool.Query(ctx, `
+		UPDATE jobs
+		SET queue_priority = $2
+		WHERE pipeline_id = $1 AND build IS NOT NULL AND status = $3
+		  AND queue_priority > $2
+		  AND EXISTS (
+		      SELECT 1 FROM jobs d
+		      WHERE d.pipeline_id = jobs.pipeline_id
+		        AND d.deploy IS NOT NULL AND d.status = $4
+		  )
+		  AND NOT EXISTS (
+		      SELECT 1 FROM jobs d
+		      WHERE d.pipeline_id = jobs.pipeline_id
+		        AND d.deploy IS NOT NULL AND d.status IN ($3, $5)
+		  )
+		RETURNING id`, pipelineID, QueuePriorityLow, JobPending, JobSuperseded, JobRunning)
+	if err != nil {
+		return nil, fmt.Errorf("deprioritize obsolete build jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("read deprioritized build job: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read deprioritized build jobs: %w", err)
+	}
+	return ids, nil
 }
 
 // JobStaleAfter is how long a running job may go without finishing before the core
@@ -976,11 +1040,12 @@ func (r *PipelineRepo) JobByIID(ctx context.Context, pipelineID int64, iid int) 
 
 	err := r.s.pool.QueryRow(ctx, `
 		SELECT j.id, j.pipeline_id, j.iid, j.name, j.stage, j.status, j.image, j.script,
-		       j.allow_failure, j.started_at, j.finished_at, j.duration_ms, j.created_at, j.error
+		       j.allow_failure, j.started_at, j.finished_at, j.duration_ms, j.created_at, j.error,
+		       j.stage_order, j.queue_priority
 		FROM jobs j WHERE j.pipeline_id = $1 AND j.iid = $2`, pipelineID, iid,
 	).Scan(&job.ID, &job.PipelineID, &job.IID, &job.Name, &job.Stage, &job.Status,
 		&job.Image, &job.Script, &job.AllowFailure, &job.StartedAt, &job.FinishedAt,
-		&job.DurationMS, &job.CreatedAt, &job.Error)
+		&job.DurationMS, &job.CreatedAt, &job.Error, &job.StageOrder, &job.QueuePriority)
 	if errors.Is(err, pgxNoRows) {
 		return nil, ErrNotFound
 	}
