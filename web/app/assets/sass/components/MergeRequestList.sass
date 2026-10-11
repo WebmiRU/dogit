@@ -1329,3 +1329,51 @@
   .pmr-page-size select
     height: 30px
     font-size: 12px
+
+// --- an empty list, said at the top of the panel rather than in the middle of it ----
+//
+// These are written last on purpose. This file carries two generations of the same
+// rules — 78 of its selectors are declared more than once, and the later copy wins —
+// so a corrected rule placed beside the first copy would simply be overridden by the
+// second. That duplication is its own problem and is not fixed here; until it is, a rule
+// that has to win goes at the end.
+//
+// What changed: the state sat centred inside a wrap with no height of its own, so on a
+// project with one merged request and none open the screen was one grey sentence
+// floating in the dark — which is what the page appeared to be saying about the project.
+
+.pmr-list-state
+  padding: 26px 18px 30px
+  text-align: left
+
+.pmr-empty-lead
+  display: block
+  margin-bottom: 12px
+  color: var(--text)
+  font-size: 14px
+
+.pmr-create-link
+  display: inline-flex
+  min-height: 30px
+  align-items: center
+  padding: 0 12px
+  border: 1px solid var(--button-primary-border)
+  border-radius: 6px
+  background: var(--button-primary-bg)
+  color: var(--button-primary-text)
+  font-size: 12.5px
+  font-weight: 550
+  text-decoration: none
+
+.pmr-create-link:hover
+  background: var(--button-primary-hover)
+  text-decoration: none
+
+// The page is a panel: the list and the toolbar sit on one surface with one border, the
+// way the file listing on the code page does, instead of four ruled strips that each end
+// before the next begins.
+.pmr-list-result-wrap
+  border-bottom: 0
+
+.pmr-list-footer
+  border-top: 1px solid var(--border)

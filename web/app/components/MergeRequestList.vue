@@ -17,6 +17,8 @@ const states = [
   { value: 'all', label: 'All' },
 ] as const
 const state = ref<(typeof states)[number]['value']>('opened')
+/** Whether this reader picked the tab themselves, which stops it being moved for them. */
+const stateChosenByReader = ref(false)
 const requests = ref<MergeRequest[]>([])
 const counts = ref<Record<string, number>>({ opened: 0, merged: 0, closed: 0, all: 0 })
 const total = ref(0)
@@ -43,6 +45,21 @@ const historyOptions = [
 ]
 const visibleRequests = computed(() => requests.value)
 
+/**
+ * What an empty list says, which depends on why it is empty.
+ *
+ * "No merge requests match these filters" is true and useless: it is what the page said
+ * about a project that has one merged request and none open. What a reader wants to know
+ * is whether the project has none at all or whether the filters excluded them, and those
+ * two are different sentences.
+ */
+const emptyHeadline = computed(() => {
+  if (query.value.trim() !== '' || since.value !== 'all') return 'No merge requests match these filters.'
+  if ((counts.value.all ?? 0) === 0) return 'This project has no merge requests yet.'
+  if (state.value === 'opened') return 'None of them are open. Everything has been merged or closed.'
+  return `No ${states.find((one) => one.value === state.value)?.label.toLowerCase()} merge requests.`
+})
+
 async function load() {
   loading.value = true
   loadError.value = ''
@@ -60,15 +77,53 @@ async function load() {
       limit: pageSize.value,
       offset: offset.value,
     })
+    counts.value = response.counts ?? counts.value
+    // The counts arrive with the first answer, which is the first moment it is knowable
+    // whether this tab is worth opening on. A project whose merge requests have all been
+    // merged has nothing on "Open", and the page said so by showing an empty list under a
+    // tab that had a number beside it — a reader is left looking at a project that appears
+    // to have nothing, with the one thing it has hidden under a different tab.
+    if (movedToWorthwhileTab()) {
+      requests.value = []
+      total.value = 0
+      loading.value = false
+      void load()
+      return
+    }
     requests.value = response.merge_requests ?? []
     total.value = response.total ?? requests.value.length
-    counts.value = response.counts ?? counts.value
     selectedIds.value = selectedIds.value.filter(id => requests.value.some(mr => mr.id === id))
   } catch (caught) {
     loadError.value = caught instanceof ApiError ? caught.message : 'The merge request list could not be loaded.'
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * Whether the tab this page opened on has nothing on it while another one has something.
+ *
+ * Only ever moves the page once, and only before a reader has picked a tab of their own:
+ * someone who chose "Open" and found it empty asked for exactly that, and moving them off
+ * it would be undoing their choice rather than serving it. "All" is not a landing place —
+ * it is the tab you go to deliberately, and landing on it says nothing the tabs do not.
+ */
+function movedToWorthwhileTab(): boolean {
+  if (stateChosenByReader.value) return false
+  if ((counts.value[state.value] ?? 0) > 0) return false
+  const other = states.find(
+    (one) => one.value !== state.value && one.value !== 'all' && (counts.value[one.value] ?? 0) > 0,
+  )
+  if (!other) return false
+  state.value = other.value
+  offset.value = 0
+  return true
+}
+
+function chooseState(value: (typeof states)[number]['value']) {
+  stateChosenByReader.value = true
+  state.value = value
+  offset.value = 0
 }
 function refresh() {
   menuMessage.value = ''
@@ -124,7 +179,7 @@ onBeforeUnmount(() => {
     <div class="pmr-list-topline">
       <nav class="pmr-list-tabs" aria-label="Filter merge requests">
         <button v-for="option in states" :key="option.value" type="button"
-          :class="{ active: state === option.value }" @click="state = option.value">
+          :class="{ active: state === option.value }" @click="chooseState(option.value)">
           {{ option.label }} <span class="pmr-count">{{ counts[option.value] ?? 0 }}</span>
         </button>
       </nav>
@@ -189,8 +244,17 @@ onBeforeUnmount(() => {
     <div class="pmr-list-result-wrap">
       <div v-if="loading" class="pmr-list-state">Loading merge requests…</div>
       <div v-else-if="loadError" class="pmr-list-state error">{{ loadError }}</div>
+      <!-- Says what is missing rather than only that something is. An empty list under a
+           tab with a number beside it is a reader's first impression of the whole project,
+           and "none of these, but here is what is" is the sentence that keeps the page from
+           reading as a project with nothing in it. -->
       <div v-else-if="visibleRequests.length === 0" class="pmr-list-state">
-        No merge requests match these filters.
+        <span class="pmr-empty-lead">
+          {{ emptyHeadline }}
+        </span>
+        <NuxtLink class="pmr-create-link" :to="'/p/' + projectPath + '/-/merge_requests/new'">
+          New merge request
+        </NuxtLink>
       </div>
       <ul v-else class="pmr-result-list">
         <li v-for="mr in visibleRequests" :key="mr.id" class="pmr-result-row">
