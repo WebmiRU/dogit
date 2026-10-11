@@ -187,6 +187,81 @@ deploy:
 		t.Errorf("stages = %v, want %v", config.Stages, want)
 	}
 }
+
+func TestStageFirstConfigDefaultsFailureFlagsToTrue(t *testing.T) {
+	config, err := Parse([]byte(`
+variables:
+  GREETING: hello
+stages:
+  - name: prepare
+    commands:
+      - shell:
+          command: echo "$GREETING"
+  - name: build
+    build:
+      image: registry.example/app
+      tag: "$CI_COMMIT_SHORT_SHA"
+  - name: deploy
+    deploy:
+      module: deploy:kubernetes
+      target: production
+      manifests: [k8s/deployment.yaml]
+`))
+	if err != nil { t.Fatalf("parse stage-first config: %v", err) }
+	if len(config.StageSpecs) != 3 || config.StageSpecs[0].Name != "prepare" { t.Fatalf("stages = %+v", config.StageSpecs) }
+	if !config.StageSpecs[0].BreaksOnFail() || !config.StageSpecs[0].Commands[0].Shell.ChecksExitStatus() { t.Fatal("failure flags must default to true") }
+	if len(config.Deploys) != 1 || config.Deploys[0].Target != "production" { t.Fatalf("deployment config = %+v", config.Deploys) }
+}
+
+func TestStageFirstConfigAllowsFailurePoliciesPerStageAndCommand(t *testing.T) {
+	config, err := Parse([]byte(`
+stages:
+  - name: build
+    break_on_fail: false
+    build: {image: registry.example/app}
+  - name: custom
+    break_on_fail: false
+    commands:
+      - shell:
+          command: echo first
+          check_exit_status: false
+      - shell:
+          command: echo second
+          check_exit_status: true
+`))
+	if err != nil { t.Fatalf("parse stage-first config: %v", err) }
+	if config.StageSpecs[0].BreaksOnFail() { t.Fatal("explicit break_on_fail=false was not preserved") }
+	commands := config.StageSpecs[1].Commands
+	if commands[0].Shell.ChecksExitStatus() { t.Fatal("explicit check_exit_status=false was not preserved") }
+	if !commands[1].Shell.ChecksExitStatus() { t.Fatal("check_exit_status=true was not preserved") }
+}
+
+func TestStageFirstConfigRejectsDeployBeforeBuild(t *testing.T) {
+	_, err := Parse([]byte(`
+stages:
+  - name: deploy
+    deploy:
+      module: deploy:kubernetes
+      target: production
+      manifests: [k8s/deployment.yaml]
+  - name: build
+    build: {image: registry.example/app}
+`))
+	if err == nil || !strings.Contains(err.Error(), "deploy cannot appear before stage build") { t.Fatalf("error = %v", err) }
+}
+
+func TestStageFirstConfigRejectsUnknownCommandFields(t *testing.T) {
+	_, err := Parse([]byte(`
+stages:
+  - name: inspect
+    commands:
+      - shell:
+          command: echo ok
+          chek_exit_status: false
+`))
+	if err == nil || !strings.Contains(err.Error(), "chek_exit_status") { t.Fatalf("error = %v", err) }
+}
+
 // A job without a stage or an image still has to run somewhere.
 func TestAJobWithNothingSaidAboutItStillRuns(t *testing.T) {
 	config, err := Parse([]byte("noop:\n  script:\n    - true\n"))

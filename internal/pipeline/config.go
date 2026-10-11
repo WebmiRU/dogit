@@ -45,11 +45,11 @@ type Config struct {
 	// `deploys:` — the singular form is the same thing with one entry, and it keeps
 	// working rather than becoming a second spelling of the same idea.
 	Deploys []DeploySpec `yaml:"-"`
-	// Jobs are the named tasks, in the order they were written.
-	Jobs map[string]JobSpec `yaml:"-"`
-	// Order preserves the order the jobs were written in, which is the order a
-	// person wrote them in and the order they are displayed in.
-	Order []string `yaml:"-"`
+	// Jobs and Order belong to the older job-list parser. New configurations define
+	// each stage explicitly and keep commands and failure policy together.
+	Jobs  map[string]JobSpec `yaml:"-"`
+	Order []string           `yaml:"-"`
+	StageSpecs []StageSpec   `yaml:"-"`
 }
 
 // JobSpec is one job's definition.
@@ -76,6 +76,197 @@ type JobSpec struct {
 	// It is kept, not acted on, and what was kept is visible in the job's view so
 	// nobody can believe an unknown section did something.
 	Raw map[string]any `yaml:",inline"`
+}
+
+
+type StageSpec struct {
+	Name        string         `yaml:"name"`
+	BreakOnFail *bool          `yaml:"break_on_fail"`
+	Commands    []StageCommand `yaml:"commands"`
+	Build       map[string]any `yaml:"build"`
+	Deploy      *DeploySpec    `yaml:"-"`
+}
+
+type StageCommand struct {
+	Shell *ShellCommand `yaml:"-"`
+}
+
+type ShellCommand struct {
+	Command         string `yaml:"command"`
+	CheckExitStatus *bool  `yaml:"check_exit_status"`
+}
+
+func (c ShellCommand) ChecksExitStatus() bool {
+	return c.CheckExitStatus == nil || *c.CheckExitStatus
+}
+
+func (s StageSpec) BreaksOnFail() bool {
+	return s.BreakOnFail == nil || *s.BreakOnFail
+}
+
+func (s *StageSpec) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("a stage must be a block with name, break_on_fail and commands")
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		switch key := node.Content[i].Value; key {
+		case "name", "break_on_fail", "commands", "build", "deploy":
+		default:
+			return fmt.Errorf("stage has no field called %q; it knows name, break_on_fail, commands, build and deploy", key)
+		}
+	}
+	var decoded struct {
+		Name        string         `yaml:"name"`
+		BreakOnFail *bool          `yaml:"break_on_fail"`
+		Commands    []StageCommand `yaml:"commands"`
+		Build       map[string]any `yaml:"build"`
+	}
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*s = StageSpec{Name: decoded.Name, BreakOnFail: decoded.BreakOnFail, Commands: decoded.Commands, Build: decoded.Build}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value != "deploy" {
+			continue
+		}
+		deploy, err := parseDeploy(node.Content[i+1])
+		if err != nil {
+			return fmt.Errorf("deploy: %w", err)
+		}
+		s.Deploy = &deploy
+	}
+	return nil
+}
+
+func (c *StageCommand) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode || len(node.Content) != 2 || node.Content[0].Value != "shell" {
+		return fmt.Errorf("a command must have exactly one kind: shell")
+	}
+	var shell ShellCommand
+	if err := node.Content[1].Decode(&shell); err != nil {
+		return fmt.Errorf("shell: %w", err)
+	}
+	c.Shell = &shell
+	return nil
+}
+
+func (s *ShellCommand) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("shell must be a block with command and optional check_exit_status")
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		switch key := node.Content[i].Value; key {
+		case "command", "check_exit_status":
+		default:
+			return fmt.Errorf("shell has no field called %q; it knows command and check_exit_status", key)
+		}
+	}
+	type plain ShellCommand
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	if strings.TrimSpace(decoded.Command) == "" {
+		return fmt.Errorf("shell.command cannot be empty")
+	}
+	*s = ShellCommand(decoded)
+	return nil
+}
+
+func hasStageDefinitions(raw []*yaml.Node) bool {
+	for i := 0; i+1 < len(raw); i += 2 {
+		if raw[i].Value == "stages" && raw[i+1].Kind == yaml.SequenceNode &&
+			len(raw[i+1].Content) > 0 && raw[i+1].Content[0].Kind == yaml.MappingNode {
+			return true
+		}
+	}
+	return false
+}
+
+func parseStageDefinitions(raw []*yaml.Node) (*Config, error) {
+	config := &Config{Variables: map[string]any{}, Jobs: map[string]JobSpec{}}
+	var stagesNode *yaml.Node
+	for i := 0; i+1 < len(raw); i += 2 {
+		key, value := raw[i].Value, raw[i+1]
+		switch key {
+		case "stages":
+			stagesNode = value
+		case "variables":
+			if err := value.Decode(&config.Variables); err != nil {
+				return nil, fmt.Errorf("variables: %w", err)
+			}
+		case "notify":
+			notify, err := parseNotify(value)
+			if err != nil {
+				return nil, fmt.Errorf("notify: %w", err)
+			}
+			config.Notify = notify
+		default:
+			return nil, fmt.Errorf("top-level key %q is not supported in stage-first configuration; use stages, variables or notify", key)
+		}
+	}
+	if stagesNode == nil || stagesNode.Kind != yaml.SequenceNode || len(stagesNode.Content) == 0 {
+		return nil, fmt.Errorf("stages must be a non-empty list of stage objects")
+	}
+	seen := map[string]bool{}
+	buildAt, deployAt := -1, -1
+	for index, node := range stagesNode.Content {
+		var spec StageSpec
+		if err := node.Decode(&spec); err != nil {
+			return nil, fmt.Errorf("stages[%d]: %w", index, err)
+		}
+		name := strings.TrimSpace(spec.Name)
+		if name == "" {
+			return nil, fmt.Errorf("stages[%d].name cannot be empty", index)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("stage %q is listed more than once", name)
+		}
+		seen[name] = true
+		spec.Name = name
+		switch name {
+		case "build":
+			buildAt = index
+			if len(spec.Build) == 0 {
+				return nil, fmt.Errorf("stage build must define build: so it actually produces an artifact")
+			}
+			if spec.Deploy != nil {
+				return nil, fmt.Errorf("stage build cannot also define deploy:")
+			}
+		case "deploy":
+			deployAt = index
+			if spec.Deploy == nil || !spec.Deploy.Present {
+				return nil, fmt.Errorf("stage deploy must define deploy: with module, target and manifests")
+			}
+			if len(spec.Commands) > 0 {
+				return nil, fmt.Errorf("stage deploy is the deployment operation and cannot also define shell commands")
+			}
+			config.Deploy = *spec.Deploy
+			config.Deploys = append(config.Deploys, *spec.Deploy)
+		default:
+			if len(spec.Build) > 0 {
+				return nil, fmt.Errorf("only stage build may define build:")
+			}
+			if spec.Deploy != nil {
+				return nil, fmt.Errorf("only stage deploy may define deploy:")
+			}
+			if len(spec.Commands) == 0 {
+				return nil, fmt.Errorf("stage %q must contain at least one command", name)
+			}
+		}
+		for commandIndex, command := range spec.Commands {
+			if command.Shell == nil {
+				return nil, fmt.Errorf("stage %q command %d has no shell command", name, commandIndex+1)
+			}
+		}
+		config.StageSpecs = append(config.StageSpecs, spec)
+		config.Stages = append(config.Stages, name)
+		config.Order = append(config.Order, name)
+	}
+	if buildAt >= 0 && deployAt >= 0 && deployAt < buildAt {
+		return nil, fmt.Errorf("stage deploy cannot appear before stage build")
+	}
+	return config, nil
 }
 
 type Rule struct {
@@ -108,30 +299,25 @@ func (c *RuleChange) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// Parse reads a configuration.
-//
-// The format is dogit's own and deliberately small. What it does not understand is
-// reported rather than ignored: a file somebody wrote to do something, silently
-// doing something else or nothing, is the failure mode that costs an afternoon.
+// Parse reads stage-first configuration. Each stage owns its commands and failure
+// policy, while build/deploy are reserved names with fixed semantics.
 func Parse(data []byte) (*Config, error) {
-	config := &Config{
-		Variables: map[string]any{},
-		Jobs:      map[string]JobSpec{},
-	}
-
-	// Read twice: once as the keys this format defines, and once as the document,
-	// because the document knows what order things were written in.
-	if err := yaml.Unmarshal(data, config); err != nil {
-		return nil, fmt.Errorf("parse pipeline configuration: %w", err)
-	}
-
-	// Parsed as a document as well as a struct, because the struct knows what each
-	// key means and the document knows what order they were written in.
 	var document yaml.Node
 	if err := yaml.Unmarshal(data, &document); err != nil {
 		return nil, fmt.Errorf("parse pipeline configuration: %w", err)
 	}
 	raw := topLevelKeys(&document)
+	if hasStageDefinitions(raw) {
+		return parseStageDefinitions(raw)
+	}
+
+	config := &Config{
+		Variables: map[string]any{},
+		Jobs:      map[string]JobSpec{},
+	}
+	if err := yaml.Unmarshal(data, config); err != nil {
+		return nil, fmt.Errorf("parse pipeline configuration: %w", err)
+	}
 
 	// Only the keys this build understands at the top level are reserved. Reserving
 	// more would swallow jobs that happen to be called "image" or "cache", and a job
