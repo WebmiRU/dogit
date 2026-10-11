@@ -450,14 +450,21 @@ async function rerun() {
   starting.value = true
   error.value = ''
   try {
+    // Run this pipeline's ref again, not the project's default branch. A tag can have
+    // its own stages and deploy rules, so substituting main silently changes the run.
+    const ref = pipeline.value?.ref?.trim()
+    if (!ref) throw new Error('The original pipeline ref is unavailable; cannot rerun safely')
+
     const answer = await api.post<{ pipeline: ModulePipeline }>(
       `/projects/${apiRef.value}/pipelines`,
-      { ref: props.defaultBranch || 'main' },
+      { ref },
     )
-    notify(`Pipeline #${answer.pipeline.iid} started`, { type: 'success' })
+    notify(`Pipeline #${answer.pipeline.iid} started for ${ref}`, { type: 'success' })
     await navigateTo(`/p/${props.projectPath}/-/pipelines/${answer.pipeline.iid}`)
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : 'the request failed'
+    error.value = caught instanceof ApiError
+      ? caught.message
+      : caught instanceof Error ? caught.message : 'the request failed'
   } finally {
     starting.value = false
   }
