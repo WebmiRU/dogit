@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onRewake } from '~/lib/eventSocket'
 import { bareDigest, shortImage as formatShortImage } from '~/utils/format'
+import { imageSet } from '~/utils/place-images'
 /**
  * What is deploying now, and what has been deployed.
  *
@@ -615,10 +616,21 @@ const retiredTotal = computed(() => liveSplit.value?.desired || (props.nowRunnin
  * exactly the difference, since the newest operation is the rollback and the image it
  * brought back is an older row.
  */
+/**
+ * The images this place is on, as a set.
+ *
+ * A workload with several containers is on all of them at once, and its name is several
+ * images in one field — so "is this row's image the one running here" is a question about
+ * membership, not about equality. Compared as strings it could never be yes, and a place
+ * with two containers drew "Not running" on every row it had, including the one it was
+ * running. The most a row can be is one of them, and that is what this answers.
+ */
+const runningImages = computed(() => new Set(imageSet(runningImage.value)))
+
 function isRunningImage(image: string | undefined): boolean {
   if (!image) return false
-  if (liveSplit.value) return image === liveSplit.value.image
-  return image === runningImage.value
+  if (liveSplit.value) return imageSet(liveSplit.value.image).includes(image)
+  return runningImages.value.has(image)
 }
 
 /** How many pods are on this image right now, of how many this place runs. */
@@ -633,9 +645,22 @@ function runningPods(): { on: number; of: number } {
   return { on: props.nowRunning?.pods ?? 0, of: props.nowRunning?.desired ?? 0 }
 }
 
-/** The image this place is being taken off while a rollout takes one off. */
+/**
+ * The image this place is being taken off while a rollout takes one off.
+ *
+ * Several, when the workload being left had several containers: a row is on its way out
+ * if it is one of the images the place is leaving, and a single one of them is not the
+ * whole of it.
+ */
 function retiringImage(): string {
   return liveSplit.value?.previous || (props.replacing ?? '')
+}
+
+function isRetiringImage(image: string | undefined): boolean {
+  if (!image) return false
+  const leaving = retiringImage()
+  if (!leaving) return false
+  return imageSet(leaving).includes(image)
 }
 
 /**
@@ -1730,7 +1755,7 @@ watch(() => props.module.id, load)
                          step under it is filling towards — and a badge that only says
                          "retiring" cannot be watched, only noticed. -->
                     <span
-                      v-else-if="image.live && retiringImage() && image.name === retiringImage()"
+                      v-else-if="image.live && isRetiringImage(image.name)"
                       class="badge badge-blue"
                       :title="`${liveSplit?.retiring ?? props.replacingPods ?? 0} pod(s) are still on this image while the place is moved to another`"
                     >

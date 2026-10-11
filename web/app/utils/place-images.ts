@@ -36,15 +36,43 @@ export interface CurrentAnswer {
 }
 
 /**
- * The images this workload is set to, one per container.
+ * Every image named in one field, whatever it holds.
  *
- * A workload with several containers is set to several images, and they arrive in one
+ * A workload with several containers is set to several images and they arrive in one
  * field separated by commas. Taken as one string, that value is not any image, so it can
  * never be found among the images the pods are on — which is what a search for it does.
  */
+export function imageSet(image: string | undefined | null): string[] {
+  if (!image) return []
+  return image.split(',').map((one) => one.trim()).filter(Boolean)
+}
+
+/**
+ * The images this workload is set to, one per container.
+ */
 export function workloadImages(answer: CurrentAnswer | undefined | null): string[] {
-  if (!answer?.image) return []
-  return answer.image.split(',').map((one) => one.trim()).filter(Boolean)
+  return imageSet(answer?.image)
+}
+
+/**
+ * How many pods are running the whole of what this workload is set to.
+ *
+ * The fewest of the per-image counts, not the sum and not the most. The module counts a
+ * pod once for each of its containers, so a settled one-pod workload with two of them
+ * answers 1 and 1 — and adding those gives 2 pods out of a place that runs 1, a figure
+ * that is wrong by exactly the number of containers. Taking the most would instead
+ * overstate a rollout: a pod whose new nginx is up but whose content container is still
+ * on the old image is one pod part-way through, and the place is not yet on the new
+ * workload at all. The fewest is the number of pods on which every image has arrived,
+ * which is the thing the card is claiming.
+ */
+export function wantedPods(answer: CurrentAnswer | undefined | null): number {
+  const wanted = workloadImages(answer)
+  if (wanted.length === 0) return 0
+  const counted = new Map(podsOn(answer).map((one) => [one.image, one.pods]))
+  let fewest = Number.POSITIVE_INFINITY
+  for (const image of wanted) fewest = Math.min(fewest, counted.get(image) ?? 0)
+  return Number.isFinite(fewest) ? fewest : 0
 }
 
 /**
@@ -69,7 +97,7 @@ export function onWanted(answer: CurrentAnswer | undefined | null): PlacePods[] 
 }
 
 /** How many pods are on the images this workload is set to, counted together. */
-export function wantedPods(answer: CurrentAnswer | undefined | null): number {
+export function podsAcrossWanted(answer: CurrentAnswer | undefined | null): number {
   return onWanted(answer).reduce((sum, one) => sum + one.pods, 0)
 }
 

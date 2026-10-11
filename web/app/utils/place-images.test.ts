@@ -12,6 +12,8 @@ import assert from 'node:assert/strict'
 
 import {
   comingOn,
+  imageSet,
+  podsAcrossWanted,
   podsOn,
   primaryImage,
   replacing,
@@ -48,6 +50,9 @@ test('A settled two-image workload is not retiring anything', () => {
 
 test('The images of a workload with two containers are two images', () => {
   assert.deepEqual(workloadImages(TWO_IMAGES_SETTLED), [WEB, CONTENT])
+  assert.deepEqual(imageSet(`${WEB},${CONTENT}`), [WEB, CONTENT])
+  assert.deepEqual(imageSet(undefined), [])
+  assert.deepEqual(imageSet('  ,  ,'), [])
 })
 
 test('A rollout is only begun once every image of the workload has a pod', () => {
@@ -70,8 +75,27 @@ test('A rollout is only begun once every image of the workload has a pod', () =>
   assert.equal(replacing(halfUp), CONTENT)
 })
 
-test('Every pod is counted, not only the one on the image that was named first', () => {
-  assert.equal(wantedPods(TWO_IMAGES_SETTLED), 2)
+test('A pod is counted once, however many containers it has', () => {
+  // The module answers 1 for each of the two images because the one pod has both
+  // containers. Adding them would claim two pods out of a place that runs one.
+  assert.equal(wantedPods(TWO_IMAGES_SETTLED), 1)
+  assert.equal(podsAcrossWanted(TWO_IMAGES_SETTLED), 2)
+})
+
+test('A pod with one container not yet on the new image is not a pod on the new workload', () => {
+  const partWay: CurrentAnswer = {
+    ...TWO_IMAGES_SETTLED,
+    settled: false,
+    image: 'reg/new-web@sha256:aaa,reg/new-content@sha256:ddd',
+    desired: 3,
+    pods: [
+      { image: 'reg/new-web@sha256:aaa', pods: 1 },
+      { image: CONTENT, pods: 3 },
+    ],
+  }
+  // One pod has the new nginx and is still on the old content. The new content image is
+  // on no pod at all, so no pod is fully on the new workload.
+  assert.equal(wantedPods(partWay), 0)
 })
 
 test('Both containers tags are the place tags', () => {
@@ -135,5 +159,5 @@ test('A module that reports no per-image figures still names what runs', () => {
     { image: CONTENT, pods: 2 },
   ])
   assert.equal(replacing(bare), '')
-  assert.equal(wantedPods(bare), 4)
+  assert.equal(wantedPods(bare), 2)
 })
