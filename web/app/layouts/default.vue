@@ -222,8 +222,10 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
         </div>
       </aside>
 
-      <main class="page" :class="{ 'page-wide': onRepository }">
-        <slot />
+      <main class="page" :class="{ 'page-project-layout': onRepository }">
+        <div class="page-content" :class="{ 'project-page-content': onRepository }">
+          <slot />
+        </div>
       </main>
       </div>
 
