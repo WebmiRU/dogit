@@ -48,6 +48,7 @@ const selectedJobId = ref<number | null>(null)
 const logText = ref('')
 const consumedLogLength = ref(0)
 const logLoading = ref(false)
+let selectedLogRequest = 0
 
 const selected = computed(() =>
   artifacts.value.find(one => one.job_id === selectedJobId.value) ?? null,
@@ -106,6 +107,7 @@ async function loadArtifacts() {
 }
 
 async function loadSelectedLog() {
+  const requestID = ++selectedLogRequest
   const artifact = selected.value
   if (!artifact) {
     logText.value = ''
@@ -122,6 +124,8 @@ async function loadSelectedLog() {
     )
     if (!response.ok) return
     const whole = await response.text()
+    // A response for a previously selected job must not overwrite the current log.
+    if (requestID !== selectedLogRequest || selectedJobId.value !== artifact.job_id) return
     if (whole.length < consumedLogLength.value) {
       // A new attempt can replace the old log with a shorter one.
       logText.value = whole

@@ -1046,7 +1046,7 @@ func (r *PipelineRepo) RetryJob(ctx context.Context, id int64) error {
 	_, err := r.s.pool.Exec(ctx, `
 		UPDATE jobs
 		SET status = $2, runner_id = NULL, started_at = NULL, finished_at = NULL, duration_ms = 0,
-		    error = '' 
+		    error = '', queue_priority_since = now()
 		WHERE id = $1`, id, JobPending)
 	if err != nil {
 		return fmt.Errorf("retry job: %w", err)
