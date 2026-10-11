@@ -571,6 +571,18 @@ func phaseHistoryInOrder(history map[string]map[string]any, said []string, order
 			placed[phase] = true
 			ordered = append(ordered, line)
 		}
+		// Output-specific build/push phases stay beside their generic phase when
+		// the snapshot is restored, in the same order the outputs were declared.
+		for _, named := range said {
+			prefix, _, isNamed := strings.Cut(named, ":")
+			if !isNamed || prefix != phase || placed[named] {
+				continue
+			}
+			if line, ok := history[named]; ok {
+				placed[named] = true
+				ordered = append(ordered, line)
+			}
+		}
 	}
 	for _, phase := range said {
 		if placed[phase] {
@@ -1236,6 +1248,23 @@ type deployStepName struct {
 // no pre-step row, and one that deploys an image somebody else built has no build or
 // push row — a list drawn from a fixed set of phases is a list of things that might
 // happen, and a page full of blue dots that never turn is a page nobody can read.
+func deployStepsForNamedOutputs(outputs []pipeline.BuildOutputSpec, manifests, pre, post int) []deployStepName {
+	steps := make([]deployStepName, 0, len(outputs)*2+7)
+	for _, output := range outputs {
+		name := strings.TrimSpace(output.Name)
+		if name != "" {
+			steps = append(steps, deployStepName{"build:" + name, "Build image " + name})
+		}
+	}
+	for _, output := range outputs {
+		name := strings.TrimSpace(output.Name)
+		if name != "" {
+			steps = append(steps, deployStepName{"push:" + name, "Push image " + name})
+		}
+	}
+	return append(steps, deployStepsFor("", manifests, pre, post)...)
+}
+
 func deployStepsFor(built string, manifests, pre, post int) []deployStepName {
 	steps := make([]deployStepName, 0, 9)
 
@@ -1359,25 +1388,31 @@ func (s *Server) publishDeployPlan(ctx context.Context, project *models.Project,
 		}
 	}
 
-	built := ""
-	buildCount := 0
-	for _, job := range jobs {
-		if len(job.Build) > 0 {
-			buildCount++
+	var steps []deployStepName
+	outputs := config.NamedBuildOutputs()
+	if len(outputs) > 0 {
+		steps = deployStepsForNamedOutputs(outputs, len(config.Deploy.Manifests),
+			len(config.Deploy.Pre), len(config.Deploy.Post))
+	} else {
+		built := ""
+		buildCount := 0
+		for _, job := range jobs {
+			if len(job.Build) > 0 {
+				buildCount++
+			}
 		}
-	}
-	if builds {
-		built = "the build job"
-		if buildCount > 1 {
-			built = "all build jobs"
+		if builds {
+			built = "the build job"
+			if buildCount > 1 {
+				built = "all build jobs"
+			}
 		}
+		steps = deployStepsFor(built, len(config.Deploy.Manifests),
+			len(config.Deploy.Pre), len(config.Deploy.Post))
 	}
 
 	s.publishPipeline(ctx, project.ID, nil, models.EventDeployPlan, map[string]any{
-		"job_id":       deployJobID,
-		"pipeline_iid": run.IID,
-		"steps": deployStepsFor(built, len(config.Deploy.Manifests),
-			len(config.Deploy.Pre), len(config.Deploy.Post)),
+		"job_id": deployJobID, "pipeline_iid": run.IID, "steps": steps,
 	})
 }
 

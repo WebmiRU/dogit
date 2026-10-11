@@ -1,6 +1,10 @@
 package api
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ewolf/dogit/internal/pipeline"
+)
 
 // A page that was not watching a deployment gets the phases back in the order they happened.
 //
@@ -93,4 +97,45 @@ func assertPhases(t *testing.T, lines []map[string]any, want ...string) {
 // The list the walk is taken from, as a caller supplies it.
 func planOfPhases() []string {
 	return []string{"build", "push", "prepare", "pre", "pull", "apply", "rollout", "retire", "post"}
+}
+
+
+// Each named image has its own build and push step; several builds may be active at once.
+func TestNamedOutputDeploymentSteps(t *testing.T) {
+	outputs := []pipeline.BuildOutputSpec{
+		{Name: "api", Build: map[string]any{"image": "registry.example/app/api"}},
+		{Name: "web", Build: map[string]any{"image": "registry.example/app/web"}},
+	}
+	got := deployStepsForNamedOutputs(outputs, 1, 0, 0)
+	want := []deployStepName{
+		{"build:api", "Build image api"},
+		{"build:web", "Build image web"},
+		{"push:api", "Push image api"},
+		{"push:web", "Push image web"},
+		{"prepare", "Read the manifests"},
+		{"pull", "Give the cluster a way to pull"},
+		{"apply", "Apply to the cluster"},
+		{"rollout", "Bring the new pods up"},
+		{"retire", "Retire the old pods"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("steps = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("step %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestNamedBuildAndPushPhasesRestoreBeforeDeploymentSteps(t *testing.T) {
+	history := map[string]map[string]any{
+		"build:api": {"phase": "build:api", "message": "building api"},
+		"build:web": {"phase": "build:web", "message": "building web"},
+		"push:api":  {"phase": "push:api", "message": "pushing api"},
+		"prepare":   {"phase": "prepare", "message": "preparing"},
+	}
+	said := []string{"build:api", "prepare", "push:api", "build:web"}
+	got := phaseHistoryInOrder(history, said, planOfPhases())
+	assertPhases(t, got, "build:api", "build:web", "push:api", "prepare")
 }

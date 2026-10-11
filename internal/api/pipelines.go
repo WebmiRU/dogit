@@ -560,6 +560,13 @@ func stageJobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []sto
 		// until all outputs have finished successfully.
 		if spec.Name == "build" && len(spec.BuildOutputs) > 0 {
 			for _, output := range spec.BuildOutputs {
+				build := expandBuild(output.Build, variables)
+				if build == nil {
+					build = map[string]any{}
+				}
+				// Internal metadata lets the runner report this image's own progress
+				// without confusing it with another parallel output.
+				build["__dogit_output_name"] = output.Name
 				jobs = append(jobs, store.Job{
 					Name:            output.Name,
 					Stage:           "build",
@@ -567,7 +574,7 @@ func stageJobsFrom(config *pipeline.Config, ref pipeline.Ref, only string) []sto
 					Image:           "alpine:3.21",
 					BreakOnError:    spec.BreaksOnError(),
 					BreakOnErrorSet: true,
-					Build:           expandBuild(output.Build, variables),
+					Build:           build,
 				})
 			}
 			continue
@@ -1307,6 +1314,10 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	// A progress report is sent to every destination, but it is still one phase
+	// transition by this job. Advancing once per destination makes the second target
+	// accidentally close the phase just opened for the first.
+	closedPhase := s.phaseBefore(job.ID, phase)
 
 	// Said once per place this run is on its way to, because a card is watching one place
 	// and drops an event that does not name it.
@@ -1347,35 +1358,26 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 		// so the phase being built carries an arrow that nothing in the snapshot can take away.
 		// The two roads a deployment's lines travel have to write the same account of a moment,
 		// or a page reads whichever one happened to leave a snapshot behind.
-		memory := s.phasesOf(job.ID)
+		// Parallel build outputs share one deployment record. Their phases are independent,
+		// so keep the last line of every named image under the same operation id.
+		memory := s.phasesOf(operation)
 
-		// The phase this one ends, and the closing said before the new line, so a page cannot
-		// have heard of the new phase and not the end of the one it replaced.
-		//
-		// It goes through the same memory as everything else, which is the part that matters
-		// after a refresh: the live stream and the durable note must agree, and a closing that
-		// was only published changes what an open page sees while leaving the snapshot
-		// untouched — so the next reload restored the phase that had just finished as still
-		// open, with an arrow on a step whose work was done.
 		var closing map[string]any
-		if closed := s.phaseBefore(job.ID, phase); closed != "" && record != nil {
+		if closedPhase != "" {
 			closing = map[string]any{
-				"job_id":     operation,
-				"phase":      closed,
-				"message":    "finished",
-				"finished":   true,
-				"deployment": record,
+				"job_id": operation, "phase": closedPhase,
+				"message": "finished", "finished": true,
 			}
-			memory.note(closing, closed, true)
+			if record != nil {
+				closing["deployment"] = record
+			}
+			memory.note(closing, closedPhase, true)
 		}
 
-		// The new phase last, so the snapshot it leaves behind is the one that says the old
-		// phase is closed. Written down as well as published, and for a different reader: the
-		// event reaches pages that are open, and the note reaches the ones that arrive later.
+		// Each image's own phase is tracked separately; the open set can hold build:api
+		// and build:web together and retain both after a refresh.
 		memory.note(payload, phase, false)
 		if closing != nil {
-			// Re-stamped once the new phase is known, so both lines describe the same moment: a
-			// page receiving the closing between them is not told that nothing is under way.
 			memory.stamp(closing)
 		}
 		s.rememberDeployProgress(r.Context(), operation, payload)
@@ -1514,18 +1516,31 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	if closed := s.closePhases(jobID); closed != "" {
 		if project, perr := s.store.Projects().ByID(r.Context(), job.ProjectID); perr == nil {
 			for _, place := range s.placesOfRun(r.Context(), project, job.PipelineID) {
+				operation := whichOperation(jobID, job.Deploy != nil, place)
 				record := map[string]any{"cluster": place.place}
 				if place.namespace != "" {
 					record["namespace"] = place.namespace
 				}
-				s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation,
-					map[string]any{
-						"job_id":     whichOperation(jobID, job.Deploy != nil, place),
-						"phase":      closed,
-						"message":    "finished",
-						"finished":   true,
-						"deployment": record,
-					})
+				closing := map[string]any{
+					"job_id": operation, "phase": closed, "message": "finished",
+					"finished": true, "deployment": record,
+				}
+				if status == store.JobFailed {
+					closing["failed"] = true
+					if reason != "" {
+						closing["message"] = reason
+					} else {
+						closing["message"] = "the job failed"
+					}
+				}
+				// For a build output the history belongs to the deployment operation, not
+				// the build job. Persist the failed closure there so a later page load sees it.
+				if operation != jobID {
+					memory := s.phasesOf(operation)
+					memory.note(closing, closed, true)
+					s.rememberDeployProgress(r.Context(), operation, closing)
+				}
+				s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, closing)
 			}
 		}
 	}

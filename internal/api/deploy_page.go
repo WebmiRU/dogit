@@ -187,14 +187,15 @@ func (s *Server) handleProjectDeployPlan(w http.ResponseWriter, r *http.Request)
 		post += len(place.Post)
 	}
 
-	// A manual artifact deploy does not build or push. The exact digest and source pipeline
-	// are part of the artifact details; this operation starts with preparing the manifests.
-	built := ""
-	if r.URL.Query().Get("artifact") != "true" {
-		// Match the plan announced at pipeline creation. Several named outputs are several
-		// build jobs, and the plan restored after a reload must keep the plural label too.
-		buildCount := len(config.NamedBuildOutputs())
-		if buildCount == 0 {
+	// Manual artifact deployment already has pushed digest-pinned images.
+	// Ordinary runs restore a distinct step for each named output.
+	var steps []deployStepName
+	if r.URL.Query().Get("artifact") != "true" && len(config.NamedBuildOutputs()) > 0 {
+		steps = deployStepsForNamedOutputs(config.NamedBuildOutputs(), manifests, pre, post)
+	} else {
+		built := ""
+		if r.URL.Query().Get("artifact") != "true" {
+			buildCount := 0
 			for _, spec := range config.Jobs {
 				if len(spec.Build) > 0 {
 					buildCount++
@@ -207,18 +208,16 @@ func (s *Server) handleProjectDeployPlan(w http.ResponseWriter, r *http.Request)
 					buildCount++
 				}
 			}
+			switch {
+			case buildCount > 1:
+				built = "all build jobs"
+			case buildCount == 1:
+				built = "the build job"
+			}
 		}
-		switch {
-		case buildCount > 1:
-			built = "all build jobs"
-		case buildCount == 1:
-			built = "the build job"
-		}
+		steps = deployStepsFor(built, manifests, pre, post)
 	}
-
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"steps": deployStepsFor(built, manifests, pre, post),
-	})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"steps": steps})
 }
 
 // rulesOf is what a place listens for, in words.
