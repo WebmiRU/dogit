@@ -13,7 +13,7 @@ import (
 
 // A file with no notify block says nothing, and saying nothing means silence.
 func TestAPipelineWithNoNotifyBlockIsSilent(t *testing.T) {
-	config, err := Parse([]byte("stages: [build]\nimage:\n  stage: build\n  script: [true]\n"))
+	config, err := Parse([]byte("stages: [test]\nimage:\n  stage: test\n  script: [true]\n"))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
