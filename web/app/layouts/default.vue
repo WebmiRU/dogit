@@ -167,7 +167,7 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
     </header>
 
     <div class="body">
-      <aside v-if="user" class="sidebar">
+      <aside v-if="user && !onRepository" class="sidebar">
         <!-- Every item here leads somewhere. A link that does not work yet was
              promising something the instance cannot do, and the promise was the only
              thing about it: pipelines are reached from the project they belong to,
