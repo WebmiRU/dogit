@@ -23,6 +23,16 @@
  */
 import type { ModuleRow } from '~/types/module'
 import { formatDuration, shortDigest, timeAgo } from '~/utils/format'
+import {
+  podsOn,
+  primaryImage,
+  replacing,
+  replacingPods,
+  servedBy,
+  wantedPods,
+  wantedTags,
+  type CurrentAnswer,
+} from '~/utils/place-images'
 import { onRewake } from '~/lib/eventSocket'
 
 const props = defineProps<{
@@ -363,20 +373,12 @@ async function loadCurrent() {
  * `asked` is kept because it is the difference between "this is what is there" and
  * "this is the last thing that was written down", and a page that shows both without
  * saying which is which has made two claims out of one line.
+ *
+ * The answer to what is running, what is coming on and what is on its way out is
+ * arithmetic over this, and it lives in ~/utils/place-images: it has to be right about a
+ * pod with more than one container, which is a question a person reading a page cannot
+ * check and a test can.
  */
-interface CurrentAnswer {
-  known?: boolean
-  image?: string
-  tags?: string[]
-  workload?: string
-  ready?: number
-  desired?: number
-  settled?: boolean
-  /** What the pods are actually running, by digest — more than one while a rollout goes. */
-  pods?: { image: string; pods: number; tags?: string[] }[]
-  asked?: string
-  reason?: string
-}
 
 /**
  * The image this place is on right now, and how many pods are on it.
@@ -385,122 +387,69 @@ interface CurrentAnswer {
  * the rollout is heading for from the moment it is accepted, so a place mid-rollout
  * would be reported as running the new image while every pod is still on the old one.
  */
-function onPods(place: Place): { image: string; pods: number; tags?: string[] }[] {
-  const answer = current.value[place.name]
-  if (!answer?.known) return []
-  const pods = answer.pods ?? []
-  return pods.length > 0 ? pods : answer.image ? [{ image: answer.image, pods: answer.desired ?? 0 }] : []
+function onPods(place: Place) {
+  return podsOn(current.value[place.name])
 }
 
-/** The image on the most pods here — what this place is actually being served by. */
-function servedBy(place: Place): string {
-  const pods = onPods(place)
-  if (pods.length === 0) return ''
-  const most = pods.reduce((a, b) => (b.pods > a.pods ? b : a))
-  return most.image
+/** What this place is running, in one line: see ~/utils/place-images. */
+function servedByHere(place: Place): string {
+  return servedBy(current.value[place.name])
 }
 
-/**
- * The image this place is being put on, as soon as one pod is on it.
- *
- * The workload's own image, not the one with the most pods: a rollout that has put one
- * of three pods on the new image is already a rollout onto that image, and calling the
- * place "running" the old one until the last pod turns over says the opposite of what is
- * happening for the whole minute it takes.
- */
-function comingOn(place: Place): string {
-  const answer = current.value[place.name]
-  if (!answer?.known || !answer.image) return ''
-  const started = (answer.pods ?? []).some((one) => one.image === answer.image)
-  return started ? answer.image : ''
-}
-
-/**
- * The one line about what is here: the image being put on where a rollout has begun,
- * and the one it is being served from otherwise.
- */
-function primaryImage(place: Place): string {
-  return comingOn(place) || servedBy(place)
-}
-
-/**
- * The image being taken off this place, if a rollout is taking one off.
- *
- * A pod on an image the workload is no longer set to: on its way out and still serving
- * traffic, which is the one state that is neither "running here" nor "gone" and that a
- * page marking images in two colours has to be able to say.
- */
-function replacing(place: Place): string {
-  const answer = current.value[place.name]
-  if (!answer?.known) return ''
-  const here = primaryImage(place)
-  const outgoing = onPods(place).filter((one) => one.image !== here)
-  if (outgoing.length === 0) return ''
-  const most = outgoing.reduce((a, b) => (b.pods > a.pods ? b : a))
-  return most.image
+/** What this place is being taken off, if a rollout is taking something off. */
+function replacingHere(place: Place): string {
+  return replacing(current.value[place.name])
 }
 
 /** How many pods are on the image this place is being taken off. */
-function replacingPods(place: Place): number {
-  const leaving = replacing(place)
-  if (!leaving) return 0
-  return onPods(place).find((one) => one.image === leaving)?.pods ?? 0
+function replacingPodsHere(place: Place): number {
+  return replacingPods(current.value[place.name])
 }
 
-/**
- * What is running in this place, in one line: the names it was published under when
- * they are known, and the digest either way.
- *
- * The digest is the fact — it is what is in the cluster, and two tags can point at one
- * digest and one tag can be moved to another. The names are beside it because a person
- * comparing this against a release is looking for `v88.15`, not for sixty-four
- * characters of hexadecimal. Nothing here is drawn when the module does not know:
- * a page that guesses which image is there is the thing this whole answer exists to
- * stop.
- */
 /**
  * What this place is running, as far as it is known: the names, if it has any, and the
  * digest either way.
  *
  * Both, and never one instead of the other: the names are what a person compares
  * against a release, and the digest is the only thing that says which image it is — a
- * tag can be moved after the fact, and two tags can point at one image.
+ * tag can be moved after the fact, and two tags can point at one image. Every image of a
+ * workload with several containers, since the names of one container are not the names
+ * of the place.
  */
 function runningTags(place: Place): string[] {
   const answer = current.value[place.name]
   if (!answer?.known) return []
-  const image = primaryImage(place)
-  const on = (answer.pods ?? []).find((one) => one.image === image)
-  return on?.tags ?? answer.tags ?? []
+  return wantedTags(answer)
 }
 
 function runningDigest(place: Place): string {
   const answer = current.value[place.name]
   if (!answer?.known) return ''
-  return shortDigest(servedBy(place))
+  return shortDigest(servedByHere(place))
 }
 
 /** What the module says is running in this place, in the shape the card takes. */
 function nowRunning(place: Place): { image: string; tags?: string[]; pods: number; desired: number } | null {
   const answer = current.value[place.name]
   if (!answer?.known) return null
-  const image = primaryImage(place)
+  const image = primaryImage(answer)
   if (!image) return null
-  const on = (answer.pods ?? []).find((one) => one.image === image)
   return {
     image,
-    tags: on?.tags ?? answer.tags,
+    tags: wantedTags(answer),
     // How many pods are on it, of how many this place runs. In the badge rather than in
     // a tooltip: "running" is a claim about pods, and "1 of 3" is the whole of what it
-    // means while a rollout is going.
-    pods: on?.pods ?? 0,
+    // means while a rollout is going. Counted across every image the workload is set to,
+    // because a pod is on all of them at once and counting one container was counting
+    // a fraction of the place.
+    pods: wantedPods(answer),
     desired: answer.desired ?? 0,
   }
 }
 
 function runningNow(place: Place): boolean {
   const answer = current.value[place.name]
-  return Boolean(answer?.known && servedBy(place))
+  return Boolean(answer?.known && servedByHere(place))
 }
 
 /**
@@ -513,7 +462,7 @@ function runningNow(place: Place): boolean {
 function podsWording(place: Place): string {
   const answer = current.value[place.name]
   if (!answer?.known) return ''
-  const leaving = replacing(place)
+  const leaving = replacingHere(place)
   const pods = onPods(place)
   if (!leaving || pods.length < 2) return ''
   const on = pods.filter((one) => one.image !== leaving).reduce((sum, one) => sum + one.pods, 0)
@@ -1017,8 +966,8 @@ watchEvents({
           :queued="place.queued && !isPlaceWorking(place.name)"
           :preparing="isPlacePreparing(place.name)"
           :now-running="nowRunning(place)"
-          :replacing="replacing(place)"
-          :replacing-pods="replacingPods(place)"
+          :replacing="replacingHere(place)"
+          :replacing-pods="replacingPodsHere(place)"
           :show-repository="index === 0"
           @state="onCardState(place.name, $event)"
           @settings-changed="load"
