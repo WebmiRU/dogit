@@ -44,142 +44,83 @@ func (s *Server) handleProjectDeployPlaces(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	config, err := s.pipelineConfig(r.Context(), s.repos.PathFor(project), project.DefaultBranch)
-	if err != nil {
-		// No configuration is a state the page draws, not a failure of the request.
-		s.writeJSON(w, r, http.StatusOK, map[string]any{"places": []any{}})
-		return
-	}
-
-	places := make([]map[string]any, 0, len(config.Deploys))
-	due := s.placesDueNow(r.Context(), project)
-	for _, spec := range config.Deploys {
-		places = append(places, map[string]any{
-			"name":   spec.Name,
-			"module": spec.Module,
-			"target": spec.Target,
-			// Whether the run under way has not reached this place yet.
-			//
-			// Asked of the run rather than worked out by the page: a place this run is
-			// still working its way towards has nothing of its own to show, and a page
-			// that fills the gap with the last thing that happened to it draws a green
-			// deployment of an older commit — which reads as "done" for as long as the
-			// run takes, right beside another place that is plainly still going.
-			//
-			// The names come from the default branch while the jobs come from the commit
-			// being run, so a run deployed from a branch whose file disagrees with the
-			// default one says nothing here rather than guessing: an entry the run has
-			// no job for is simply not marked.
-			"queued":   due[spec.Target],
-			"tag_only": spec.TagOnly,
-			"rollout":  spec.Rollout,
-			// Said in the repository's own words rather than evaluated here: a page
-			// that interpreted the rules would have to keep up with the interpreter.
-			"rules": rulesOf(spec.Rules),
-		})
-	}
-
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"places": places,
-		"branch": project.DefaultBranch,
-	})
-}
-
-// placesDueNow names the places the run under way has not reached yet.
-//
-// The newest run that has not ended, and the deployments in it that have neither begun
-// nor finished: those are the places whose turn is coming. A run with nothing left to do
-// says nothing about any place — a place it never deployed to was not waiting for
-// anything, and saying "queued" there would be a place that can never stop waiting.
-func (s *Server) placesDueNow(ctx context.Context, project *models.Project) map[string]bool {
-	due := map[string]bool{}
-
-	runs, _, err := s.store.Pipelines().ListPipelinesPage(ctx, project.ID,
-		store.PipelineQuery{Page: 1, PerPage: 1})
-	if err != nil || len(runs) == 0 {
-		return due
-	}
-	switch runs[0].Status {
-	case store.PipelinePending, store.PipelineRunning:
-	default:
-		return due
-	}
-
-	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, runs[0].ID)
-	if err != nil {
-		return due
-	}
-	for _, job := range jobs {
-		if job.Stage != "deploy" || job.Status != store.JobPending {
-			continue
-		}
-		// "Target" and not "target": the specification is written into the job as the
-		// Go value marshalled, and its fields carry no names of their own, so it is
-		// stored under the field's own. Read as the file spells it, this answers
-		// nothing and says every place is waiting for ever.
-		target, _ := job.Deploy["Target"].(string)
-		if target != "" {
-			due[target] = true
-		}
-	}
-	return due
-}
-
-// handleProjectDeployPlan is the step list a deployment of this project goes through.
-//
-// Sent on its own so that a page opened between two deployments can draw the list
-// without waiting for a run to start. The list used to arrive only as an event, which
-// meant the page either showed nothing or replayed the last run's — and a list of steps
-// belongs to the repository rather than to any one of its runs.
-func (s *Server) handleProjectDeployPlan(w http.ResponseWriter, r *http.Request) {
-	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
-	if err != nil {
-		s.writeError(w, r, err)
-		return
-	}
-
-	config, err := s.pipelineConfig(r.Context(), s.repos.PathFor(project), project.DefaultBranch)
-
-	// Putting a version back is not a deployment, and a page asking what a deployment
-	// of this project goes through is not asking what a rollback goes through. Asked
-	// for by name, and answered from the list the core keeps for it, so that the page
-	// draws the same three rows whether it learned about this from a run or opened on a
-	// finished one.
+	// Rollback has its own plan and does not depend on the repository's current file.
 	if r.URL.Query().Get("kind") == "revert" {
 		s.writeJSON(w, r, http.StatusOK, map[string]any{"steps": deployStepsForRevert()})
 		return
 	}
 
-	if err != nil || len(config.Deploys) == 0 {
+	repoDir := s.repos.PathFor(project)
+	ref := strings.TrimSpace(r.URL.Query().Get("sha"))
+	if ref == "" {
+		ref = project.DefaultBranch
+	}
+	sha, err := s.git.RevParse(r.Context(), repoDir, ref)
+	if err != nil {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"steps": []any{}})
+		return
+	}
+	config, err := s.pipelineConfig(r.Context(), repoDir, sha)
+	if err != nil || config == nil || len(config.Deploys) == 0 {
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"steps": []any{}})
+		return
+	}
+
+	// One card is one target and one source commit. An aggregate plan from today's default
+	// branch can disagree with a historic artifact's manifest list or this target's hooks.
+	deployments := config.Deploys
+	target := strings.TrimSpace(r.URL.Query().Get("target"))
+	name := strings.TrimSpace(strings.TrimPrefix(r.URL.Query().Get("name"), "deploy:"))
+	if target != "" || name != "" {
+		filtered := make([]pipeline.DeploySpec, 0, len(deployments))
+		for _, spec := range deployments {
+			if target != "" && spec.Target != target {
+				continue
+			}
+			if name != "" && spec.Name != name {
+				continue
+			}
+			filtered = append(filtered, spec)
+		}
+		deployments = filtered
+	}
+	if len(deployments) == 0 {
 		s.writeJSON(w, r, http.StatusOK, map[string]any{"steps": []any{}})
 		return
 	}
 
 	manifests, pre, post := 0, 0, 0
-	for _, place := range config.Deploys {
+	for _, place := range deployments {
 		manifests += len(place.Manifests)
 		pre += len(place.Pre)
 		post += len(place.Post)
 	}
 
-	// Whether a run builds an image is the one thing about the list this cannot know
-	// without a run, and it is read from the configuration rather than guessed.
-	builds := false
-	for _, spec := range config.Jobs {
-		if len(spec.Build) > 0 {
-			builds = true
-			break
-		}
-	}
+	// A manual artifact deploy does not build or push. The exact digest and source pipeline
+	// are part of the artifact details; this operation starts with preparing the manifests.
 	built := ""
-	if builds {
-		built = "the build job"
+	if r.URL.Query().Get("artifact") != "true" {
+		builds := len(config.NamedBuildOutputs()) > 0
+		for _, spec := range config.Jobs {
+			if len(spec.Build) > 0 {
+				builds = true
+				break
+			}
+		}
+		for _, spec := range config.StageSpecs {
+			if len(spec.Build) > 0 || len(spec.BuildOutputs) > 0 {
+				builds = true
+				break
+			}
+		}
+		if builds {
+			built = "the build job"
+		}
 	}
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"steps": deployStepsFor(built, manifests, pre, post),
 	})
-}
 
 // rulesOf is what a place listens for, in words.
 func rulesOf(rules []pipeline.Rule) []string {

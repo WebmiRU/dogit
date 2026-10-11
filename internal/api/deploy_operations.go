@@ -86,6 +86,7 @@ func (s *Server) deployOperationView(ctx context.Context, one store.DeployOperat
 		// empty for the current ones — a page that drew "cluster/namespace" on every card
 		// would print a slash and two blanks on every deployment made since the change.
 		"place":       one.Place,
+		"artifact":    one.Artifact,
 		"cluster":     one.Cluster,
 		"namespace":   one.Namespace,
 		"status":      one.Status,

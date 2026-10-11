@@ -1330,7 +1330,25 @@ func buildJob(ctx context.Context, s *Server, run *store.Pipeline, skipJobID int
 func (s *Server) publishDeployPlan(ctx context.Context, project *models.Project,
 	config *pipeline.Config, run *store.Pipeline, jobs []store.Job) {
 
-	if config == nil || !config.Deploy.Present {
+	if config == nil {
+		return
+	}
+	for index := range jobs {
+		job := &jobs[index]
+		if job.Deploy == nil {
+			continue
+		}
+		spec := deploySpecForJob(job, config)
+		if spec.ArtifactPipelineID == 0 {
+			continue
+		}
+		s.publishPipeline(ctx, project.ID, nil, models.EventDeployPlan, map[string]any{
+			"job_id": job.ID, "pipeline_iid": run.IID, "kind": "deploy",
+			"steps": deployStepsFor("", len(spec.Manifests), len(spec.Pre), len(spec.Post)),
+		})
+		return
+	}
+	if !config.Deploy.Present {
 		return
 	}
 

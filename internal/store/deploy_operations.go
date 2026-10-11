@@ -55,6 +55,10 @@ type DeployOperation struct {
 	// Error is the reason a failed operation gives, in the words of whoever wrote it.
 	Error string
 
+	// Artifact is true for a manual deploy of an already-built artifact. That operation did
+	// not build or push an image and must not inherit those active arrows from the pipeline.
+	Artifact bool
+
 	// Progress is what this operation had last said about itself, as the module's own fields.
 	// Empty for an operation that has not begun, and for one that began before the core kept
 	// this — a page is told "nothing is known" rather than shown a plan with no marks on it and
@@ -204,6 +208,7 @@ func (r *PipelineRepo) DeployOperations(ctx context.Context, projectID uuid.UUID
 		decodeJSONB(deploy, &described)
 		op.Cluster, _ = described["Cluster"].(string)
 		op.Namespace, _ = described["Namespace"].(string)
+		op.Artifact = described["ArtifactPipelineID"] != nil && fmt.Sprint(described["ArtifactPipelineID"]) != "0"
 		op.Place = placeOf(described, op.Cluster)
 		if len(progress) > 0 {
 			decodeJSONB(progress, &op.Progress)
