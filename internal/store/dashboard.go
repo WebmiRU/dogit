@@ -16,7 +16,11 @@ type DashboardStats struct {
 	Projects           int `json:"projects"`
 	Groups             int `json:"groups"`
 	OwnedProjects      int `json:"owned_projects"`
-	MaintainerProjects int `json:"mainer_projects"`
+	// Spelled the way the page asks for it. It was "mainer", and nothing caught it:
+	// the counter is a field in a JSON object, so a name nobody reads still unmarshals
+	// fine — to zero. The tile said "Maintainer" and showed nothing at all, which reads
+	// as "none of your projects" rather than as a field that never arrived.
+	MaintainerProjects int `json:"maintainer_projects"`
 	SSHKeys            int `json:"ssh_keys"`
 }
 
