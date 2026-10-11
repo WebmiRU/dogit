@@ -412,13 +412,16 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 	claimed := answer.Job
 	log.Printf("runner: job %d (%s, %s) on %s", claimed.ID, claimed.Name, claimed.Stage, claimed.ProjectPath)
 
+	breakOnError := claimed.BreakOnError
 	job := &jobs.Job{
-		ID:          claimed.ID,
-		Stage:       claimed.Stage,
-		Name:        claimed.Name,
-		ProjectPath: claimed.ProjectPath,
-		Script:      claimed.Script,
-		Variables:   claimed.Variables,
+		ID:              claimed.ID,
+		Stage:           claimed.Stage,
+		Name:            claimed.Name,
+		ProjectPath:     claimed.ProjectPath,
+		Script:          claimed.Script,
+		Variables:       claimed.Variables,
+		BreakOnError:    &breakOnError,
+		CheckExitStatus: claimed.CheckExitStatus,
 	}
 	// From the answer, not from the job. See the note on core.Job.
 	if answer.Registry != nil {
@@ -443,7 +446,10 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 	}
 
 	result := executor.Run(ctx, job)
-	if result.Status != jobs.StatusSuccess {
+	scriptFailed := result.Status != jobs.StatusSuccess
+	buildAfterScriptFailure := scriptFailed && result.BuildAfterFailure &&
+		len(claimed.Build) > 0 && ctx.Err() == nil
+	if scriptFailed && !buildAfterScriptFailure {
 		log.Printf("runner: job %d failed after %s: %s", job.ID, result.Took, result.Reason)
 		finish(jobs.StatusFailed, result.Reason)
 		return
@@ -451,12 +457,24 @@ func runJob(ctx context.Context, cfg *config, client *core.Client, answer core.C
 	log.Printf("runner: job %d script finished in %s, %d steps", job.ID, result.Took, result.Steps)
 
 	if len(claimed.Build) == 0 {
-		finish(jobs.StatusSuccess, "")
+		if scriptFailed {
+			finish(jobs.StatusFailed, result.Reason)
+		} else {
+			finish(jobs.StatusSuccess, "")
+		}
 		return
 	}
 	if err := buildImage(ctx, cfg, client, job, claimed, credential); err != nil {
 		log.Printf("runner: job %d: build failed: %s", job.ID, err)
-		finish(jobs.StatusFailed, "the image this job builds did not build: "+err.Error())
+		reason := "the image this job builds did not build: " + err.Error()
+		if scriptFailed {
+			reason = result.Reason + "\\n" + reason
+		}
+		finish(jobs.StatusFailed, reason)
+		return
+	}
+	if scriptFailed {
+		finish(jobs.StatusFailed, result.Reason)
 		return
 	}
 	finish(jobs.StatusSuccess, "")
