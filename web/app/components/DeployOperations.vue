@@ -656,7 +656,13 @@ function verdictOf(operation: DeployOperation): string {
  * says. "refused" and "skipped" in particular: both mean nothing happened, and a card that says
  * either of them is quoting the column rather than answering the reader's question.
  */
+function failedPhase(operation: DeployOperation): boolean {
+  const progress = knows(operation)
+  return Boolean(progress?.seen.some((one) => one.failed) && progress.phases.length === 0)
+}
+
 function stateOf(operation: DeployOperation): string {
+  if (failedPhase(operation)) return 'Failed'
   if (operation.queued) return 'Waiting'
   if (operation.running) return 'Running'
   // Pending, but neither queued nor running: the core has not been asked for a place yet,
@@ -681,6 +687,7 @@ function stateOf(operation: DeployOperation): string {
  * to decide which of them to believe.
  */
 function edgeOf(operation: DeployOperation): string {
+  if (failedPhase(operation)) return 'failed'
   if (operation.queued) return 'queued'
   if (operation.running) return 'live'
   // Dashed rather than solid, and in the waiting colour rather than the working one: this is
@@ -791,7 +798,7 @@ const tone: Record<string, string> = {
 }
 
 watchEvents({
-  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued'],
+  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued', 'pipeline.updated'],
   project: () => props.projectPath,
   // The core's own line about a deployment, relayed whole. Many a minute while a rollout runs, so
   // this is the only path that has to be cheap.
@@ -806,6 +813,12 @@ watchEvents({
       // A deployment ended, and this is the only line that says so. Refresh the list and any log
       // the reader already has open: a waiter may have been promoted or overtaken in the meantime.
       void load().then(refreshOpenLogs)
+      return
+    }
+    if (event.kind === 'pipeline.updated') {
+      // A build can fail before the deploy job starts. Refresh durable statuses at run end,
+      // otherwise a skipped deploy row can leave the live card yellow.
+      if (event.payload?.run_finished === true) void load().then(refreshOpenLogs)
       return
     }
     if (event.kind !== 'deploy.operation') return
@@ -1032,7 +1045,7 @@ watchEvents({
     >
       <div class="card-body">
         <div class="deploy-block-head">
-          <span class="badge" :class="tone[operation.status] ?? 'badge-neutral'">
+          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (tone[operation.status] ?? 'badge-neutral')">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
@@ -1134,7 +1147,7 @@ watchEvents({
     >
       <div class="card-body">
         <div class="deploy-block-head">
-          <span class="badge" :class="tone[operation.status] ?? 'badge-neutral'">
+          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (tone[operation.status] ?? 'badge-neutral')">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>

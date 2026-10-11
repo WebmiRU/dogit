@@ -492,26 +492,28 @@ const lastOut = ref<{ image: string; tags?: string[] } | null>(null)
  * wrong when there is only one answer to be wrong about.
  */
 const verdict = computed<{ tone: 'working' | 'ok' | 'bad' | 'waiting'; word: string; cls: string }>(() => {
-  // Two words, because two different things are happening and "deploying" says
-  // neither of them right. An image being built and pushed is not a deployment: no pod
-  // is being touched, and a card saying "deploying" over a forty-second image build
-  // tells somebody the cluster is being changed while it is not. From the first
-  // deployment phase on, it is one.
-  if (active.value || runningSince.value) {
-    // Which of the three words, decided by what is actually under way rather than by
-    // the last thing said: a module closing a phase with a line of its own must not
-    // turn the word back for a moment while the next one has not started yet.
-    const deployPhase = activePhases.value.find((phase) => phase && !buildPhases.includes(phase))
-    if (deployPhase) return { tone: 'working', word: 'deploying', cls: 'badge-warning' }
+  // A live phase is authoritative. The set can contain build:api and push:web at once;
+  // neither is a rollout, and both need their own arrow while they are active.
+  const deployPhase = activePhases.value.find((phase) => phase && !isBuildPhase(phase))
+  if (deployPhase) return { tone: 'working', word: 'deploying', cls: 'badge-warning' }
 
-    const phase = active.value?.phase ?? ''
-    const word = phase === 'push' || activePhases.value.includes('push')
-      ? 'pushing'
-      : 'building'
-    return { tone: 'working', word, cls: 'badge-warning' }
+  if (activePhases.value.length > 0) {
+    const pushing = activePhases.value.some(isPushPhase)
+    return {
+      tone: 'working',
+      word: pushing ? 'pushing' : 'building',
+      cls: 'badge-warning',
+    }
   }
+
+  // A closed failed phase must outrank the last event's stale running timestamp.
+  // When parallel images are still working, their active phases above take priority;
+  // once none remain, the place is red rather than yellow forever.
   if (activeSeen.value.some((one) => one.failed)) {
     return { tone: 'bad', word: 'failed', cls: 'badge-red' }
+  }
+  if (running.value || (active.value && !active.value.finished)) {
+    return { tone: 'working', word: 'preparing', cls: 'badge-warning' }
   }
 
   // Waiting its turn: the run under way has a deployment for this place and has not
@@ -1116,7 +1118,7 @@ function noteOperation(payload: Record<string, unknown>) {
     // that is plainly going the other way. These stage names are the core's own vocabulary,
     // so hearing one is hearing that a deployment has started — and an older core that
     // names nothing still swaps nothing, which is the thing being avoided.
-    const kind = record?.kind ?? (buildPhases.includes(said.phase) ? 'deploy' : '')
+    const kind = record?.kind ?? (isBuildPhase(said.phase) ? 'deploy' : '')
     if (kind === 'revert' && !planIsRevert.value) void loadPlan(true)
     else if (kind === 'deploy' && planIsRevert.value) void loadPlan(false)
 
@@ -1146,8 +1148,7 @@ function noteOperation(payload: Record<string, unknown>) {
     // runner announces a build and a push and never says "that was the end of it", so
     // a card that waited to be told kept both open and pointed at the build for the
     // whole rollout: an arrow on step one of seven while step six is what is happening.
-    const others = activePhases.value.filter((one) => one !== said.phase &&
-      !(buildPhases.includes(one) && !buildPhases.includes(said.phase)))
+    const others = activePhases.value.filter((one) => keepOtherPhase(one, said.phase))
     activePhases.value = said.finished ? others : [...others, said.phase]
   }
 
@@ -1264,6 +1265,33 @@ const endedStatuses = ['success', 'failed', 'canceled', 'cancelled', 'abandoned'
  * show them as deployment work, not a Docker build that is still underway.
  */
 const buildPhases = ['build', 'push']
+
+function isBuildPhase(phase: string): boolean {
+  return buildPhases.some((base) => phase === base || phase.startsWith(base + ':'))
+}
+
+function isPushPhase(phase: string): boolean {
+  return phase === 'push' || phase.startsWith('push:')
+}
+
+function outputOfPhase(phase: string): string {
+  const colon = phase.indexOf(':')
+  return colon < 0 ? '' : phase.slice(colon + 1)
+}
+
+/** Keep another named image's step active when this image changes phase. */
+function keepOtherPhase(other: string, current: string): boolean {
+  if (other === current) return false
+  const otherIsBuild = isBuildPhase(other)
+  const currentIsBuild = isBuildPhase(current)
+  if (otherIsBuild && !currentIsBuild) return false
+  if (otherIsBuild && currentIsBuild) {
+    const otherOutput = outputOfPhase(other)
+    const currentOutput = outputOfPhase(current)
+    return Boolean(otherOutput && currentOutput && otherOutput !== currentOutput)
+  }
+  return true
+}
 
 onMounted(async () => {
   // Listening comes before fetching, and not for tidiness.
@@ -1384,7 +1412,7 @@ onMounted(async () => {
       // closes a phase with a line carrying no phase of its own — "finished" — would
       // otherwise look exactly like a run that never deployed anything, and the card
       // would flicker back to the last operation and open again a moment later.
-      if (activePhases.value.some((phase) => !buildPhases.includes(phase))) return
+      if (activePhases.value.some((phase) => !isBuildPhase(phase))) return
 
       finishOperation()
     },

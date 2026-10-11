@@ -124,7 +124,10 @@ async function loadHead() {
     // Both are "not finished", and treating them as one thing is what made this header
     // say a deployment was under way while a queue stood still.
     deployBusy.value = listed.value.some((one) => one.running === true)
-    lastFailed.value = isFailedDeployStatus(answer.finished?.[0]?.status)
+    const lastOutcome = answer.finished?.find((one) =>
+      one.status === 'success' || isFailedDeployStatus(one.status),
+    )?.status
+    lastFailed.value = isFailedDeployStatus(lastOutcome)
   } catch {
     // Left as it is. A header that cannot be fetched says what it last knew, and a header that
     // says "nothing is deploying" because a request failed is a page making a claim it has no
@@ -134,9 +137,13 @@ async function loadHead() {
 
 /** Follows deployments only as far as "is one happening, is one waiting, did the last one work". */
 const stopState = watchEvents({
-  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued'],
+  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued', 'pipeline.updated'],
   project: () => props.projectPath,
   onEvent: (event) => {
+    if (event.kind === 'pipeline.updated') {
+      if (event.payload?.run_finished === true) void loadHead()
+      return
+    }
     if (event.kind === 'deploy.operation') {
       // Asked, not assumed. An event says that something happened for somebody; it
       // does not say whether this project is now rolling something out — and saying so
