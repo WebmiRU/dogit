@@ -136,6 +136,7 @@ after:
 deploy:
   target: test
   module: deploy:kubernetes
+  manifests: [k8s/deployment.yaml]
 `))
 	if err != nil {
 		t.Fatalf("parse stages around build/deploy: %v", err)
@@ -157,6 +158,7 @@ compile:
 deploy:
   target: test
   module: deploy:kubernetes
+  manifests: [k8s/deployment.yaml]
 `))
 	if err == nil || !strings.Contains(err.Error(), "deploy cannot appear before stage build") {
 		t.Fatalf("error = %v, want build/deploy ordering error", err)
@@ -175,6 +177,7 @@ after:
 deploy:
   target: test
   module: deploy:kubernetes
+  manifests: [k8s/deployment.yaml]
 `))
 	if err != nil {
 		t.Fatalf("parse deploy-only pipeline: %v", err)
