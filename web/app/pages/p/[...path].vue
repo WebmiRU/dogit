@@ -478,6 +478,7 @@ async function copyCloneUrl() {
           v-else-if="view.name === 'artifacts'"
           :project-id="projectId"
           :project-path="project.path"
+          :can-trigger="canPush"
         />
         <ProjectNotifications
           v-else-if="view.name === 'notifications'"
