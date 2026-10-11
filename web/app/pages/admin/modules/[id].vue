@@ -36,6 +36,7 @@ const moduleKind = ref('')
 const tabNames = computed(() => [
   'overview',
   ...(moduleKind.value === 'registry:docker' ? ['images'] : []),
+  ...(moduleKind.value === 'registry:composer' ? ['packages'] : []),
   'settings',
   // Where the module may act. A notification module's rows are the chats it writes to,
   // and they are rows rather than settings: a Telegram module's settings are the
@@ -56,6 +57,7 @@ const tabNames = computed(() => [
 const tabTitles: Record<string, string> = {
   overview: 'Overview',
   images: 'Images',
+  packages: 'Packages',
   notifications: 'Notifications',
   deployments: 'Deployments',
   settings: 'Settings',
@@ -250,6 +252,9 @@ const storageFraction = computed(() => {
       <!-- What the module holds. Only a registry has images, and it knows what they
            are: the core stores digests in passing and nothing else. -->
       <ModuleRegistryImages v-else-if="tab === 'images'" />
+
+      <!-- Composer has its own catalogue because package metadata and archives live in the module. -->
+      <ModuleComposerPackages v-else-if="tab === 'packages'" :address="module.public_url || ''" />
 
       <!-- Where this module writes. On the instance, and so inherited by every group
            and project that has not said otherwise. -->

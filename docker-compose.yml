@@ -198,6 +198,34 @@ services:
     volumes:
       - dogit-registry:/var/lib/registry:ro
 
+  # Public Composer 2 package proxy. The Go module handles metadata and caching;
+  # PostgreSQL keeps the catalogue and URL mappings, while the volume holds ZIPs.
+  module-registry-composer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["module-registry-composer"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOGIT_CORE_URL: http://app:8080
+      DOGIT_MODULE_ENDPOINT: http://module-registry-composer:8095
+      DOGIT_MODULE_PUBLIC_URL: ${DOGIT_COMPOSER_PUBLIC_URL:-http://127.0.0.1:8095}
+      DOGIT_COMPOSER_PUBLIC_ADDRESS: ${DOGIT_COMPOSER_PUBLIC_URL:-http://127.0.0.1:8095}
+      DOGIT_MODULE_ALLOWED_ORIGINS: ${DOGIT_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      DOGIT_MODULE_TOKEN: ${DOGIT_MODULE_COMPOSER_TOKEN:-}
+      DOGIT_MODULE_LISTEN: ":8095"
+      DOGIT_DATABASE_URL: postgres://${POSTGRES_USER:-dogit}:${POSTGRES_PASSWORD:-dogit}@postgres:5432/${POSTGRES_DB:-dogit}?sslmode=disable
+      COMPOSER_UPSTREAM_URL: ${COMPOSER_UPSTREAM_URL:-https://repo.packagist.org}
+      COMPOSER_ADDITIONAL_UPSTREAM_URL: ${COMPOSER_ADDITIONAL_UPSTREAM_URL:-}
+      COMPOSER_STORAGE_DIR: /data/cache
+    ports:
+      - "127.0.0.1:8095:8095"
+    volumes:
+      - dogit-composer-cache:/data/cache
+
   # A runner: claims jobs and builds images.
   #
   # It is a module rather than part of the core so that it can live on a machine
@@ -390,6 +418,8 @@ volumes:
   # The images themselves, shared between the registry that writes them and the
   # module that reports how much of the disk they take.
   dogit-registry:
+  # ZIP archives fetched by the Composer package proxy.
+  dogit-composer-cache:
   # Checkouts a runner makes. Its own volume, so that a runner can be replaced
   # without losing the workspace it was in the middle of using.
   #

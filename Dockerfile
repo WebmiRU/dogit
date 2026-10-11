@@ -27,6 +27,9 @@ RUN CGO_ENABLED=0 go build -trimpath \
         -o /out/module-registry ./cmd/module-registry \
  && CGO_ENABLED=0 go build -trimpath \
         -ldflags "-s -w" \
+        -o /out/module-registry-composer ./cmd/module-registry-composer \
+ && CGO_ENABLED=0 go build -trimpath \
+        -ldflags "-s -w" \
         -o /out/module-runner ./cmd/module-runner \
  && CGO_ENABLED=0 go build -trimpath \
         -ldflags "-s -w" \
@@ -93,6 +96,7 @@ COPY --from=build /out/dogit      /usr/local/bin/dogit
 COPY --from=build /out/dogit-hook /usr/local/bin/dogit-hook
 COPY --from=build /out/module-cache-demo /usr/local/bin/module-cache-demo
 COPY --from=build /out/module-registry /usr/local/bin/module-registry
+COPY --from=build /out/module-registry-composer /usr/local/bin/module-registry-composer
 COPY --from=build /out/module-runner /usr/local/bin/module-runner
 COPY --from=build /out/module-notify-telegram /usr/local/bin/module-notify-telegram
 COPY --from=build /out/module-deploy-kubernetes /usr/local/bin/module-deploy-kubernetes

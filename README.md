@@ -266,6 +266,27 @@ PUT  /api/v1/modules/{id}/settings     administrator, ?scope=instance|group|proj
 It has no product behaviour on purpose: it exists so the contract has a second
 implementation before real modules are built.
 
+
+### Composer registry
+
+The read-only `registry:composer` module provides a public Composer 2 repository proxy.
+It fetches package metadata from Packagist by default and can merge an additional Composer 2 upstream.
+ZIP distribution URLs are rewritten to the Dogit module and cached in filesystem storage or S3; source/Git URLs remain upstream.
+Metadata and the archive map are stored in the existing PostgreSQL instance in tables prefixed `composer_`.
+
+Create a dedicated module token and put its value in `DOGIT_MODULE_COMPOSER_TOKEN` in `.env`:
+
+```sh
+docker compose exec app dogit module token create --name registry-composer
+docker compose up -d --build module-registry-composer
+```
+
+By default, the development stack publishes the proxy at `http://127.0.0.1:8095`.
+Set `DOGIT_COMPOSER_PUBLIC_URL` to the public HTTPS address before exposing it to other machines.
+The module has no Composer-client authentication and does not support package publishing or cache eviction.
+Configure the primary/additional upstreams and the filesystem/S3 backend in **Admin → Modules → composer → Settings**.
+See the **Packages** tab there for cached metadata, versions, ZIP status, sizes, and last fetch times.
+
 ## Database
 
 PostgreSQL 19, one cluster for everything. Modules that declare `"database": true`
