@@ -234,6 +234,83 @@ func TestSupersededDeploymentStatusSurvivesBuildFinishingLater(t *testing.T) {
 	}
 }
 
+
+// A hard failure stops later stages but leaves same-stage siblings runnable.
+func TestFailedStageSkipsOnlyLaterStages(t *testing.T) {
+	st := dbtest.Open(t)
+	ctx := context.Background()
+	project := dbtest.NewProject(t, st, "stageskip", nil)
+	_, err := st.Pipelines().CreatePipeline(ctx, project.ID, "main", "stage-skip", "manual",
+		nil, nil, store.Commit{}, []store.Job{
+			{Name: "build-fails", Stage: "build", StageOrder: 0, Script: []string{"false"}},
+			{Name: "build-sibling", Stage: "build", StageOrder: 0, Script: []string{"true"}},
+			{Name: "verify", Stage: "verify", StageOrder: 1, Script: []string{"true"}},
+		})
+	if err != nil {
+		t.Fatalf("create pipeline: %v", err)
+	}
+	failed, err := st.Pipelines().ClaimJob(ctx, uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("claim first build: %v", err)
+	}
+	if failed.Name != "build-fails" {
+		t.Fatalf("claimed %q, want build-fails", failed.Name)
+	}
+	if err := st.Pipelines().FinishJob(ctx, failed.ID, store.JobFailed, time.Second, "build failed"); err != nil {
+		t.Fatalf("finish failed stage job: %v", err)
+	}
+	jobs, err := st.Pipelines().JobsOfPipeline(ctx, failed.PipelineID)
+	if err != nil {
+		t.Fatalf("read jobs: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, job := range jobs {
+		statuses[job.Name] = job.Status
+	}
+	if statuses["build-sibling"] != store.JobPending {
+		t.Errorf("same-stage sibling status = %q, want pending", statuses["build-sibling"])
+	}
+	if statuses["verify"] != store.JobSkipped {
+		t.Errorf("later-stage status = %q, want skipped", statuses["verify"])
+	}
+	next, err := st.Pipelines().ClaimJob(ctx, uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("claim same-stage sibling: %v", err)
+	}
+	if next.Name != "build-sibling" {
+		t.Fatalf("claimed %q, want build-sibling", next.Name)
+	}
+}
+
+// The artifact catalog includes a pending image build before a runner claims it.
+func TestListBuildArtifactsIncludesPendingBuildJobs(t *testing.T) {
+	st := dbtest.Open(t)
+	ctx := context.Background()
+	project := dbtest.NewProject(t, st, "artifactcatalog", nil)
+	pipeline, err := st.Pipelines().CreatePipeline(ctx, project.ID, "v1", "abc123", "tag",
+		nil, nil, store.Commit{}, []store.Job{
+			{Name: "image", Stage: "build", StageOrder: 0, Build: map[string]any{
+				"image": "registry.example/app", "tag": "v1",
+			}},
+			{Name: "verify", Stage: "verify", StageOrder: 1, Script: []string{"echo verify"}},
+		})
+	if err != nil {
+		t.Fatalf("create pipeline: %v", err)
+	}
+	got, total, err := st.Pipelines().ListBuildArtifacts(ctx, project.ID, 1, 30)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if total != 1 || len(got) != 1 {
+		t.Fatalf("got %d items (total %d), want one", len(got), total)
+	}
+	if got[0].PipelineIID != pipeline.IID || got[0].Status != store.JobPending {
+		t.Errorf("artifact record = %+v, want pending job in pipeline %d", got[0], pipeline.IID)
+	}
+	if got[0].QueuePriority != store.QueuePriorityNormal {
+		t.Errorf("queue priority = %d, want normal priority %d", got[0].QueuePriority, store.QueuePriorityNormal)
+	}
+}
 // Jobs come back in the order they were declared, and a job carries its build
 // definition because that is what a runner needs and only the pipeline has it.
 func TestJobsCarryWhatARunnerNeeds(t *testing.T) {

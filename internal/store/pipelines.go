@@ -844,11 +844,11 @@ func (r *PipelineRepo) FinishJob(ctx context.Context, id int64, status string, d
 			UPDATE jobs SET status = $2, finished_at = now()
 			WHERE pipeline_id = (
 			    SELECT pipeline_id FROM jobs
-			    WHERE id = $1 AND (status <> $5 OR NOT allow_failure)
+			    WHERE id = $1 AND (status <> $4 OR NOT allow_failure)
 			)
 			  AND stage_order > (SELECT stage_order FROM jobs WHERE id = $1)
 			  AND status = $3`,
-			id, JobSkipped, JobPending, status, JobFailed); err != nil {
+			id, JobSkipped, JobPending, JobFailed); err != nil {
 			return fmt.Errorf("skip the stages after a stopped job: %w", err)
 		}
 	}
