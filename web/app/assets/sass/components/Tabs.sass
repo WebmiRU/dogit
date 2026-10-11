@@ -30,3 +30,29 @@
 .p2-content-tabs > button,
 .mr-state-tab
   border-radius: 0 !important
+
+
+// Group pages use buttons rather than links for their query-backed tabs.
+// Give those buttons the same baseline and underline as the repository links;
+// otherwise the browser's native button border and padding leak into the tab bar.
+.repo-tabs > button
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  box-sizing: border-box
+  padding: 10px 13px 9px
+  border: 0
+  border-bottom: 2px solid transparent
+  border-radius: 0
+  background: transparent
+  color: var(--text-muted)
+  font: inherit
+  text-decoration: none
+  white-space: nowrap
+  cursor: pointer
+
+.repo-tabs > button.active,
+.repo-tabs > button:hover
+  color: var(--text)
+  border-bottom-color: var(--accent)
+  text-decoration: none
