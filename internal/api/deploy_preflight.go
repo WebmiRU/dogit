@@ -3,7 +3,11 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
+	"path"
 	"strings"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/ewolf/dogit/internal/pipeline"
 )
@@ -13,20 +17,41 @@ import (
 // though the resulting image addresses are not.
 func (s *Server) validateBuildImageReferences(ctx context.Context, repoDir, sha string, config *pipeline.Config) error {
 	outputs := config.NamedBuildOutputs()
-	if len(outputs) == 0 {
-		return nil
-	}
-
 	available := make(map[string]struct{}, len(outputs))
 	for _, output := range outputs {
 		available[pipeline.ImageVariableName(output.Name)] = struct{}{}
 	}
-	check := func(path, body string) error {
+
+	// Check build paths against this commit's tree, not a moving branch or working directory.
+	if len(outputs) > 0 {
+		entries, err := s.git.ListTree(ctx, repoDir, sha, "", true)
+		if err != nil {
+			return fmt.Errorf("list files at %s: %w", shortSHA(sha), err)
+		}
+		files := make(map[string]struct{}, len(entries))
+		for _, entry := range entries {
+			if entry.Type == "blob" {
+				files[entry.Path] = struct{}{}
+			}
+		}
+		for _, output := range outputs {
+			if err := validateNamedBuildOutput(output, files); err != nil {
+				return err
+			}
+		}
+	}
+	check := func(file, body string) error {
+		if err := validateManifestYAML(file, body); err != nil {
+			return err
+		}
+		if len(outputs) == 0 {
+			return nil
+		}
 		if err := validateBuildImageVariables(body, available); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+			return fmt.Errorf("%s: %w", file, err)
 		}
 		if hasLegacyImagePlaceholder(body) {
-			return fmt.Errorf("%s still uses the legacy IMAGE placeholder; use a named ${BUILD_<NAME>_IMAGE_URL} variable", path)
+			return fmt.Errorf("%s still uses the legacy IMAGE placeholder; use a named ${BUILD_<NAME>_IMAGE_URL} variable", file)
 		}
 		return nil
 	}
@@ -51,11 +76,97 @@ func (s *Server) validateBuildImageReferences(ctx context.Context, repoDir, sha 
 					return err
 				}
 			}
-			if step.Image != "" {
+			if step.Image != "" && len(outputs) > 0 {
 				if err := validateBuildImageVariables(step.Image, available); err != nil {
 					return fmt.Errorf("deploy step image %q: %w", step.Image, err)
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// validateManifestYAML checks every YAML document before a pipeline runner starts.
+// A live cluster is still needed for schema and admission validation, but syntax can be checked here.
+func validateManifestYAML(file, body string) error {
+	decoder := yaml.NewDecoder(strings.NewReader(body))
+	documents := 0
+	for {
+		var document yaml.Node
+		err := decoder.Decode(&document)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("%s is not valid YAML: %w", file, err)
+		}
+		if len(document.Content) == 0 {
+			continue
+		}
+		documents++
+	}
+	if documents == 0 {
+		return fmt.Errorf("%s contains no YAML document", file)
+	}
+	return nil
+}
+
+// validateNamedBuildOutput checks required build fields and confirms that its Dockerfile and
+// context directory exist in the repository commit the pipeline is running against.
+func validateNamedBuildOutput(output pipeline.BuildOutputSpec, files map[string]struct{}) error {
+	image, ok := output.Build["image"].(string)
+	if !ok || strings.TrimSpace(image) == "" {
+		return fmt.Errorf("stages.build.%s.image must be a non-empty string", output.Name)
+	}
+
+	contextDir := "."
+	if value, exists := output.Build["context"]; exists {
+		var ok bool
+		contextDir, ok = value.(string)
+		if !ok || strings.TrimSpace(contextDir) == "" {
+			return fmt.Errorf("stages.build.%s.context must be a non-empty relative directory", output.Name)
+		}
+	}
+	contextDir = strings.TrimSpace(strings.TrimPrefix(contextDir, "./"))
+	if path.IsAbs(contextDir) || path.Clean(contextDir) == ".." || strings.HasPrefix(path.Clean(contextDir), "../") {
+		return fmt.Errorf("stages.build.%s.context must stay inside the repository", output.Name)
+	}
+	contextDir = path.Clean(contextDir)
+	if contextDir != "." {
+		found := false
+		for file := range files {
+			if strings.HasPrefix(file, contextDir+"/") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("stages.build.%s.context directory %q does not exist at this commit", output.Name, contextDir)
+		}
+	}
+
+	dockerfile := "Dockerfile"
+	if value, exists := output.Build["dockerfile"]; exists {
+		var ok bool
+		dockerfile, ok = value.(string)
+		if !ok || strings.TrimSpace(dockerfile) == "" {
+			return fmt.Errorf("stages.build.%s.dockerfile must be a non-empty relative path", output.Name)
+		}
+	}
+	dockerfile = strings.TrimSpace(dockerfile)
+	if path.IsAbs(dockerfile) || path.Clean(dockerfile) == ".." || strings.HasPrefix(path.Clean(dockerfile), "../") {
+		return fmt.Errorf("stages.build.%s.dockerfile must stay inside the build context", output.Name)
+	}
+	expected := path.Clean(dockerfile)
+	if contextDir != "." {
+		expected = path.Join(contextDir, expected)
+	}
+	if _, exists := files[expected]; !exists {
+		return fmt.Errorf("stages.build.%s Dockerfile %q does not exist at this commit", output.Name, expected)
+	}
+	if value, exists := output.Build["tag"]; exists {
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("stages.build.%s.tag must be a string", output.Name)
 		}
 	}
 	return nil
@@ -77,10 +188,11 @@ func validateBuildImageVariables(text string, available map[string]struct{}) err
 			return fmt.Errorf("unterminated generated image variable near %q", after)
 		}
 		name := after[:end]
-		if strings.HasSuffix(name, "_IMAGE_URL") {
-			if _, ok := available[name]; !ok {
-				return fmt.Errorf("unknown generated image variable ${%s}", name)
-			}
+		if !strings.HasSuffix(name, "_IMAGE_URL") {
+			return fmt.Errorf("invalid generated image variable ${%s}: expected the _IMAGE_URL suffix", name)
+		}
+		if _, ok := available[name]; !ok {
+			return fmt.Errorf("unknown generated image variable ${%s}", name)
 		}
 		remaining = after[end+1:]
 	}

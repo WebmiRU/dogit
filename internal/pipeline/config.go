@@ -369,6 +369,13 @@ func parseMapStageDefinitions(raw []*yaml.Node) (*Config, error) {
 		config.Stages = append(config.Stages, name)
 		config.Order = append(config.Order, name)
 	}
+	for _, output := range config.NamedBuildOutputs() {
+		for _, stage := range config.StageSpecs {
+			if stage.Name != "build" && output.Name == stage.Name {
+				return nil, fmt.Errorf("build output %q conflicts with the job for stage %q", output.Name, stage.Name)
+			}
+		}
+	}
 	if buildAt >= 0 && deployAt >= 0 && deployAt < buildAt {
 		return nil, fmt.Errorf("stage deploy cannot appear before stage build")
 	}

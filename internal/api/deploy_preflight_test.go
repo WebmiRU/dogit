@@ -3,6 +3,8 @@ package api
 import (
 	"strings"
 	"testing"
+
+	"github.com/ewolf/dogit/internal/pipeline"
 )
 
 func TestValidateBuildImageVariables(t *testing.T) {
@@ -43,5 +45,41 @@ func TestNamedImageSubstitutionRejectsLegacyPlaceholder(t *testing.T) {
 	}
 	if hasLegacyImagePlaceholder("image: ${BUILD_API_IMAGE_URL}\n") {
 		t.Fatal("named image variable was classified as legacy placeholder")
+	}
+}
+
+
+func TestValidateManifestYAMLRejectsInvalidSyntaxAndEmptyFiles(t *testing.T) {
+	for _, body := range []string{
+		"apiVersion: apps/v1\nkind: [Deployment\n",
+		"",
+		"# comments only\n",
+	} {
+		if err := validateManifestYAML("k8s/deployment.yaml", body); err == nil {
+			t.Errorf("invalid manifest YAML was accepted: %q", body)
+		}
+	}
+	if err := validateManifestYAML("k8s/deployment.yaml", "apiVersion: apps/v1\nkind: Deployment\n---\napiVersion: v1\nkind: Service\n"); err != nil {
+		t.Fatalf("multi-document YAML rejected: %v", err)
+	}
+}
+
+func TestValidateNamedBuildOutputChecksCommitPaths(t *testing.T) {
+	files := map[string]struct{}{
+		"Dockerfile": {},
+		"services/worker/Dockerfile": {},
+		"services/worker/main.go": {},
+	}
+	good := pipeline.BuildOutputSpec{Name: "worker", Build: map[string]any{
+		"image": "registry.example/myapp/worker", "context": "services/worker", "dockerfile": "Dockerfile", "tag": "sha",
+	}}
+	if err := validateNamedBuildOutput(good, files); err != nil {
+		t.Fatalf("valid build output rejected: %v", err)
+	}
+	bad := pipeline.BuildOutputSpec{Name: "worker", Build: map[string]any{
+		"image": "registry.example/myapp/worker", "context": "missing", "dockerfile": "Dockerfile",
+	}}
+	if err := validateNamedBuildOutput(bad, files); err == nil {
+		t.Fatal("missing build context was accepted")
 	}
 }
