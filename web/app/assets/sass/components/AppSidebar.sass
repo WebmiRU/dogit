@@ -1,0 +1,224 @@
+// The application menu, in the same hand as the project rail.
+//
+// It was a column of unicode glyphs — ◧ ▤ ◫ ⑂ — inside a rounded box per entry. The
+// glyphs came out as whatever font the machine had, so the row said "dashboard" in one
+// browser and something else entirely in the next, and a box around every item made a
+// list of six things look like six buttons rather than one menu. The project rail had
+// already been redrawn with drawn icons, a caption above the first group and a rule
+// between groups; this is that same treatment applied to the menu every other route has,
+// so the two do not read as two products.
+//
+// Everything is drawn in the 16×16 box and stroked at 1.4, because that is what the rail
+// does. Nothing here has a minimum width: below 760px the whole menu becomes a wrapping
+// grid of groups and every label is allowed its full width, because a label truncated to
+// "Adminis…" is the one part of the menu that cannot be guessed at.
+
+// --- the rail -----------------------------------------------------------------
+
+.app-nav-rail
+  display: grid
+  gap: 6px
+  align-content: start
+  min-width: 0
+
+.app-nav-group
+  min-width: 0
+
+.app-nav-group + .app-nav-group
+  margin-top: 5px
+  padding-top: 10px
+  border-top: 1px solid var(--border)
+
+.app-nav-group-title
+  display: flex
+  min-height: 26px
+  align-items: center
+  gap: 8px
+  margin: 0
+  padding: 0 8px
+  color: #8d9099
+  font-size: 10.5px
+  font-weight: 700
+  letter-spacing: .045em
+  line-height: 1.2
+  text-transform: uppercase
+
+.app-nav-group-title svg
+  display: block
+  flex: 0 0 15px
+  width: 15px
+  height: 15px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.35
+  stroke-linecap: round
+  stroke-linejoin: round
+
+.app-nav-links
+  display: grid
+  gap: 2px
+  margin-top: 3px
+
+// --- entries ------------------------------------------------------------------
+
+// The left rule rather than a filled pill: it marks the page you are on from the side,
+// where the eye already is, and it survives a dark background without a second colour
+// introduced for it.
+.app-nav-item
+  position: relative
+  display: flex
+  min-width: 0
+  min-height: 34px
+  align-items: center
+  gap: 10px
+  padding: 0 10px
+  border: 0
+  border-left: 2px solid transparent
+  border-radius: 3px
+  background: transparent
+  color: #a8aab2
+  font-size: 13px
+  font-weight: 450
+  line-height: 1.35
+  text-decoration: none
+  transition: background .12s ease, color .12s ease
+
+.app-nav-item:hover
+  background: #202126
+  color: #ececf0
+  text-decoration: none
+
+.app-nav-item:focus-visible
+  outline: 2px solid #677d99
+  outline-offset: -2px
+
+.app-nav-item.is-active
+  border-left-color: #8298b3
+  background: rgba(112, 137, 165, .16)
+  color: #f0f2f5
+  font-weight: 600
+
+.app-nav-item.is-planned
+  color: #6f7178
+  cursor: default
+
+.app-nav-item-icon
+  display: inline-flex
+  flex: 0 0 16px
+  width: 16px
+  height: 16px
+  align-items: center
+  justify-content: center
+  color: #8e929b
+
+.app-nav-item-icon svg
+  display: block
+  width: 15px
+  height: 15px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.45
+  stroke-linecap: round
+  stroke-linejoin: round
+
+.app-nav-item:hover .app-nav-item-icon,
+.app-nav-item.is-active .app-nav-item-icon
+  color: currentColor
+
+.app-nav-item-label
+  min-width: 0
+  overflow: hidden
+  text-overflow: ellipsis
+  white-space: nowrap
+
+// The parts of a section sit one step in: a name and not a page is smaller than a name
+// that is a page, and the indent is what says so without another font size.
+.app-nav-child
+  display: flex
+  min-width: 0
+  min-height: 30px
+  align-items: center
+  padding: 0 8px 0 20px
+  border-left: 2px solid transparent
+  border-radius: 3px
+  color: #9a9ca4
+  font-size: 12.5px
+  text-decoration: none
+  transition: background .12s ease, color .12s ease
+
+.app-nav-child:hover
+  background: #202126
+  color: #ececf0
+  text-decoration: none
+
+.app-nav-child.is-active
+  border-left-color: #8298b3
+  background: rgba(112, 137, 165, .16)
+  color: #f0f2f5
+  font-weight: 600
+
+.app-nav-child em
+  margin-left: 6px
+  color: #6f7178
+  font-size: 10.5px
+  font-style: normal
+
+// --- narrow -------------------------------------------------------------------
+
+// Below this the rail stops being a rail. It becomes groups laid out side by side
+// across the top of the page, which is the only arrangement that keeps nine labels
+// readable on a screen that cannot show a column of them.
+@media (max-width: 760px)
+  .app-nav-rail
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr))
+    gap: 10px 14px
+  .app-nav-group + .app-nav-group
+    margin-top: 0
+    padding-top: 0
+    border-top: 0
+  .app-nav-group-title
+    padding-left: 7px
+  .app-nav-item
+    padding-right: 7px
+    padding-left: 7px
+  .app-nav-child
+    padding-left: 14px
+
+// Below this there is no room for a column beside the page, so the menu lies down
+// across the top of it and the page begins underneath.
+//
+// It used not to come down at all: an older rule hid the whole sidebar below 900px,
+// which left a phone with a page and no way off it except the word in the top bar. The
+// rule is reversed here rather than deleted, because this file cannot know what else
+// wrote it — but the outcome is the same, and it is the outcome that was wanted.
+@media (max-width: 900px)
+  .body
+    flex-direction: column
+  .sidebar
+    width: 100%
+    flex: 0 0 auto
+    padding: 12px 14px
+    border-right: 0
+    border-bottom: 1px solid var(--border)
+  // The rail scrolls sideways rather than wrapping into an unbounded column, which
+  // is what a reader on a 320px screen wants: the menu stays one screenful tall and
+  // the page starts where it is instead of a menu's length down.
+  .app-nav-rail
+    display: flex
+    flex-wrap: nowrap
+    gap: 4px
+    overflow-x: auto
+    scrollbar-width: thin
+  .app-nav-group
+    flex: 0 0 auto
+    min-width: 132px
+  .app-nav-group + .app-nav-group
+    margin-top: 0
+    padding-top: 0
+    padding-left: 10px
+    border-top: 0
+    border-left: 1px solid var(--border)
+  .app-nav-group-title
+    padding-left: 7px
+  .sidebar-footer
+    display: none

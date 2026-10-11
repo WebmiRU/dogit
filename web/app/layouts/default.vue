@@ -50,51 +50,76 @@ interface NavItem {
   icon: string
   /** Prefix used to highlight the entry, so project pages keep Projects lit. */
   match?: string
-  /**
-   * A section made of parts rather than one page: the label becomes a heading and the parts
-   * are always shown under it. Not a link and not a disclosure — a section's parts are
-   * short enough to read at a glance, and hiding them behind a click hides the shape of the
-   * product from the one place that shows it.
-   */
+  /** Pages this one is a doorway to, listed under it rather than beside it. */
   parts?: NavChild[]
 }
 
-const navItems = computed<NavItem[]>(() => [
-  { label: 'Dashboard', to: '/', icon: '◧', match: '/' },
-  { label: 'Projects', to: '/projects', icon: '▤', match: '/projects' },
-  { label: 'Groups', to: '/groups', icon: '◫', match: '/groups' },
-  { label: 'Merge requests', to: '/merge-requests', icon: '⑂', match: '/merge-requests' },
-  { label: 'Activity', to: '/activity', icon: '≡', match: '/activity' },
+interface NavGroup {
+  key: string
+  label: string
+  icon: string
+  items: NavItem[]
+}
+
+/**
+ * The menu, in groups.
+ *
+ * Grouped because six destinations in one column is a list, and a list does not say which
+ * of them are the places you work and which are the places you occasionally visit. The
+ * groups are the same kind of thing the project rail draws — a name, a rule above it, and
+ * the entries under it — so the two menus are visibly the same object.
+ */
+const navGroups = computed<NavGroup[]>(() => [
   {
+    key: 'overview',
+    label: 'Overview',
+    icon: 'overview',
+    items: [
+      { label: 'Dashboard', to: '/', icon: 'dashboard', match: '/' },
+      { label: 'Activity', to: '/activity', icon: 'activity', match: '/activity' },
+    ],
+  },
+  {
+    key: 'workspace',
+    label: 'Workspace',
+    icon: 'workspace',
+    items: [
+      { label: 'Projects', to: '/projects', icon: 'projects', match: '/projects' },
+      { label: 'Groups', to: '/groups', icon: 'groups', match: '/groups' },
+      { label: 'Merge requests', to: '/merge-requests', icon: 'merge', match: '/merge-requests' },
+    ],
+  },
+  {
+    // The group is the section and its entries are the pages. It carried an entry of its
+    // own as well once, which meant the menu said "Registries" and then, underneath, said
+    // "Registries" again — two rows for one place, and no way to tell which one you were
+    // on. The caption already names the section; the entries are what it contains.
+    key: 'store',
     label: 'Registries',
-    to: '/registry',
-    icon: '⬓',
-    match: '/registry',
-    // Only what this instance can answer. A sidebar that lists a kind of registry this
-    // build cannot hold says the feature is planned, which is a plan rather than a fact —
-    // and it says it in the same place the reader looks to find out what is here.
-    parts: [
-      { label: 'Docker', to: '/registry/docker' },
+    icon: 'store',
+    // Only what this instance can answer. A menu that lists a kind of registry this build
+    // cannot hold says the feature is planned, which is a plan rather than a fact — and it
+    // says it in the same place the reader looks to find out what is here.
+    items: [
+      { label: 'Docker', to: '/registry/docker', icon: 'registry', match: '/registry' },
     ],
   },
   {
     // Administration was a dropdown in the top bar, behind a button that said "Admin" and
-    // hid the fact that it held five pages. In the sidebar it is a section like any other:
-    // its parts are listed, they are the same parts, and a reader can see what there is
-    // before deciding to click anything.
+    // hid the fact that it held four pages. In the menu it is a group like any other: its
+    // entries are listed, they are the same entries, and a reader can see what there is
+    // before deciding to click anything. Shown to everybody and answered by the pages
+    // themselves for those who are not administrators: the section says what the instance
+    // has, and a reader who clicks a part is told it needs administrator rights rather
+    // than finding a page that quietly renders nothing.
+    key: 'admin',
     label: 'Administration',
-    to: '/admin',
-    icon: '⚙',
-    match: '/admin',
-    // Shown to everybody in the sidebar and answered by the pages themselves for those who
-    // are not administrators: the section says what the instance has, and a reader who
-    // clicks a part is told it needs administrator rights rather than finding a page that
-    // quietly renders nothing.
-    parts: [
-      { label: 'Overview', to: '/admin' },
-      { label: 'Modules', to: '/admin/modules' },
-      { label: 'Users', to: '/admin/users' },
-      { label: 'Runners', to: '/admin/runners' },
+    icon: 'admin',
+    items: [
+      { label: 'Overview', to: '/admin', icon: 'admin-overview', match: '/admin' },
+      { label: 'Modules', to: '/admin/modules', icon: 'modules', match: '/admin/modules' },
+      { label: 'Users', to: '/admin/users', icon: 'users', match: '/admin/users' },
+      { label: 'Runners', to: '/admin/runners', icon: 'runners', match: '/admin/runners' },
     ],
   },
 ])
@@ -168,52 +193,48 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
 
     <div class="body">
       <aside v-if="user && !onRepository" class="sidebar">
-        <!-- Every item here leads somewhere. A link that does not work yet was
-             promising something the instance cannot do, and the promise was the only
-             thing about it: pipelines are reached from the project they belong to,
-             which is also where a person looking for one actually is. -->
-        <nav>
-          <template v-for="item in navItems" :key="item.label">
-            <!-- A section made of parts is a heading with the parts under it. The heading
-                 is not a link: the section has no page of its own — each part is its own
-                 list — so a link here would be a second way to the first part, and two
-                 entries for one place leave a reader unable to tell which one they are on. -->
-            <div v-if="item.parts" class="nav-group">
-              <div class="nav-heading" :class="{ active: isActive(item) }">
-                <span class="nav-icon">{{ item.icon }}</span>
-                {{ item.label }}
-              </div>
-              <div class="nav-children">
-                <template v-for="part in item.parts" :key="part.label">
+        <nav class="app-nav-rail" aria-label="Main sections">
+          <section
+            v-for="group in navGroups"
+            :key="group.key"
+            class="app-nav-group"
+          >
+            <h2 class="app-nav-group-title">
+              <AppIcon :name="group.icon" />
+              <span>{{ group.label }}</span>
+            </h2>
+            <div class="app-nav-links">
+              <template v-for="item in group.items" :key="item.label">
+                <NuxtLink
+                  :to="item.to"
+                  class="app-nav-item"
+                  :class="{ 'is-active': isActive(item) }"
+                >
+                  <span class="app-nav-item-icon">
+                    <AppIcon :name="item.icon" />
+                  </span>
+                  <span class="app-nav-item-label">{{ item.label }}</span>
+                </NuxtLink>
+                <template v-for="part in item.parts ?? []" :key="part.label">
                   <NuxtLink
                     v-if="part.to"
                     :to="part.to"
-                    class="nav-child"
-                    :class="{ active: partIsActive(item, part) }"
+                    class="app-nav-child"
+                    :class="{ 'is-active': partIsActive(item, part) }"
                   >
                     {{ part.label }}
                   </NuxtLink>
                   <!-- Named rather than hidden, like every other part of this product
                        without a backend yet: a part that is merely absent is a part nobody
                        knows is coming. -->
-                  <span v-else class="nav-child nav-child-planned" :title="part.note">
+                  <span v-else class="app-nav-child is-planned" :title="part.note">
                     {{ part.label }}
                     <em>{{ part.note }}</em>
                   </span>
                 </template>
-              </div>
+              </template>
             </div>
-
-            <NuxtLink
-              v-else
-              :to="item.to"
-              class="nav-item"
-              :class="{ active: isActive(item) && !(item.match === '/projects' && onRepository) }"
-            >
-              <span class="nav-icon">{{ item.icon }}</span>
-              {{ item.label }}
-            </NuxtLink>
-          </template>
+          </section>
         </nav>
 
         <div class="sidebar-footer">

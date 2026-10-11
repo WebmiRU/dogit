@@ -1,0 +1,267 @@
+// The home page: an identity header and three groups of cards.
+//
+// It borrows its shapes from the project pages rather than inventing its own, so a person
+// moving between the two is not learning a second interface: the header card is the same
+// header card, the section titles are the same section titles, the icons are cut to the
+// same stroke. What is different here is that there is no project rail beside it — the
+// global menu already is the rail on this route — so the sections run full width and the
+// groups are separated by rules rather than by a column.
+//
+// Every measure is fluid between 1200px and the viewport. Nothing here has a width of its
+// own to be given up at 320px, where the content is 300px: the tiles fall from five
+// across to two, the columns fall to one, and the rows stop trying to hold a name and a
+// time on one line.
+
+// --- the header ---------------------------------------------------------------
+
+.dashboard-head
+  margin-bottom: 22px
+
+.dashboard-head .project-mark
+  flex: 0 0 46px
+  width: 46px
+  height: 46px
+  border-radius: 9px
+  font-size: 19px
+
+// The greeting is the one thing on this page that is about the person rather than
+// about their work, so it is the subtitle and not the title: the title says which
+// page this is, which is what the breadcrumb and the browser already say.
+.dashboard-head .page-title
+  font-size: clamp(20px, 1.9vw, 26px)
+
+.dashboard-mark-label
+  display: block
+  margin-bottom: 5px
+  color: #858791
+  font-size: 10px
+  font-weight: 700
+  letter-spacing: .09em
+  text-transform: uppercase
+
+// --- section titles -----------------------------------------------------------
+
+// The same voice as the project rail's group titles, at the same weight and letter
+// spacing, so a section here and a group there are visibly the same thing.
+.dashboard-section + .dashboard-section
+  margin-top: 26px
+  padding-top: 22px
+  border-top: 1px solid var(--border)
+
+.dashboard-section-title
+  display: flex
+  min-height: 22px
+  align-items: center
+  gap: 8px
+  margin: 0 0 12px
+  color: #8d9099
+  font-size: 10.5px
+  font-weight: 700
+  letter-spacing: .045em
+  line-height: 1.2
+  text-transform: uppercase
+
+.dashboard-section-title svg
+  display: block
+  flex: 0 0 15px
+  width: 15px
+  height: 15px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.35
+  stroke-linecap: round
+  stroke-linejoin: round
+
+// --- counters -----------------------------------------------------------------
+
+// Five across until there is not room for five, then as many as fit: the tile that
+// drops to a second row is the one that keeps the width, so the numbers stay the
+// size of the numbers.
+.dashboard-stats
+  display: grid
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))
+  gap: 12px
+
+.dashboard-stat
+  display: flex
+  min-width: 0
+  align-items: center
+  gap: 12px
+  padding: 13px 15px
+  border: 1px solid var(--border)
+  border-radius: 8px
+  background: var(--bg-elevated)
+
+.dashboard-stat-icon
+  display: inline-flex
+  flex: 0 0 32px
+  width: 32px
+  height: 32px
+  align-items: center
+  justify-content: center
+  border: 1px solid #3a3b41
+  border-radius: 7px
+  background: #232429
+  color: #9aa0ab
+
+.dashboard-stat-icon svg
+  display: block
+  width: 16px
+  height: 16px
+  fill: none
+  stroke: currentColor
+  stroke-width: 1.4
+  stroke-linecap: round
+  stroke-linejoin: round
+
+.dashboard-stat-text
+  min-width: 0
+
+// The number first and the name under it, as before, but the name is not shouted:
+// upper case at 10px is a label on a tile, and at 12px it is a heading.
+.dashboard-stat-value
+  font-size: 21px
+  font-weight: 650
+  letter-spacing: -.3px
+  line-height: 1.15
+
+.dashboard-stat-label
+  overflow: hidden
+  margin-top: 2px
+  color: var(--text-muted)
+  font-size: 11px
+  text-overflow: ellipsis
+  white-space: nowrap
+
+// --- cards --------------------------------------------------------------------
+
+.dashboard-columns
+  display: grid
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr)
+  gap: 16px
+  align-items: start
+
+.dashboard-side
+  display: grid
+  gap: 16px
+  min-width: 0
+
+// A card header with an icon in it, which is what tells these cards apart from the
+// flat panels they replaced: each one now says what it is before it says what is in it.
+.dashboard-card-header
+  display: flex
+  min-height: 40px
+  align-items: center
+  gap: 8px
+  padding: 0 14px
+  border-bottom: 1px solid var(--border)
+
+.dashboard-card-title
+  display: flex
+  min-width: 0
+  align-items: center
+  gap: 8px
+  font-size: 13px
+  font-weight: 600
+
+.dashboard-card-title svg
+  display: block
+  flex: 0 0 15px
+  width: 15px
+  height: 15px
+  fill: none
+  stroke: #8e929b
+  stroke-width: 1.4
+  stroke-linecap: round
+  stroke-linejoin: round
+
+.dashboard-card-link
+  margin-left: auto
+  font-size: 11.5px
+  white-space: nowrap
+
+.dashboard-row
+  display: flex
+  gap: 10px
+  padding: 10px 14px
+  border-bottom: 1px solid var(--border)
+  font-size: 13px
+
+.dashboard-row:last-child
+  border-bottom: none
+
+// A row that cannot fit its two columns side by side stacks them, because a name
+// truncated to "conflict de…" is worse than a name on its own line.
+.dashboard-row-text
+  min-width: 0
+  flex: 1 1 auto
+
+.dashboard-row-meta
+  display: flex
+  min-width: 0
+  flex-wrap: wrap
+  gap: 4px 6px
+  margin-top: 2px
+  color: var(--text-muted)
+  font-size: 11.5px
+
+.dashboard-row-meta .truncate
+  max-width: 100%
+
+.dashboard-empty
+  padding: 16px 14px
+  color: var(--text-muted)
+  font-size: 12.5px
+
+.dashboard-project-name
+  overflow: hidden
+  min-width: 0
+  text-overflow: ellipsis
+  white-space: nowrap
+
+.dashboard-project-row
+  display: flex
+  min-width: 0
+  align-items: center
+  gap: 10px
+  padding: 9px 14px
+  border-bottom: 1px solid var(--border)
+
+.dashboard-project-row:last-child
+  border-bottom: none
+
+// --- narrow -------------------------------------------------------------------
+
+@media (max-width: 1000px)
+  .dashboard-columns
+    grid-template-columns: minmax(0, 1fr)
+
+@media (max-width: 760px)
+  .dashboard-head .project-identity
+    align-items: flex-start
+    gap: 11px
+  .dashboard-head .project-mark
+    flex: 0 0 38px
+    width: 38px
+    height: 38px
+    border-radius: 8px
+    font-size: 16px
+
+@media (max-width: 560px)
+  // Three across of a 150px minimum cannot fit in 300px, so two it is, and the
+  // tiles stop carrying an icon: at this width the number and the name are already
+  // the whole of the line, and the box beside them would be taking 20% of the tile
+  // to say nothing.
+  .dashboard-stats
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+    gap: 10px
+  .dashboard-stat
+    padding: 11px 13px
+  .dashboard-stat-icon
+    display: none
+  .dashboard-stat-value
+    font-size: 19px
+
+@media (max-width: 380px)
+  .dashboard-stats
+    grid-template-columns: minmax(0, 1fr)

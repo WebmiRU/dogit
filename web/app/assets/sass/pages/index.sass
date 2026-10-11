@@ -2,15 +2,13 @@
 //
 // The element attribute that made this scoped is gone with it: global styles are
 // selected by name, so a name used here has to mean one thing across the site.
+//
+// What is left here is the one rule the dashboard borrows rather than owns. Everything
+// else it uses lives with the thing it describes — the tiles and the cards in
+// DashboardHome, the counters shared with the admin overview in the old stylesheet —
+// because a rule that only the home page needs can sit with the home page, and one that
+// two pages need should not be sitting inside either of them.
 
-.index-feed-row
-  display: flex
-  gap: 10px
-  padding: 10px 16px
-  border-bottom: 1px solid var(--border)
-  font-size: 13px
-.index-feed-row:last-child
-  border-bottom: none
 .truncate
   overflow: hidden
   text-overflow: ellipsis
