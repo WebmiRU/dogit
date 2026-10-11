@@ -328,7 +328,7 @@ containers:
 
 Dogit validates output names, referenced manifests and generated image variables before
 creating pipeline jobs. Every output is a separate build job. Outputs may build in parallel,
-but later stages wait for the whole previous stage. All required builds and checks must
+but later stages wait for the whole previous stage. The deployment stage must be the final stage. All required builds and checks must
 succeed before Dogit sends one deployment request containing every prepared manifest.
 If any required image fails to build or push, no deployment request is sent; other images
 already pushed remain ordinary registry artifacts. For the current Kubernetes module all

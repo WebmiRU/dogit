@@ -496,3 +496,46 @@ stages:
 		t.Fatalf("error = %v, want build/deploy ordering error", err)
 	}
 }
+
+
+// Deployment must be the final stage. Otherwise an accidentally listed check after deploy
+// would give the configuration the appearance of validating a release before rolling it out.
+func TestMapStagesRejectStageAfterDeploy(t *testing.T) {
+	_, err := Parse([]byte(`
+stages:
+  build:
+    api: {image: registry.example/myapp/api}
+  deploy:
+    module: kubernetes
+    target: production
+    manifests: [k8s/deployment.yaml]
+  verify:
+    commands:
+      - shell:
+          command: ./ci/verify.sh
+`))
+	if err == nil || !strings.Contains(err.Error(), "stage deploy must be last") {
+		t.Fatalf("error = %v, want deploy-last validation error", err)
+	}
+}
+
+func TestListStagesRejectStageAfterDeploy(t *testing.T) {
+	_, err := Parse([]byte(`
+stages:
+  - name: build
+    build:
+      image: registry.example/myapp/api
+  - name: deploy
+    deploy:
+      module: kubernetes
+      target: production
+      manifests: [k8s/deployment.yaml]
+  - name: verify
+    commands:
+      - shell:
+          command: ./ci/verify.sh
+`))
+	if err == nil || !strings.Contains(err.Error(), "stage deploy must be last") {
+		t.Fatalf("error = %v, want deploy-last validation error", err)
+	}
+}
