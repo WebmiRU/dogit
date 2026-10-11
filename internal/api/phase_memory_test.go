@@ -210,3 +210,35 @@ func TestNothingIsOpenAfterTheStreamEnds(t *testing.T) {
 		t.Errorf("the last line of the history is %v, want the closing of rollout", last)
 	}
 }
+
+func TestRestoreClosesOnlyTheFinishedOutput(t *testing.T) {
+	memory := newPhaseMemory()
+	memory.restore(map[string]any{
+		"phase":         "push:content",
+		"active_phases": []any{"push:content", "push:web"},
+		"phase_history": []any{
+			map[string]any{"phase": "build:content", "message": "finished", "finished": true},
+			map[string]any{"phase": "push:content", "message": "pushing content"},
+			map[string]any{"phase": "push:web", "message": "pushing web"},
+		},
+	})
+	if got := phaseForBuildOutput(memory.open, "content"); got != "push:content" {
+		t.Fatalf("phase for content = %q, want push:content", got)
+	}
+	closing := map[string]any{"phase": "push:content", "message": "failed", "finished": true, "failed": true}
+	memory.note(closing, "push:content", true)
+	assertOpen(t, closing, "push:web")
+	if closing["failed"] != true {
+		t.Fatal("the failure verdict was lost while closing the phase")
+	}
+}
+
+func TestPhaseForBuildOutputDoesNotCloseAnotherImage(t *testing.T) {
+	open := []string{"push:api", "push:web"}
+	if got := phaseForBuildOutput(open, "content"); got != "" {
+		t.Fatalf("phase for missing output = %q, want none", got)
+	}
+	if got := phaseForBuildOutput(open, "web"); got != "push:web" {
+		t.Fatalf("phase for web = %q, want push:web", got)
+	}
+}

@@ -64,6 +64,88 @@ func (m *phaseMemory) stamp(payload map[string]any) {
 	payload["phase_history"] = phaseHistoryInOrder(m.lines, m.said, phaseOrder)
 }
 
+// restore reconstructs phase memory after a restart. It does nothing once this process has
+// already seen a phase, so a newer live account cannot be overwritten by an older snapshot.
+func (m *phaseMemory) restore(snapshot map[string]any) {
+	if m == nil || len(m.said) > 0 || len(m.open) > 0 || len(snapshot) == 0 {
+		return
+	}
+	if m.lines == nil {
+		m.lines = map[string]map[string]any{}
+	}
+	rows := []map[string]any{}
+	switch history := snapshot["phase_history"].(type) {
+	case []map[string]any:
+		rows = history
+	case []any:
+		for _, raw := range history {
+			if row, ok := raw.(map[string]any); ok {
+				rows = append(rows, row)
+			}
+		}
+	}
+	for _, row := range rows {
+		phase, _ := row["phase"].(string)
+		if phase == "" {
+			continue
+		}
+		if _, exists := m.lines[phase]; !exists {
+			m.said = append(m.said, phase)
+		}
+		kept := make(map[string]any, len(row))
+		for key, value := range row {
+			kept[key] = value
+		}
+		m.lines[phase] = kept
+	}
+	if active, present := snapshot["active_phases"]; present {
+		m.open = progressPhaseNames(active)
+	} else {
+		for _, phase := range m.said {
+			if finished, _ := m.lines[phase]["finished"].(bool); !finished {
+				m.open = append(m.open, phase)
+			}
+		}
+	}
+	phase, _ := snapshot["phase"].(string)
+	if phase != "" {
+		if _, exists := m.lines[phase]; !exists {
+			kept := make(map[string]any, len(snapshot))
+			for key, value := range snapshot {
+				kept[key] = value
+			}
+			m.lines[phase] = kept
+			m.said = append(m.said, phase)
+			if finished, _ := snapshot["finished"].(bool); !finished && !holdsPhase(m.open, phase) {
+				m.open = append(m.open, phase)
+			}
+		}
+	}
+}
+
+// progressPhaseNames reads active_phases from a JSON-decoded snapshot or event.
+func progressPhaseNames(value any) []string {
+	out := []string{}
+	add := func(phase string) {
+		if phase != "" && !holdsPhase(out, phase) {
+			out = append(out, phase)
+		}
+	}
+	switch phases := value.(type) {
+	case []string:
+		for _, phase := range phases {
+			add(phase)
+		}
+	case []any:
+		for _, raw := range phases {
+			if phase, ok := raw.(string); ok {
+				add(phase)
+			}
+		}
+	}
+	return out
+}
+
 // phaseOrder is the order phases are shown in when a page is rebuilt from a snapshot.
 //
 // A hint and not knowledge: this core deploys through whichever module a project names, and the

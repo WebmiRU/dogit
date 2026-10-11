@@ -1317,6 +1317,20 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 	// A progress report is sent to every destination, but it is still one phase
 	// transition by this job. Advancing once per destination makes the second target
 	// accidentally close the phase just opened for the first.
+	s.phaseUpdateMu.Lock()
+	defer s.phaseUpdateMu.Unlock()
+	// A runner may have reported before the core restarted. Do not accept progress after
+	// the job's durable terminal state.
+	latest, err := s.store.Pipelines().JobByID(r.Context(), jobID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if latest.FinishedAt != nil {
+		s.writeJSON(w, r, http.StatusNoContent, nil)
+		return
+	}
+	job = latest
 	closedPhase := s.phaseBefore(job.ID, phase)
 
 	// Said once per place this run is on its way to, because a card is watching one place
@@ -1361,6 +1375,11 @@ func (s *Server) handleJobProgress(w http.ResponseWriter, r *http.Request) {
 		// Parallel build outputs share one deployment record. Their phases are independent,
 		// so keep the last line of every named image under the same operation id.
 		memory := s.phasesOf(operation)
+		if len(memory.said) == 0 && len(memory.open) == 0 {
+			if snapshot, err := s.store.Pipelines().StoredDeployProgress(r.Context(), operation); err == nil {
+				memory.restore(snapshot)
+			}
+		}
 
 		var closing map[string]any
 		if closedPhase != "" {
@@ -1420,6 +1439,25 @@ func whichOperation(reporting int64, isDeployment bool, place aPlaceNamed) int64
 		return reporting
 	}
 	return place.job
+}
+
+// phaseForBuildOutput returns the last open phase belonging to one named output, or the
+// generic build/push phase used by older single-image jobs. It deliberately does not choose
+// another output's phase when parallel image jobs finish in a different order.
+func phaseForBuildOutput(open []string, outputName string) string {
+	for index := len(open) - 1; index >= 0; index-- {
+		phase := open[index]
+		if outputName == "" {
+			if phase == "build" || phase == "push" {
+				return phase
+			}
+			continue
+		}
+		if phase == "build:"+outputName || phase == "push:"+outputName {
+			return phase
+		}
+	}
+	return ""
 }
 
 // runStillHasWork is whether a run has a job left to do, in the sense that decides whether
@@ -1513,35 +1551,58 @@ func (s *Server) handleFinishJob(w http.ResponseWriter, r *http.Request) {
 	//
 	// Only for phases this endpoint heard about. A deployment's phases come from its module,
 	// which closes its own, and a job that never said a phase has nothing to close.
-	if closed := s.closePhases(jobID); closed != "" {
-		if project, perr := s.store.Projects().ByID(r.Context(), job.ProjectID); perr == nil {
-			for _, place := range s.placesOfRun(r.Context(), project, job.PipelineID) {
-				operation := whichOperation(jobID, job.Deploy != nil, place)
-				record := map[string]any{"cluster": place.place}
-				if place.namespace != "" {
-					record["namespace"] = place.namespace
+	s.phaseUpdateMu.Lock()
+	defer s.phaseUpdateMu.Unlock()
+	closed := s.closePhases(jobID)
+	if project, perr := s.store.Projects().ByID(r.Context(), job.ProjectID); perr == nil {
+		places := s.placesOfRun(r.Context(), project, job.PipelineID)
+		// A build with no deploy target still has a progress record of its own to close.
+		if len(places) == 0 {
+			places = []aPlaceNamed{{job: jobID}}
+		}
+		outputName, _ := job.Build["__dogit_output_name"].(string)
+		for _, place := range places {
+			operation := whichOperation(jobID, job.Deploy != nil, place)
+			phase := closed
+			memory := s.phasesOf(operation)
+			if len(memory.said) == 0 && len(memory.open) == 0 {
+				if snapshot, err := s.store.Pipelines().StoredDeployProgress(r.Context(), operation); err == nil {
+					memory.restore(snapshot)
 				}
-				closing := map[string]any{
-					"job_id": operation, "phase": closed, "message": "finished",
-					"finished": true, "deployment": record,
-				}
-				if status == store.JobFailed {
-					closing["failed"] = true
-					if reason != "" {
-						closing["message"] = reason
-					} else {
-						closing["message"] = "the job failed"
-					}
-				}
-				// For a build output the history belongs to the deployment operation, not
-				// the build job. Persist the failed closure there so a later page load sees it.
-				if operation != jobID {
-					memory := s.phasesOf(operation)
-					memory.note(closing, closed, true)
-					s.rememberDeployProgress(r.Context(), operation, closing)
-				}
-				s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, closing)
 			}
+			// If the core restarted, the reporting job's in-memory last phase is gone.
+			// Recover only this output's phase, leaving any parallel output open.
+			if phase == "" && job.Build != nil {
+				phase = phaseForBuildOutput(memory.open, outputName)
+			}
+			if phase == "" {
+				continue
+			}
+			record := map[string]any{}
+			if place.place != "" {
+				record["cluster"] = place.place
+			}
+			if place.namespace != "" {
+				record["namespace"] = place.namespace
+			}
+			closing := map[string]any{
+				"job_id": operation, "phase": phase, "message": "finished",
+				"finished": true,
+			}
+			if place.place != "" {
+				closing["deployment"] = record
+			}
+			if status == store.JobFailed {
+				closing["failed"] = true
+				if reason != "" {
+					closing["message"] = reason
+				} else {
+					closing["message"] = "the job failed"
+				}
+			}
+			memory.note(closing, phase, true)
+			s.rememberDeployProgress(r.Context(), operation, closing)
+			s.publishPipeline(r.Context(), project.ID, nil, models.EventDeployOperation, closing)
 		}
 	}
 

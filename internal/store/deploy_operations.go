@@ -254,6 +254,22 @@ func placeOf(record map[string]any, cluster string) string {
 	return target
 }
 
+// StoredDeployProgress reads the last snapshot for an operation. A runner may finish after
+// the core restarted, so the in-memory phase map can be empty while a phase is still open here.
+func (r *PipelineRepo) StoredDeployProgress(ctx context.Context, jobID int64) (map[string]any, error) {
+	var raw []byte
+	if err := r.s.pool.QueryRow(ctx,
+		`SELECT deploy_progress FROM jobs WHERE id = $1`, jobID).Scan(&raw); err != nil {
+		return nil, fmt.Errorf("read a deployment's progress: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	progress := map[string]any{}
+	decodeJSONB(raw, &progress)
+	return progress, nil
+}
+
 // RememberDeployProgress writes down what a deployment has most recently said about itself.
 //
 // One row, overwritten: this is a note about a moment and not a record of them. The record is

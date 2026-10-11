@@ -70,6 +70,10 @@ type Server struct {
 	// that reported, since a pipeline runs several at once and their phases are unrelated.
 	lastPhaseMu sync.Mutex
 	lastPhase   map[int64]string
+
+	// Multiple image jobs update the same deployment snapshot. A phase transition,
+	// durable snapshot write and socket event must be one ordered update.
+	phaseUpdateMu sync.Mutex
 	// memory is what each reporting job's lines have said so far, kept so the snapshot this
 	// endpoint writes can carry the same account a module's own lines carry.
 	//
