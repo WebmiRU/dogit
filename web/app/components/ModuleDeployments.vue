@@ -1257,13 +1257,13 @@ let stopRun: (() => void) | undefined
 const endedStatuses = ['success', 'failed', 'canceled', 'cancelled', 'abandoned', 'skipped']
 
 /**
- * The phases that belong to building rather than to deploying.
+ * The phases that belong to building and publishing rather than to deploying.
  *
- * A run reports these whether or not it goes on to deploy anything, so they are the
- * ones that must not be taken as "a deployment is under way" — and they are how a run
- * that deploys nothing is told apart from one that has not started deploying yet.
+ * A run can report these even if it does not deploy. Pre/post are different: they are
+ * steps run by the deployment module around resource application, so the Log tab must
+ * show them as deployment work, not a Docker build that is still underway.
  */
-const buildPhases = ['build', 'push', 'pre', 'post']
+const buildPhases = ['build', 'push']
 
 onMounted(async () => {
   // Listening comes before fetching, and not for tidiness.

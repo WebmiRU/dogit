@@ -194,16 +194,39 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	log("Deploying to %s\n", spec.Target)
 	log("  module:    %s\n", spec.Module)
 
-	// The image this run built. A deployment of something else is a different thing
-	// and is refused here rather than sent on to be applied as though it were what
-	// the run produced: the whole point of rolling out by digest is that the thing
-	image, err := s.imageForDeploy(ctx, job, pipelineRun, log)
-	if err != nil {
-		return err
+	// Named outputs are collected as a complete set. No module request is made until
+	// every required image was built, pushed and recorded with its digest. Legacy pipeline
+	// formats retain their single-image behaviour below.
+	outputs := config.NamedBuildOutputs()
+	imageVariables := map[string]string{}
+	var image string
+	var err error
+	if len(outputs) > 0 {
+		images, imageErr := s.namedBuildImageReferences(ctx, pipelineRun, outputs)
+		if imageErr != nil {
+			return imageErr
+		}
+		image = images[outputs[0].Name]
+		firstRegistry := registryHostFrom(image)
+		for _, output := range outputs {
+			reference := images[output.Name]
+			if !sameRegistry(firstRegistry, registryHostFrom(reference)) {
+				return fmt.Errorf("named outputs currently must be published to the same registry; %q and %q use different registries", outputs[0].Name, output.Name)
+			}
+			variable := pipeline.ImageVariableName(output.Name)
+			imageVariables[variable] = reference
+			log("  image output %s: %s=%s\n", output.Name, variable, reference)
+		}
+		log("  images:    %d required outputs are pinned and ready\n", len(outputs))
+	} else {
+		image, err = s.imageForDeploy(ctx, job, pipelineRun, log)
+		if err != nil {
+			return err
+		}
+		log("  image:     %s\n", image)
 	}
-	log("  image:     %s\n", image)
 
-	// Build and push are not announced from here any more.
+
 	//
 	// They used to be, because they were over before the deploy started and this was
 	// the only place that knew they had happened. The runner now says so itself, while
@@ -237,7 +260,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		// repeated it here would be a second place to keep in step with the first.
 		Place:          spec.Target,
 		Image:          image,
-		Placeholder:    imagePlaceholder,
+		Placeholder:    placeholderFor(outputs),
 		Manifests:      manifests,
 		Pre:            pre,
 		Post:           post,
@@ -290,6 +313,17 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		log("  registry:   %s%s\n", pull.Address, pullSaid(pull))
 		request.Image = pull.Image
 		request.Registry = pull.credential()
+	}
+
+	if len(outputs) > 0 {
+		if pull != nil {
+			for variable, reference := range imageVariables {
+				imageVariables[variable] = imageAtRegistry(reference, pull.Address)
+			}
+		}
+		if err := substituteBuildImageVariablesInRequest(&request, imageVariables); err != nil {
+			return fmt.Errorf("could not prepare all deployment manifests: %w", err)
+		}
 	}
 
 	body, err := json.Marshal(request)
@@ -737,6 +771,50 @@ func prefaceFor(ctx context.Context, s *Server, run *store.Pipeline, jobID int64
 // run produced an image.
 // pinnedBuildReference returns the image by the digest recorded after a successful push.
 // The recorded tag is only accepted when it names the repository built for this deployment.
+func placeholderFor(outputs []pipeline.BuildOutputSpec) string {
+	if len(outputs) > 0 {
+		return ""
+	}
+	return imagePlaceholder
+}
+
+// namedBuildImageReferences resolves every configured output to the exact digest
+// recorded by its successful build job. A missing/failed output or absent digest makes
+// the entire deployment ineligible; the caller never gets a partial map.
+func (s *Server) namedBuildImageReferences(ctx context.Context, run *store.Pipeline,
+	outputs []pipeline.BuildOutputSpec) (map[string]string, error) {
+	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read build outputs for pipeline %d: %w", run.IID, err)
+	}
+	images := make(map[string]string, len(outputs))
+	for _, output := range outputs {
+		var producer *store.Job
+		for index := range jobs {
+			if jobs[index].Name == output.Name && jobs[index].Stage == "build" {
+				producer = &jobs[index]
+				break
+			}
+		}
+		if producer == nil {
+			return nil, fmt.Errorf("required build output %q has no job in pipeline %d", output.Name, run.IID)
+		}
+		if producer.Status != "success" {
+			return nil, fmt.Errorf("required build output %q did not succeed (status: %s); no deployment was started", output.Name, producer.Status)
+		}
+		if len(producer.Build) == 0 {
+			return nil, fmt.Errorf("required build output %q has no recorded image", output.Name)
+		}
+		image := strings.TrimSpace(asString(producer.Build["image"]))
+		pinned := pinnedBuildReference(producer.Build, image)
+		if pinned == "" {
+			return nil, fmt.Errorf("required build output %q has no verified digest from a successful push; no deployment was started", output.Name)
+		}
+		images[output.Name] = pinned
+	}
+	return images, nil
+}
+
 func pinnedBuildReference(build map[string]any, expectedImage string) string {
 	reference := strings.TrimSpace(asString(build["reference"]))
 	digest := strings.TrimSpace(asString(build["digest"]))
@@ -1044,9 +1122,13 @@ func deployStepsFor(built string, manifests, pre, post int) []deployStepName {
 	steps := make([]deployStepName, 0, 9)
 
 	if built != "" {
+		buildLabel, pushLabel := "Build the image", "Push the image"
+		if strings.Contains(built, "all build jobs") {
+			buildLabel, pushLabel = "Build all images", "Publish all images"
+		}
 		steps = append(steps,
-			deployStepName{"build", "Build the image"},
-			deployStepName{"push", "Push the image"})
+			deployStepName{"build", buildLabel},
+			deployStepName{"push", pushLabel})
 	}
 
 	steps = append(steps, deployStepName{"prepare", "Read the manifests"})
@@ -1142,8 +1224,17 @@ func (s *Server) publishDeployPlan(ctx context.Context, project *models.Project,
 	}
 
 	built := ""
+	buildCount := 0
+	for _, job := range jobs {
+		if len(job.Build) > 0 {
+			buildCount++
+		}
+	}
 	if builds {
 		built = "the build job"
+		if buildCount > 1 {
+			built = "all build jobs"
+		}
 	}
 
 	s.publishPipeline(ctx, project.ID, nil, models.EventDeployPlan, map[string]any{

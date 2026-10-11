@@ -475,7 +475,7 @@ stages:
 
 func TestMapStagesRejectUnsafeOutputNames(t *testing.T) {
 	for _, name := range []string{"_api", "-worker", "web.api", "web api", ""} {
-		data := "stages:\\n  build:\\n    \\"" + name + "\\": {image: registry.example/myapp/app}\\n"
+		data := "stages:\n  build:\n    \"" + name + "\": {image: registry.example/myapp/app}\n"
 		if _, err := Parse([]byte(data)); err == nil {
 			t.Errorf("output name %q was accepted", name)
 		}

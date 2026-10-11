@@ -1017,6 +1017,9 @@ watchEvents({
         <p v-if="verdictOf(operation)" class="why" :class="{ bad: operation.status === 'failed' }">
           {{ verdictOf(operation) }}
         </p>
+        <p v-else-if="operation.status === 'pending' && !operation.queued && !operation.running" class="muted small">
+          Waiting for all required build outputs and earlier pipeline stages. The cluster has not been touched by this deployment yet.
+        </p>
 
         <DeploySteps
           v-if="isCaught(operation) || knows(operation)"
