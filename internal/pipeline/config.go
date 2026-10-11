@@ -302,7 +302,6 @@ func canonicalStages(declared []string, includeDeploy bool) ([]string, error) {
 	}
 	return stages, nil
 }
-}
 
 // Load reads a project's configuration from a checkout.
 func Load(checkout string) (*Config, error) {
