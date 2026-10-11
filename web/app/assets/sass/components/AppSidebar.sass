@@ -168,22 +168,6 @@
 // Below this the rail stops being a rail. It becomes groups laid out side by side
 // across the top of the page, which is the only arrangement that keeps nine labels
 // readable on a screen that cannot show a column of them.
-@media (max-width: 760px)
-  .app-nav-rail
-    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr))
-    gap: 10px 14px
-  .app-nav-group + .app-nav-group
-    margin-top: 0
-    padding-top: 0
-    border-top: 0
-  .app-nav-group-title
-    padding-left: 7px
-  .app-nav-item
-    padding-right: 7px
-    padding-left: 7px
-  .app-nav-child
-    padding-left: 14px
-
 // Below this there is no room for a column beside the page, so the menu lies down
 // across the top of it and the page begins underneath.
 //
@@ -191,15 +175,7 @@
 // which left a phone with a page and no way off it except the word in the top bar. The
 // rule is reversed here rather than deleted, because this file cannot know what else
 // wrote it — but the outcome is the same, and it is the outcome that was wanted.
-@media (max-width: 900px)
-  .body
-    flex-direction: column
-  .sidebar
-    width: 100%
-    flex: 0 0 auto
-    padding: 12px 14px
-    border-right: 0
-    border-bottom: 1px solid var(--border)
+@media (max-width: 860px)
   // The rail scrolls sideways rather than wrapping into an unbounded column, which
   // is what a reader on a 320px screen wants: the menu stays one screenful tall and
   // the page starts where it is instead of a menu's length down.
