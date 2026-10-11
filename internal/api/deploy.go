@@ -25,10 +25,9 @@ import (
 // What the core does is: notice that a run has something to deploy, read the
 // repository's manifests at the commit being deployed, resolve every required image
 // to its recorded digest, and hand the complete prepared manifest set to the module.
-// What it does not
-// do is apply anything, decide that a rollout succeeded, or know what a namespace
-// is — all of that is the module's, because the day somebody deploys to Nomad this
-// file changes in one place: the target's kind.
+// It does not apply resources, decide whether a rollout succeeded, or know what a
+// namespace is — those are the module's responsibilities. Deploying to another kind
+// of target should change this integration point, not the pipeline scheduler.
 //
 // The core's job here is to be a good narrator. Everything a person would want to
 // know while a deployment is happening goes into the job's log as it happens,
@@ -45,8 +44,9 @@ const deployTargetKind = "deploy:%s"
 
 // deployRequest is what the core sends a deploy module.
 //
-// It is the repository's words, not the core's: paths as written, the image as
-// built. The module substitutes and applies, and answers with what happened.
+// It carries the repository's manifest paths and the images as built. For legacy
+// single-image configurations the module performs the IMAGE substitution; named-output
+// configurations arrive with all BUILD_*_IMAGE_URL variables already expanded by the core.
 type deployRequest struct {
 	Project   string `json:"project"`
 	Target    string `json:"target"`
@@ -209,10 +209,10 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		}
 		resolvedOutputs = images
 		image = images[outputs[0].Name]
-		firstRegistry := registryHostFrom(image)
+		firstRegistry := imageHost(image)
 		for _, output := range outputs {
 			reference := images[output.Name]
-			if !sameRegistry(firstRegistry, registryHostFrom(reference)) {
+			if !sameRegistry(firstRegistry, imageHost(reference)) {
 				return fmt.Errorf("named outputs currently must be published to the same registry; %q and %q use different registries", outputs[0].Name, output.Name)
 			}
 			variable := pipeline.ImageVariableName(output.Name)
@@ -813,18 +813,8 @@ func prefaceFor(ctx context.Context, s *Server, run *store.Pipeline, jobID int64
 	}
 }
 
-// imageForDeploy is the image this run produced, resolved to a digest.
-//
-// A digest rather than a tag, and that is the whole argument for it: a tag can move
-// between the build and the rollout, so a rollback that went back to a tag could
-// return to a different image than the one that was rolled out from. Asking the
-// registry what the tag currently points at pins it to what was actually tested.
-// The image is the one the run built, which is not this job's own build: a deploy job
-// has no build of its own, so asking it here would find nothing and apply the
-// manifests with the placeholder still in them. It comes from whichever job in this
-// run produced an image.
-// pinnedBuildReference returns the image by the digest recorded after a successful push.
-// The recorded tag is only accepted when it names the repository built for this deployment.
+// placeholderFor keeps the old single-image substitution available to pipelines that
+// have not opted into named build outputs.
 func placeholderFor(outputs []pipeline.BuildOutputSpec) string {
 	if len(outputs) > 0 {
 		return ""
@@ -883,6 +873,8 @@ func pinnedBuildReference(build map[string]any, expectedImage string) string {
 	return repository + "@" + digest
 }
 
+// imageForDeploy resolves the one image produced by a legacy pipeline to its recorded digest.
+// Named-output pipelines use namedBuildImageReferences instead.
 func (s *Server) imageForDeploy(ctx context.Context, job *store.Job, run *store.Pipeline,
 	log func(string, ...any)) (string, error) {
 

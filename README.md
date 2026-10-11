@@ -331,9 +331,11 @@ creating pipeline jobs. Every output is a separate build job. Outputs may build 
 but later stages wait for the whole previous stage. All required builds and checks must
 succeed before Dogit sends one deployment request containing every prepared manifest.
 If any required image fails to build or push, no deployment request is sent; other images
-already pushed remain ordinary registry artifacts. Generated image variables contain
-digest-pinned references, not floating tags. Kubernetes apply/rollout results are observed
-and logged; failures do not trigger an automatic rollback.
+already pushed remain ordinary registry artifacts. For the current Kubernetes module all
+named outputs in one deployment must use the same registry, because the target has one
+image-pull credential. Generated image variables contain digest-pinned references, not
+floating tags. Kubernetes apply/rollout results are observed and logged; failures do not
+trigger an automatic rollback.
 
 ## Database
 

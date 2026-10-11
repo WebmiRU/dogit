@@ -39,6 +39,16 @@ func (s *Server) validateBuildImageReferences(ctx context.Context, repoDir, sha 
 				return err
 			}
 		}
+		// The current Kubernetes pull-secret contract can describe one registry per
+		// deployment. Reject a known mismatch here, before any runner spends time building.
+		for _, spec := range config.Deploys {
+			if !isKubernetesDeployModule(spec.Module) {
+				continue
+			}
+			if err := validateNamedBuildOutputRegistries(outputs); err != nil {
+				return err
+			}
+		}
 	}
 	check := func(file, body string) error {
 		if err := validateManifestYAML(file, body); err != nil {
@@ -81,6 +91,34 @@ func (s *Server) validateBuildImageReferences(ctx context.Context, repoDir, sha 
 					return fmt.Errorf("deploy step image %q: %w", step.Image, err)
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func isKubernetesDeployModule(module string) bool {
+	module = strings.TrimSpace(strings.TrimPrefix(module, "deploy:"))
+	return module == "kubernetes"
+}
+
+// validateNamedBuildOutputRegistries checks literal registry hosts. Images that use a
+// variable in their host cannot be resolved at config-read time and are checked again
+// at deployment time. Empty host means the default Docker registry, not the output name.
+func validateNamedBuildOutputRegistries(outputs []pipeline.BuildOutputSpec) error {
+	firstName := ""
+	firstHost := ""
+	for _, output := range outputs {
+		image, ok := output.Build["image"].(string)
+		if !ok || strings.ContainsAny(image, "$") {
+			continue
+		}
+		host := imageHost(strings.TrimSpace(image))
+		if firstName == "" {
+			firstName, firstHost = output.Name, host
+			continue
+		}
+		if host != firstHost {
+			return fmt.Errorf("named build outputs for a single Kubernetes deployment must use the same registry; %q and %q point to different registries", firstName, output.Name)
 		}
 	}
 	return nil

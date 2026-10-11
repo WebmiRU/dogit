@@ -83,3 +83,30 @@ func TestValidateNamedBuildOutputChecksCommitPaths(t *testing.T) {
 		t.Fatal("missing build context was accepted")
 	}
 }
+
+
+func TestValidateNamedBuildOutputRegistries(t *testing.T) {
+	sameDefaultRegistry := []pipeline.BuildOutputSpec{
+		{Name: "api", Build: map[string]any{"image": "team/api"}},
+		{Name: "worker", Build: map[string]any{"image": "team/worker"}},
+	}
+	if err := validateNamedBuildOutputRegistries(sameDefaultRegistry); err != nil {
+		t.Fatalf("same default registry rejected: %v", err)
+	}
+
+	sameNamedRegistry := []pipeline.BuildOutputSpec{
+		{Name: "api", Build: map[string]any{"image": "registry.example/team/api"}},
+		{Name: "worker", Build: map[string]any{"image": "registry.example/team/worker"}},
+	}
+	if err := validateNamedBuildOutputRegistries(sameNamedRegistry); err != nil {
+		t.Fatalf("same named registry rejected: %v", err)
+	}
+
+	differentRegistries := []pipeline.BuildOutputSpec{
+		{Name: "api", Build: map[string]any{"image": "ghcr.io/team/api"}},
+		{Name: "worker", Build: map[string]any{"image": "registry.example/team/worker"}},
+	}
+	if err := validateNamedBuildOutputRegistries(differentRegistries); err == nil {
+		t.Fatal("different registries were accepted")
+	}
+}
