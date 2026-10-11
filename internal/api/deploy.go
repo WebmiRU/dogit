@@ -265,15 +265,9 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		}
 		log("  image:     %s\n", image)
 	}
-
-
-	//
-	// They used to be, because they were over before the deploy started and this was
-	// the only place that knew they had happened. The runner now says so itself, while
-	// it is doing it, in its own words — and a step re-announced here afterwards with
-	// worse ones ("the image was built by \"image\"") overwrote what the reader had
-	// already watched happen. What is still recorded is the deploy job's own log: what
-	// is being deployed, and which digest, which is what decides what gets rolled out.
+	// Build and push progress for a pipeline-triggered deploy was already streamed live by
+	// its build jobs. A manual artifact deploy reuses the source run's recorded build/push
+	// notes in its history, while the current operation starts with its own manifest work.
 
 	manifests, err := s.readDeployManifests(ctx, repoDir, pipelineRun.SHA, spec.Manifests, log)
 	if err != nil {

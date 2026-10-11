@@ -337,6 +337,16 @@ image-pull credential. Generated image variables contain digest-pinned reference
 floating tags. Kubernetes apply/rollout results are observed and logged; failures do not
 trigger an automatic rollback.
 
+The **Artifacts** view also offers **Deploy** for a successfully pushed, digest-addressed
+image. The preview reads the `.dogit-ci.yml` and manifests from that artifact's source
+commit, lists allowed targets and the exact images to be used, and asks for confirmation.
+No new build is started. If the source commit defines named outputs, the action deploys
+the complete pinned output set rather than just one image from a multi-service release.
+The resulting operation is an ordinary Dogit deploy job, so it uses the same queue and
+namespace locks, emits live status and log events, and retains the rollout phases and
+pod counts on the **Deploy → Log** page. Its manifest/configuration source remains the
+artifact's commit even if the branch moves afterwards.
+
 ## Database
 
 PostgreSQL 19, one cluster for everything. Modules that declare `"database": true`

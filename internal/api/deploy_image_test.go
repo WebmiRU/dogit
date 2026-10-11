@@ -78,3 +78,24 @@ func TestTheRegistryAddressIsTheHostAlone(t *testing.T) {
 		}
 	}
 }
+
+
+func TestIsPinnedArtifactReferenceOnlyAcceptsDigestAddress(t *testing.T) {
+	cases := []struct {
+		reference string
+		want      bool
+	}{
+		{"registry.example/team/app@sha256:0123456789abcdef", true},
+		{"registry.example/team/app:stable", false},
+		{"registry.example/team/app", false},
+		{"registry.example/team/app@sha256:", false},
+		{"", false},
+	}
+
+	for _, one := range cases {
+		if got := isPinnedArtifactReference(one.reference); got != one.want {
+			t.Errorf("isPinnedArtifactReference(%q) = %v, want %v",
+				one.reference, got, one.want)
+		}
+	}
+}
