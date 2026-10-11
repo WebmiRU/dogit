@@ -357,7 +357,11 @@ function isImagePhase(phase: string): boolean {
 
 /** The deployment itself has not started while only build/push phases are open. */
 function isPreparing(operation: DeployOperation): boolean {
-  if (operation.queued) return false
+  // Durable progress can outlive a skipped deploy job when an image build fails. A
+  // terminal operation must never look active merely because the old snapshot says push.
+  if (operation.queued || operation.finished_at != null ||
+    ['success', 'failed', 'error', 'refused', 'skipped', 'superseded',
+      'canceled', 'interrupted', 'abandoned'].includes(operation.status)) return false
   const phases = knows(operation)?.phases ?? []
   if (phases.length > 0) return phases.every(isImagePhase)
   return operation.status === 'pending' && !operation.running && operation.finished_at == null
@@ -712,13 +716,13 @@ function failedPhase(operation: DeployOperation): boolean {
 function stateOf(operation: DeployOperation): string {
   if (failedPhase(operation)) return 'Failed'
   if (operation.queued) return 'Waiting'
-  if (isPreparing(operation)) return 'Preparing'
-  if (operation.running) return 'Running'
+  if (isPreparing(operation)) return 'Working'
+  if (operation.running) return 'Working'
   // Pending, but neither queued nor running: the core has not been asked for a place yet,
   // because this deployment is still building its image. That is work in progress, and it is
   // not waiting for anything. It used to arrive here as the bare word 'pending' — the row's
   // own name for itself — which is a column heading, not an answer to "what is this doing".
-  if (operation.status === 'pending') return 'Preparing'
+  if (operation.status === 'pending') return 'Working'
   if (operation.status === 'refused') return 'Declined'
   if (operation.status === 'superseded') return 'Overtaken'
   if (operation.status === 'skipped') return 'Skipped'

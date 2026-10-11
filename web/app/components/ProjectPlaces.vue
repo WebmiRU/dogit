@@ -91,6 +91,12 @@ const places = ref<Place[]>([])
  * under it.
  */
 const due = ref<Record<string, boolean>>({})
+/** Places with an active operation, including the image build before rollout begins. */
+const workingPlaces = ref<Record<string, boolean>>({})
+
+function isPlaceWorking(name: string): boolean {
+  return workingPlaces.value[name] === true
+}
 
 /**
  * What last ran in each place, as the module reports it.
@@ -222,6 +228,40 @@ async function loadQueued() {
     // every row falls back to its own last deployment, which is true of the past.
     due.value = {}
   }
+
+  // Read the same durable operation state as the project-wide lamp. The place-queue
+  // endpoint can call an operation waiting while its image is building or pushing.
+  try {
+    const answer = await api.get<{
+      active?: {
+        place?: string
+        status?: string
+        running?: boolean
+        queued?: boolean
+        finished_at?: number | null
+        progress?: { phase?: string; finished?: boolean; active_phases?: string[] }
+      }[]
+    }>(`/projects/${props.projectId}/deploy-operations?finished=0`)
+    const next: Record<string, boolean> = {}
+    for (const operation of answer.active ?? []) {
+      if (!operation.place || operation.finished_at != null) continue
+      const phases = operation.progress?.active_phases ??
+        (operation.progress?.phase && !operation.progress.finished
+          ? [operation.progress.phase]
+          : [])
+      const imageWork = phases.some((phase) =>
+        phase === 'build' || phase.startsWith('build:') ||
+        phase === 'push' || phase.startsWith('push:'))
+      if (operation.running === true ||
+        (operation.status === 'pending' && (operation.queued !== true || imageWork))) {
+        next[operation.place] = true
+      }
+    }
+    workingPlaces.value = next
+  } catch {
+    workingPlaces.value = {}
+  }
+
   for (const place of places.value) place.queued = due.value[place.name] === true
 }
 
@@ -591,6 +631,8 @@ function stateTone(place: Place): { tone: string; word: string } {
   // a dot from this page's own fetch of the history, an edge from the card's — they
   // disagree the moment either is a moment older than the other, and a row with a grey
   // dot beside a green frame leaves the reader deciding which of the two to believe.
+  // A current operation outranks a child dot emitted before its first progress event.
+  if (isPlaceWorking(place.name)) return { tone: 'working', word: 'working' }
   const said = cardStates.value[place.name]
   if (said) return said
 
@@ -932,7 +974,7 @@ watchEvents({
           </span>
           <!-- Said before the last run rather than instead of it: both are true, and the
                order is what keeps them from being read as one. -->
-          <span v-if="place.queued" class="muted small place-queued">waiting its turn</span>
+          <span v-if="place.queued && !isPlaceWorking(place.name)" class="muted small place-queued">waiting its turn</span>
           <span v-if="ranAt(place)" class="muted small place-ran">{{ ranAt(place) }}</span>
           <span
             class="place-state"
@@ -952,7 +994,7 @@ watchEvents({
           :module="module"
           :can-manage="props.canManage"
           :place="{ cluster: place.name, namespace: place.namespace }"
-          :queued="place.queued"
+          :queued="place.queued && !isPlaceWorking(place.name)"
           :now-running="nowRunning(place)"
           :replacing="replacing(place)"
           :replacing-pods="replacingPods(place)"

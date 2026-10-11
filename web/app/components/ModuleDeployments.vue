@@ -515,7 +515,7 @@ const verdict = computed<{ tone: 'working' | 'ok' | 'bad' | 'waiting'; word: str
     return { tone: 'bad', word: 'failed', cls: 'badge-red' }
   }
   if (running.value || (active.value && !active.value.finished)) {
-    return { tone: 'working', word: 'preparing', cls: 'badge-warning' }
+    return { tone: 'working', word: 'working', cls: 'badge-warning' }
   }
 
   // Waiting its turn: the run under way has a deployment for this place and has not

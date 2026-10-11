@@ -93,9 +93,8 @@ const headState = computed<'working' | 'waiting' | 'bad' | 'ok'>(() => {
 
 const headStateText = computed(() => {
   if (!modules.value.some((one) => one.kind.startsWith('deploy:'))) return 'no deploy module'
-  if (deployBusy.value) return 'a deployment is under way'
+  if (deployBusy.value || deployPreparing.value) return 'Working'
   if (deployWaiting.value) return 'a deployment is waiting its turn'
-  if (deployPreparing.value) return 'a deployment is being prepared'
   if (lastFailed.value) return 'the last deployment did not finish'
   return 'nothing is deploying'
 })
