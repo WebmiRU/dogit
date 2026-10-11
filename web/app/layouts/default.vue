@@ -254,7 +254,7 @@ const onRepository = computed(() => route.path.startsWith('/p/'))
       <aside class="app-rail-right" aria-hidden="true" />
 
       <main class="page" :class="{ 'page-project-layout': onRepository }">
-        <div class="page-content" :class="{ 'project-page-content': onRepository }">
+        <div class="page-content">
           <slot />
         </div>
       </main>
