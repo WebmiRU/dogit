@@ -135,7 +135,7 @@ const caught = ref<Record<number, true>>({})
 
 /** Whether this card is one the reader watched, and may put away. */
 function isCaught(operation: DeployOperation): boolean {
-  return operation.running || Boolean(caught.value[operation.job_id])
+  return isLiveOperation(operation) || Boolean(caught.value[operation.job_id])
 }
 const reason = ref('')
 const loading = ref(false)
@@ -183,7 +183,9 @@ const cards = computed(() => [
  * only if the reader puts this extra view away.
  */
 const live = computed(() =>
-  cards.value.filter((one) => (one.running || caught.value[one.job_id]) && !putAway.value[one.job_id]))
+  cards.value.filter((one) =>
+    (isLiveOperation(one) || caught.value[one.job_id]) && !putAway.value[one.job_id],
+  ))
 
 /** Operations not represented by a visible live card: the concise history record. */
 const history = computed(() => {
@@ -214,15 +216,24 @@ function reorder(answer: OperationsAnswer) {
       ? progress.phase_history.filter((line): line is Record<string, unknown> =>
         Boolean(line) && typeof line === 'object')
       : []
-    // Older snapshots may have the phase history but no active_phases field. A phase's
-    // latest recorded line is authoritative: finished phases stay green; an unfinished one
-    // means the deployment is still doing work.
-    const historyHasActive = history.some((line) =>
-      typeof line.phase === 'string' && line.phase !== '' && line.finished !== true)
-    const active = activePhases.length > 0 || historyHasActive ||
-      (typeof progress.phase === 'string' && progress.phase !== '' && progress.finished !== true)
-    if (!active) return operation
-    return { ...operation, status: 'running', running: true, queued: false }
+    // Older snapshots may have a phase history but no active_phases field. Restore
+    // the open set instead of a boolean, so simultaneous image jobs stay distinguishable.
+    const activeFromHistory = history
+      .filter((line) => typeof line.phase === 'string' && line.phase !== '' && line.finished !== true)
+      .map((line) => String(line.phase))
+    const active = activePhases.length > 0
+      ? activePhases
+      : [...new Set(activeFromHistory.length > 0
+          ? activeFromHistory
+          : (typeof progress.phase === 'string' && progress.phase !== '' && progress.finished !== true
+              ? [progress.phase]
+              : []))]
+    if (active.length === 0) return operation
+    // Image work prepares the deployment; it is not the rollout itself.
+    const preparing = active.every(isImagePhase)
+    return preparing
+      ? { ...operation, status: 'pending', running: false, queued: false }
+      : { ...operation, status: 'running', running: true, queued: false }
   }
   const next = [...(answer.active ?? []), ...(answer.finished ?? [])].map(normalize)
   operations.value = next
@@ -287,7 +298,7 @@ async function load() {
     // from here on, so this is not a stream being duplicated — it is the part of the account
     // that happened before anybody was looking.
     for (const one of operations.value) {
-      if (one.running && !caught.value[one.job_id]) void askLog(one.job_id)
+      if (isLiveOperation(one) && !caught.value[one.job_id]) void askLog(one.job_id)
     }
   } catch (caught) {
     if (request !== listRequest) return
@@ -331,6 +342,28 @@ function isMine(payload: Record<string, unknown>): boolean {
  * each keep their own steps. One shared set of steps is what the page used to have, and it is why
  * a rollout and a rollback at the same moment drew the same arrows.
  */
+function isImagePhase(phase: string): boolean {
+  return phase === 'build' || phase.startsWith('build:') ||
+    phase === 'push' || phase.startsWith('push:')
+}
+
+/** The deployment itself has not started while only build/push phases are open. */
+function isPreparing(operation: DeployOperation): boolean {
+  if (operation.queued) return false
+  const phases = knows(operation)?.phases ?? []
+  if (phases.length > 0) return phases.every(isImagePhase)
+  return operation.status === 'pending' && !operation.running && operation.finished_at == null
+}
+
+/** Live also covers preparing snapshots, whose deploy job is still pending in the database. */
+function isLiveOperation(operation: DeployOperation): boolean {
+  if (operation.queued || operation.finished_at != null ||
+    ['success', 'failed', 'error', 'refused', 'skipped', 'superseded',
+      'canceled', 'interrupted', 'abandoned'].includes(operation.status)) return false
+  return operation.running || operation.status === 'pending' ||
+    (knows(operation)?.phases.length ?? 0) > 0
+}
+
 function note(payload: Record<string, unknown>) {
   if (typeof payload.message !== 'string' || !payload.message) return
   const jobID = Number(payload.job_id ?? 0)
@@ -412,23 +445,29 @@ function note(payload: Record<string, unknown>) {
   // A progress event is proof this job has actually begun. The queued record remains in
   // operations until the next list fetch otherwise, and the card keeps saying Waiting while
   // its arrows and log are already moving.
+  const imagePreparation = phases.size > 0
+    ? [...phases].every(isImagePhase)
+    : isImagePhase(said.phase)
+
   if (existingOperation) {
     operations.value = operations.value.map((one) => one.job_id === jobID
       ? {
           ...one,
-          status: 'running',
-          running: true,
+          status: imagePreparation ? 'pending' : 'running',
+          running: !imagePreparation,
           queued: false,
-          started_at: one.started_at ?? at ?? Date.now(),
+          // Image work prepares the deployment; it does not mean the deploy job itself
+          // has started. Preserve its actual start time (normally null) until module work.
+          started_at: imagePreparation ? one.started_at : (one.started_at ?? at ?? Date.now()),
           finished_at: null,
         }
       : one)
   } else {
     operations.value = [
       ...operations.value,
-      { job_id: jobID, status: 'running', name: '', place: props.place ?? '',
-        error: '', started_at: at ?? Date.now(),
-        finished_at: null, running: true, queued: false,
+      { job_id: jobID, status: imagePreparation ? 'pending' : 'running', name: '', place: props.place ?? '',
+        error: '', started_at: imagePreparation ? null : (at ?? Date.now()),
+        finished_at: null, running: !imagePreparation, queued: false,
         // From the event rather than waited for: the tag is the last segment of the image
         // being pushed, and the commit came in the same breath. The list will replace both
         // with the run's own values when it is next asked, which is the authority; this is
@@ -664,6 +703,7 @@ function failedPhase(operation: DeployOperation): boolean {
 function stateOf(operation: DeployOperation): string {
   if (failedPhase(operation)) return 'Failed'
   if (operation.queued) return 'Waiting'
+  if (isPreparing(operation)) return 'Preparing'
   if (operation.running) return 'Running'
   // Pending, but neither queued nor running: the core has not been asked for a place yet,
   // because this deployment is still building its image. That is work in progress, and it is
@@ -689,6 +729,7 @@ function stateOf(operation: DeployOperation): string {
 function edgeOf(operation: DeployOperation): string {
   if (failedPhase(operation)) return 'failed'
   if (operation.queued) return 'queued'
+  if (isPreparing(operation)) return 'preparing'
   if (operation.running) return 'live'
   // Dashed rather than solid, and in the waiting colour rather than the working one: this is
   // a deployment on its way to the queue, and drawing it in the colour of a running rollout
@@ -1045,7 +1086,7 @@ watchEvents({
     >
       <div class="card-body">
         <div class="deploy-block-head">
-          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (tone[operation.status] ?? 'badge-neutral')">
+          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (isPreparing(operation) ? 'badge-warning' : (tone[operation.status] ?? 'badge-neutral'))">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
@@ -1088,13 +1129,13 @@ watchEvents({
           v-if="isCaught(operation) || knows(operation)"
           :progress="knows(operation)?.progress ?? null"
           :seen="knows(operation)?.seen ?? []"
-          :live="operation.running"
+          :live="isLiveOperation(operation)"
           :status="operation.status"
           :plan="planOf(operation.job_id)"
           :active-phases="openPhases(operation)"
         />
 
-        <template v-if="watched(operation.job_id) && operation.running">
+        <template v-if="watched(operation.job_id) && isLiveOperation(operation)">
           <div v-if="earlierLogOf(operation.job_id).length" class="operation-log-wrap">
             <p class="muted small">Earlier output</p>
             <ul class="operation-log">
@@ -1147,7 +1188,7 @@ watchEvents({
     >
       <div class="card-body">
         <div class="deploy-block-head">
-          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (tone[operation.status] ?? 'badge-neutral')">
+          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (isPreparing(operation) ? 'badge-warning' : (tone[operation.status] ?? 'badge-neutral'))">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
@@ -1175,7 +1216,7 @@ watchEvents({
 
         <details class="log" @toggle="toggleHistoryLog(operation.job_id, $event)">
           <summary class="muted small">{{ logLabel(operation.job_id) }}</summary>
-          <template v-if="watched(operation.job_id) && operation.running">
+          <template v-if="watched(operation.job_id) && isLiveOperation(operation)">
             <div v-if="earlierLogOf(operation.job_id).length" class="operation-log-wrap">
               <ul class="operation-log">
                 <li

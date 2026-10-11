@@ -223,7 +223,7 @@ const steps = computed<Step[]>(() => {
   // there. A card saying "Success" with a pointer on "Bring the new pods up" is two answers to
   // one question, and the one the eye reads second is the one that is wrong.
   const now = props.live
-    ? (props.activePhases?.length ? [...props.activePhases] : (lastNamed ? [lastNamed] : []))
+    ? [...(props.activePhases ?? (lastNamed && !wasSaid.get(lastNamed)?.finished ? [lastNamed] : []))]
     : []
 
   const nowAt = order.value.findIndex((one) => one.key === lastNamed)
@@ -260,7 +260,8 @@ const steps = computed<Step[]>(() => {
   // operation queued behind another one, and painting the steps it has not reached as done is
   // saying a place that has not been deployed to has been. "Waiting" with every step ticked is a
   // card answering a question nobody asked.
-  const waiting = props.status === 'pending'
+  const waiting = props.status === 'pending' && !props.live &&
+    (props.activePhases?.length ?? 0) === 0
   const neverBegan = props.status === 'refused' || props.status === 'skipped'
   const over = !props.live && !waiting && !neverBegan &&
     (props.activePhases?.length ?? 0) === 0
@@ -274,12 +275,31 @@ const steps = computed<Step[]>(() => {
   // is exactly right.
   const anythingFailed = [...wasSaid.values()].some((one) => one.failed)
 
+  const isImagePhase = (key: string) =>
+    key === 'build' || key.startsWith('build:') ||
+    key === 'push' || key.startsWith('push:')
+
+  const nextImagePhase = (key: string): string => {
+    if (key === 'build') return 'push'
+    if (key.startsWith('build:')) return 'push:' + key.slice('build:'.length)
+    return ''
+  }
+
   return order.value.map((step, position) => {
     const heard = wasSaid.get(step.key)
     let state: StepState = 'waiting'
 
+    // Images can build/push in parallel. Progress on one must not make a different
+    // image's step green simply because it appears earlier in the plan.
     if (heard?.failed) state = 'failed'
+    else if (heard?.finished) state = 'done'
     else if (now.includes(step.key)) state = 'now'
+    else if (isImagePhase(step.key)) {
+      const pushed = nextImagePhase(step.key)
+      if (pushed && wasSaid.has(pushed)) state = 'done'
+      else if (over && heard) state = anythingFailed ? 'skipped' : 'done'
+      else if (over && anythingFailed && !heard) state = 'skipped'
+    }
     // Reaching a step includes being on it, once the operation is over.
     //
     // While it runs, the furthest step mentioned is the one the arrow is on and everything

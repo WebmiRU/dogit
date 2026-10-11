@@ -1290,7 +1290,16 @@ function keepOtherPhase(other: string, current: string): boolean {
   if (other === current) return false
   const otherIsBuild = isBuildPhase(other)
   const currentIsBuild = isBuildPhase(current)
-  if (otherIsBuild && !currentIsBuild) return false
+  if (otherIsBuild && !currentIsBuild) {
+    // Another output can still be building while this output starts pushing.
+    // Only the matching output's build arrow closes on its push.
+    if (isPushPhase(current)) {
+      const otherOutput = outputOfPhase(other)
+      const currentOutput = outputOfPhase(current)
+      if (otherOutput && currentOutput && otherOutput !== currentOutput) return true
+    }
+    return false
+  }
   if (otherIsBuild && currentIsBuild) {
     const otherOutput = outputOfPhase(other)
     const currentOutput = outputOfPhase(current)
