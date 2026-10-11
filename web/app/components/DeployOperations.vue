@@ -367,6 +367,15 @@ function isPreparing(operation: DeployOperation): boolean {
   return operation.status === 'pending' && !operation.running && operation.finished_at == null
 }
 
+/** Explain whether this deployment is actively preparing images or waiting for prerequisites. */
+function preparingText(operation: DeployOperation): string {
+  const phases = knows(operation)?.phases ?? []
+  if (phases.some(isImagePhase)) {
+    return 'Preparing container images. The cluster has not been touched by this deployment yet.'
+  }
+  return 'Waiting for all required build outputs and earlier pipeline stages. The cluster has not been touched by this deployment yet.'
+}
+
 /** Live also covers preparing snapshots, whose deploy job is still pending in the database. */
 function isLiveOperation(operation: DeployOperation): boolean {
   if (operation.queued || operation.finished_at != null ||
@@ -717,7 +726,7 @@ function failedPhase(operation: DeployOperation): boolean {
 function stateOf(operation: DeployOperation): string {
   if (failedPhase(operation)) return 'Failed'
   if (operation.queued) return 'Waiting'
-  if (isPreparing(operation)) return 'Working'
+  if (isPreparing(operation)) return 'Preparing'
   if (operation.running) return 'Working'
   // Pending, but neither queued nor running: the core has not been asked for a place yet,
   // because this deployment is still building its image. That is work in progress, and it is
@@ -1100,7 +1109,7 @@ watchEvents({
     >
       <div class="card-body">
         <div class="deploy-block-head">
-          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (isPreparing(operation) ? 'badge-warning' : (tone[operation.status] ?? 'badge-neutral'))">
+          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (isPreparing(operation) ? 'badge-neutral' : (tone[operation.status] ?? 'badge-neutral'))">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
@@ -1136,7 +1145,7 @@ watchEvents({
           {{ verdictOf(operation) }}
         </p>
         <p v-else-if="operation.status === 'pending' && !operation.queued && !operation.running" class="muted small">
-          Waiting for all required build outputs and earlier pipeline stages. The cluster has not been touched by this deployment yet.
+          {{ preparingText(operation) }}
         </p>
 
         <DeploySteps
@@ -1202,7 +1211,7 @@ watchEvents({
     >
       <div class="card-body">
         <div class="deploy-block-head">
-          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (isPreparing(operation) ? 'badge-warning' : (tone[operation.status] ?? 'badge-neutral'))">
+          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (isPreparing(operation) ? 'badge-neutral' : (tone[operation.status] ?? 'badge-neutral'))">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
