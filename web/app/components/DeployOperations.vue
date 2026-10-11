@@ -355,34 +355,43 @@ function isImagePhase(phase: string): boolean {
     phase === 'push' || phase.startsWith('push:')
 }
 
-/** The deployment itself has not started while only build/push phases are open. */
+const terminalStatuses = [
+  'success', 'failed', 'error', 'refused', 'skipped', 'superseded',
+  'canceled', 'interrupted', 'abandoned',
+]
+
+function isTerminal(operation: DeployOperation): boolean {
+  return operation.finished_at != null || terminalStatuses.includes(operation.status)
+}
+
+/** Preparing is a durable operation that has not started doing any work yet. */
 function isPreparing(operation: DeployOperation): boolean {
-  // Durable progress can outlive a skipped deploy job when an image build fails. A
-  // terminal operation must never look active merely because the old snapshot says push.
-  if (operation.queued || operation.finished_at != null ||
-    ['success', 'failed', 'error', 'refused', 'skipped', 'superseded',
-      'canceled', 'interrupted', 'abandoned'].includes(operation.status)) return false
-  const phases = knows(operation)?.phases ?? []
-  if (phases.length > 0) return phases.every(isImagePhase)
-  return operation.status === 'pending' && !operation.running && operation.finished_at == null
+  if (isTerminal(operation)) return false
+  // The queue is still pre-work, even if an older attempt left progress in the snapshot.
+  if (operation.queued) return true
+  if (operation.running || operation.status === 'running') return false
+  // Any open phase means work has begun. Image build and push are work just as rollout is.
+  if ((knows(operation)?.phases.length ?? 0) > 0) return false
+  return operation.status === 'pending'
 }
 
-/** Explain whether this deployment is actively preparing images or waiting for prerequisites. */
-function preparingText(operation: DeployOperation): string {
-  const phases = knows(operation)?.phases ?? []
-  if (phases.some(isImagePhase)) {
-    return 'Preparing container images. The cluster has not been touched by this deployment yet.'
-  }
-  return 'Waiting for all required build outputs and earlier pipeline stages. The cluster has not been touched by this deployment yet.'
-}
-
-/** Live also covers preparing snapshots, whose deploy job is still pending in the database. */
-function isLiveOperation(operation: DeployOperation): boolean {
-  if (operation.queued || operation.finished_at != null ||
-    ['success', 'failed', 'error', 'refused', 'skipped', 'superseded',
-      'canceled', 'interrupted', 'abandoned'].includes(operation.status)) return false
-  return operation.running || operation.status === 'pending' ||
+/** Working means either a started job or any open phase, including build/push. */
+function isWorking(operation: DeployOperation): boolean {
+  if (isTerminal(operation) || operation.queued) return false
+  return operation.running || operation.status === 'running' ||
     (knows(operation)?.phases.length ?? 0) > 0
+}
+
+/** Explain why this operation has not started yet. */
+function preparingText(operation: DeployOperation): string {
+  if (operation.queued) return 'Waiting its turn. No work has started for this deployment yet.'
+  return 'Waiting for required build outputs or earlier pipeline stages. The cluster has not been touched by this deployment yet.'
+}
+
+/** Pending and queued operations remain full cards before and during execution. */
+function isLiveOperation(operation: DeployOperation): boolean {
+  if (isTerminal(operation)) return false
+  return isPreparing(operation) || isWorking(operation)
 }
 
 function note(payload: Record<string, unknown>) {
@@ -719,20 +728,15 @@ function verdictOf(operation: DeployOperation): string {
  * either of them is quoting the column rather than answering the reader's question.
  */
 function failedPhase(operation: DeployOperation): boolean {
+  if (operation.queued) return false
   const progress = knows(operation)
   return Boolean(progress?.seen.some((one) => one.failed) && progress.phases.length === 0)
 }
 
 function stateOf(operation: DeployOperation): string {
+  if (operation.queued || isPreparing(operation)) return 'Preparing'
   if (failedPhase(operation)) return 'Failed'
-  if (operation.queued) return 'Waiting'
-  if (isPreparing(operation)) return 'Preparing'
-  if (operation.running) return 'Working'
-  // Pending, but neither queued nor running: the core has not been asked for a place yet,
-  // because this deployment is still building its image. That is work in progress, and it is
-  // not waiting for anything. It used to arrive here as the bare word 'pending' — the row's
-  // own name for itself — which is a column heading, not an answer to "what is this doing".
-  if (operation.status === 'pending') return 'Working'
+  if (isWorking(operation)) return 'Working'
   if (operation.status === 'refused') return 'Declined'
   if (operation.status === 'superseded') return 'Overtaken'
   if (operation.status === 'skipped') return 'Skipped'
@@ -740,6 +744,13 @@ function stateOf(operation: DeployOperation): string {
   if (operation.status === 'interrupted') return 'Interrupted'
   if (operation.status === 'success') return 'Success'
   return operation.status || 'Failed'
+}
+
+function badgeClassOf(operation: DeployOperation): string {
+  if (operation.queued || isPreparing(operation)) return 'badge-neutral'
+  if (failedPhase(operation)) return 'badge-danger'
+  if (isWorking(operation)) return 'badge-warning'
+  return tone[operation.status] ?? 'badge-neutral'
 }
 
 /**
@@ -750,15 +761,9 @@ function stateOf(operation: DeployOperation): string {
  * to decide which of them to believe.
  */
 function edgeOf(operation: DeployOperation): string {
+  if (operation.queued || isPreparing(operation)) return 'preparing'
   if (failedPhase(operation)) return 'failed'
-  if (operation.queued) return 'queued'
-  if (isPreparing(operation)) return 'preparing'
-  if (operation.running) return 'live'
-  // Dashed rather than solid, and in the waiting colour rather than the working one: this is
-  // a deployment on its way to the queue, and drawing it in the colour of a running rollout
-  // would put a second yellow bar on the page for something that is not deploying anything
-  // yet — which is the miscount this page spent a day being blamed for.
-  if (operation.status === 'pending') return 'preparing'
+  if (isWorking(operation)) return 'live'
   if (operation.status === 'refused' || operation.status === 'superseded' ||
     operation.status === 'skipped') {
     return 'dismissed'
@@ -862,7 +867,7 @@ const tone: Record<string, string> = {
 }
 
 watchEvents({
-  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued', 'pipeline.updated'],
+  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued', 'pipeline.created', 'pipeline.updated'],
   project: () => props.projectPath,
   // The core's own line about a deployment, relayed whole. Many a minute while a rollout runs, so
   // this is the only path that has to be cheap.
@@ -877,6 +882,12 @@ watchEvents({
       // A deployment ended, and this is the only line that says so. Refresh the list and any log
       // the reader already has open: a waiter may have been promoted or overtaken in the meantime.
       void load().then(refreshOpenLogs)
+      return
+    }
+    if (event.kind === 'pipeline.created') {
+      // The deploy job is already durable when this event is published. Read it now so the
+      // card exists in Preparing before any runner or module has reported its first phase.
+      void load()
       return
     }
     if (event.kind === 'pipeline.updated') {
@@ -1109,7 +1120,7 @@ watchEvents({
     >
       <div class="card-body">
         <div class="deploy-block-head">
-          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (isPreparing(operation) ? 'badge-neutral' : (tone[operation.status] ?? 'badge-neutral'))">
+          <span class="badge" :class="badgeClassOf(operation)">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>
@@ -1144,7 +1155,7 @@ watchEvents({
         <p v-if="verdictOf(operation)" class="why" :class="{ bad: operation.status === 'failed' }">
           {{ verdictOf(operation) }}
         </p>
-        <p v-else-if="operation.status === 'pending' && !operation.queued && !operation.running" class="muted small">
+        <p v-else-if="isPreparing(operation)" class="muted small">
           {{ preparingText(operation) }}
         </p>
 
@@ -1211,7 +1222,7 @@ watchEvents({
     >
       <div class="card-body">
         <div class="deploy-block-head">
-          <span class="badge" :class="failedPhase(operation) ? 'badge-danger' : (isPreparing(operation) ? 'badge-neutral' : (tone[operation.status] ?? 'badge-neutral'))">
+          <span class="badge" :class="badgeClassOf(operation)">
             {{ stateOf(operation) }}
           </span>
           <span v-if="operation.name" class="mono small">{{ operation.name }}</span>

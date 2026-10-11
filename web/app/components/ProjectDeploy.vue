@@ -60,17 +60,11 @@ const lastFailed = ref(false)
 /** The deployments the core last listed as under way or waiting. */
 const listed = ref<{ running?: boolean; queued?: boolean; status?: string }[]>([])
 
-const deployWaiting = computed(
-  () => !deployBusy.value && listed.value.some((one) => one.queued === true),
-)
-
-// Pending, and in neither of the two above: a deployment still building its image. The core
-// used to call this waiting, and the header with it, so for the whole of every build — the
-// half-minute before anything reaches the queue — a project that was plainly working said it
-// was queueing for its turn.
+// Every pending deploy is Preparing until a job or progress phase has actually begun.
+// Queueing is also pre-work; the lamp should not flip to a different state just because the
+// pending operation is waiting behind another deployment.
 const deployPreparing = computed(
-  () => !deployBusy.value && !deployWaiting.value &&
-    listed.value.some((one) => one.status === 'pending'),
+  () => !deployBusy.value && listed.value.some((one) => one.status === 'pending'),
 )
 
 function isFailedDeployStatus(status?: string): boolean {
@@ -79,22 +73,17 @@ function isFailedDeployStatus(status?: string): boolean {
   return status === 'failed' || status === 'error' || status === 'abandoned'
 }
 
-const headState = computed<'working' | 'waiting' | 'bad' | 'ok'>(() => {
+const headState = computed<'working' | 'preparing' | 'bad' | 'ok'>(() => {
   if (deployBusy.value) return 'working'
-  if (deployWaiting.value) return 'waiting'
-  // A build is running even though no place has been claimed yet, and the lamp says so in
-  // the same colour as a rollout: nothing is wrong, but the project is not idle either, and
-  // "nothing is deploying" for the length of every build would be the same class of lie as
-  // the one this state was added to remove.
-  if (deployPreparing.value) return 'working'
+  if (deployPreparing.value) return 'preparing'
   if (lastFailed.value) return 'bad'
   return 'ok'
 })
 
 const headStateText = computed(() => {
   if (!modules.value.some((one) => one.kind.startsWith('deploy:'))) return 'no deploy module'
-  if (deployBusy.value || deployPreparing.value) return 'Working'
-  if (deployWaiting.value) return 'a deployment is waiting its turn'
+  if (deployBusy.value) return 'Working'
+  if (deployPreparing.value) return 'Preparing'
   if (lastFailed.value) return 'the last deployment did not finish'
   return 'nothing is deploying'
 })
@@ -136,9 +125,13 @@ async function loadHead() {
 
 /** Follows deployments only as far as "is one happening, is one waiting, did the last one work". */
 const stopState = watchEvents({
-  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued', 'pipeline.updated'],
+  kinds: ['deploy.operation', 'deploy.history', 'deploy.queued', 'pipeline.created', 'pipeline.updated'],
   project: () => props.projectPath,
   onEvent: (event) => {
+    if (event.kind === 'pipeline.created') {
+      void loadHead()
+      return
+    }
     if (event.kind === 'pipeline.updated') {
       if (event.payload?.run_finished === true) void loadHead()
       return

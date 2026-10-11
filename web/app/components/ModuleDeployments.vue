@@ -52,6 +52,8 @@ const props = defineProps<{
    * thing it last did was a different commit, and that this one has not got here yet.
    */
   queued?: boolean
+  /** A durable deploy job exists, but no work phase has begun yet. */
+  preparing?: boolean
   /**
    * What the module says is running in this place, right now.
    *
@@ -493,38 +495,29 @@ const lastOut = ref<{ image: string; tags?: string[] } | null>(null)
  * the history had already caught up while the pill had not. There is no way to be half
  * wrong when there is only one answer to be wrong about.
  */
-const verdict = computed<{ tone: 'working' | 'ok' | 'bad' | 'waiting'; word: string; cls: string }>(() => {
-  // A live phase is authoritative. The set can contain build:api and push:web at once;
-  // neither is a rollout, and both need their own arrow while they are active.
-  const deployPhase = activePhases.value.find((phase) => phase && !isBuildPhase(phase))
-  if (deployPhase) return { tone: 'working', word: 'deploying', cls: 'badge-warning' }
+const verdict = computed<{ tone: 'working' | 'preparing' | 'ok' | 'bad'; word: string; cls: string }>(() => {
+  // A place still queued has not started, even if an earlier attempt left stale phases around.
+  if (props.queued) return { tone: 'preparing', word: 'preparing', cls: 'badge-neutral' }
 
+  // Any open phase means the job is doing work. Keep the specific phase in the step list;
+  // the shared status badge and lamp use the same general word as the deployment card.
   if (activePhases.value.length > 0) {
-    const pushing = activePhases.value.some(isPushPhase)
-    return {
-      tone: 'working',
-      word: pushing ? 'pushing' : 'building',
-      cls: 'badge-warning',
-    }
+    return { tone: 'working', word: 'working', cls: 'badge-warning' }
+  }
+
+  // The core can see a pending deploy job before this module reports the first phase.
+  // Show that pre-work state rather than the previous deployment's resting state.
+  if (props.preparing) {
+    return { tone: 'preparing', word: 'preparing', cls: 'badge-neutral' }
   }
 
   // A closed failed phase must outrank the last event's stale running timestamp.
-  // When parallel images are still working, their active phases above take priority;
-  // once none remain, the place is red rather than yellow forever.
   if (activeSeen.value.some((one) => one.failed) || lastAttemptFailed.value) {
     return { tone: 'bad', word: 'failed', cls: 'badge-red' }
   }
   if (running.value || (active.value && !active.value.finished)) {
     return { tone: 'working', word: 'working', cls: 'badge-warning' }
   }
-
-  // Waiting its turn: the run under way has a deployment for this place and has not
-  // started it. What the history holds is an older commit's work, and a green edge over
-  // it — the edge the eye reads first, and the one the row above repeats in its dot —
-  // says the run is finished with this place when it has not begun. No colour of its own
-  // for that: the accent edge is the one this card already wears when it has nothing to
-  // claim, and "nothing to claim yet" is exactly what it is saying.
-  if (props.queued) return { tone: 'waiting', word: 'waiting its turn', cls: 'badge-neutral' }
 
   const last = deployments.value[0]
   if (!last) return { tone: 'ok', word: 'nothing yet', cls: 'badge-neutral' }

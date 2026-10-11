@@ -91,11 +91,17 @@ const places = ref<Place[]>([])
  * under it.
  */
 const due = ref<Record<string, boolean>>({})
-/** Places with an active operation, including the image build before rollout begins. */
+/** Places with work actually under way: a started job or an open phase. */
 const workingPlaces = ref<Record<string, boolean>>({})
+/** Places whose deploy job exists but has not started any phase yet. */
+const preparingPlaces = ref<Record<string, boolean>>({})
 
 function isPlaceWorking(name: string): boolean {
   return workingPlaces.value[name] === true
+}
+
+function isPlacePreparing(name: string): boolean {
+  return preparingPlaces.value[name] === true && !isPlaceWorking(name)
 }
 
 /**
@@ -242,24 +248,31 @@ async function loadQueued() {
         progress?: { phase?: string; finished?: boolean; active_phases?: string[] }
       }[]
     }>(`/projects/${props.projectId}/deploy-operations?finished=0`)
-    const next: Record<string, boolean> = {}
+    const working: Record<string, boolean> = {}
+    const preparing: Record<string, boolean> = {}
     for (const operation of answer.active ?? []) {
       if (!operation.place || operation.finished_at != null) continue
+      // A queued operation is pre-work, even if an older snapshot contains stale phases.
+      if (operation.queued === true) {
+        preparing[operation.place] = true
+        continue
+      }
       const phases = operation.progress?.active_phases ??
         (operation.progress?.phase && !operation.progress.finished
           ? [operation.progress.phase]
           : [])
-      const imageWork = phases.some((phase) =>
-        phase === 'build' || phase.startsWith('build:') ||
-        phase === 'push' || phase.startsWith('push:'))
-      if (operation.running === true ||
-        (operation.status === 'pending' && (operation.queued !== true || imageWork))) {
-        next[operation.place] = true
+      if (operation.running === true || operation.status === 'running' || phases.length > 0) {
+        working[operation.place] = true
+        delete preparing[operation.place]
+      } else if (operation.status === 'pending' && !working[operation.place]) {
+        preparing[operation.place] = true
       }
     }
-    workingPlaces.value = next
+    workingPlaces.value = working
+    preparingPlaces.value = preparing
   } catch {
     workingPlaces.value = {}
+    preparingPlaces.value = {}
   }
 
   for (const place of places.value) place.queued = due.value[place.name] === true
@@ -633,6 +646,7 @@ function stateTone(place: Place): { tone: string; word: string } {
   // dot beside a green frame leaves the reader deciding which of the two to believe.
   // A current operation outranks a child dot emitted before its first progress event.
   if (isPlaceWorking(place.name)) return { tone: 'working', word: 'working' }
+  if (isPlacePreparing(place.name)) return { tone: 'preparing', word: 'preparing' }
   const said = cardStates.value[place.name]
   if (said) return said
 
@@ -995,6 +1009,7 @@ watchEvents({
           :can-manage="props.canManage"
           :place="{ cluster: place.name, namespace: place.namespace }"
           :queued="place.queued && !isPlaceWorking(place.name)"
+          :preparing="isPlacePreparing(place.name)"
           :now-running="nowRunning(place)"
           :replacing="replacing(place)"
           :replacing-pods="replacingPods(place)"
