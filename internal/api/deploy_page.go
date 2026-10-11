@@ -121,6 +121,7 @@ func (s *Server) handleProjectDeployPlaces(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"steps": deployStepsFor(built, manifests, pre, post),
 	})
+}
 
 // rulesOf is what a place listens for, in words.
 func rulesOf(rules []pipeline.Rule) []string {
