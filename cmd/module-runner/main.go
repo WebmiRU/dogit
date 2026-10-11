@@ -639,12 +639,6 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 
 	result := runtime.Stream(jobCtx, handle, spec, out, errs)
 
-	// Whatever is still buffered goes now. A job that finishes in less time than
-	// the flush interval never reaches one, and its last lines — usually the ones
-	// that say why it failed — would never be sent at all.
-	out.Close()
-	errs.Close()
-
 	// The build finishes after the script, often long after it. Reporting the job
 	// now would say "passed" about a build that is still running and may yet fail —
 	// which is exactly how a green pipeline ends up with no image behind it.
@@ -660,6 +654,12 @@ func runJob(ctx context.Context, core *coreClient, runtime *runner.Docker, cfg c
 			}
 		}
 	}
+
+	// Only close log writers after both script and image work have stopped. The image
+	// is built concurrently with the script; closing here earlier discarded the very
+	// Docker push output needed to explain a registry refusal.
+	out.Close()
+	errs.Close()
 
 	status := "success"
 	message := resultMessage(result)
