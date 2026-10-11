@@ -672,8 +672,9 @@ function logLines(jobID: number): { phase: string; message: string; step: number
  * the only reason to have a list at all.
  */
 function openPhases(operation: DeployOperation): string[] {
-  // A snapshot can carry an active phase even when the API's queued/running flags are stale.
-  // Use the same restored state as the badge and steps rather than suppressing its arrow.
+  // A snapshot can outlive the operation itself. Never draw an active arrow over a terminal
+  // skipped/successful record just because the last runner stopped before closing its phase.
+  if (!isLiveOperation(operation)) return []
   return knows(operation)?.phases ?? []
 }
 
