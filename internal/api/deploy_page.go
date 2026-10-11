@@ -191,20 +191,27 @@ func (s *Server) handleProjectDeployPlan(w http.ResponseWriter, r *http.Request)
 	// are part of the artifact details; this operation starts with preparing the manifests.
 	built := ""
 	if r.URL.Query().Get("artifact") != "true" {
-		builds := len(config.NamedBuildOutputs()) > 0
-		for _, spec := range config.Jobs {
-			if len(spec.Build) > 0 {
-				builds = true
-				break
+		// Match the plan announced at pipeline creation. Several named outputs are several
+		// build jobs, and the plan restored after a reload must keep the plural label too.
+		buildCount := len(config.NamedBuildOutputs())
+		if buildCount == 0 {
+			for _, spec := range config.Jobs {
+				if len(spec.Build) > 0 {
+					buildCount++
+				}
+			}
+			for _, spec := range config.StageSpecs {
+				if len(spec.BuildOutputs) > 0 {
+					buildCount += len(spec.BuildOutputs)
+				} else if len(spec.Build) > 0 {
+					buildCount++
+				}
 			}
 		}
-		for _, spec := range config.StageSpecs {
-			if len(spec.Build) > 0 || len(spec.BuildOutputs) > 0 {
-				builds = true
-				break
-			}
-		}
-		if builds {
+		switch {
+		case buildCount > 1:
+			built = "all build jobs"
+		case buildCount == 1:
 			built = "the build job"
 		}
 	}
