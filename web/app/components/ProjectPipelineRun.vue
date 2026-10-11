@@ -166,6 +166,36 @@ const visibleProgress = computed(() => {
 const running = computed(() => jobs.value.some((job) => job.status === 'running'))
 const pending = computed(() => jobs.value.some((job) => job.status === 'pending'))
 
+const activeTab = ref<'pipeline' | 'jobs' | 'tests'>('pipeline')
+const jobCount = computed(() => jobs.value.length)
+const submittedBy = computed(() => {
+  const actor = pipeline.value?.triggered_by
+  return actor?.name || actor?.username || pipeline.value?.author_name || pipeline.value?.source || ''
+})
+const sourceLabel = computed(() => {
+  if (pipeline.value?.source === 'push') return 'branch'
+  if (pipeline.value?.source === 'tag') return 'tag'
+  return pipeline.value?.source || 'pipeline'
+})
+const queueDuration = computed(() => {
+  if (!pipeline.value?.started_at) return ''
+  const created = Date.parse(pipeline.value.created_at)
+  const started = Date.parse(pipeline.value.started_at)
+  if (!Number.isFinite(created) || !Number.isFinite(started) || started < created) return ''
+  return formatDuration(started - created)
+})
+
+/** A compact state mark for a job in the stage graph. */
+function statusGlyph(status: string): string {
+  switch (status) {
+    case 'success': return '✓'
+    case 'failed': return '×'
+    case 'running': return '◌'
+    case 'pending': return '○'
+    default: return '–'
+  }
+}
+
 /** The jobs of each stage, in the order the stages appear in the pipeline. */
 const stages = computed<PipelineStage[]>(() => {
   // Whether the run is over at all. A stage that never started because an earlier
@@ -473,156 +503,239 @@ watch(() => props.runIid, async () => {
 </script>
 
 <template>
-  <div>
+  <div class="pipeline-run-page">
     <div v-if="loading && !pipeline" class="spinner">Loading the run…</div>
 
     <div v-else-if="error && !pipeline" class="alert alert-error">{{ error }}</div>
 
     <template v-else-if="pipeline">
-      <div class="repo-head">
-        <div class="title">
-          <p class="crumb">
-            <NuxtLink :to="`/p/${projectPath}/-/pipelines`">Pipelines</NuxtLink>
-          </p>
-          <h2 class="pipeline-section-title">
-            <span class="mono">#{{ pipeline.iid }}</span>
-            <span class="badge" :class="statusClass[pipeline.status] ?? 'badge-neutral'">
-              {{ statusText[pipeline.status] }}
-            </span>
-          </h2>
-          <p class="page-subtitle">
-            <span v-if="pipeline.title" class="commit-title">{{ pipeline.title }}</span>
-            <span class="branch">{{ pipeline.ref }}</span>
-            <span class="mono muted small">{{ pipeline.sha.slice(0, 8) }}</span>
-            <span class="muted small">{{ timeAgo(pipeline.created_at) }}</span>
-            <span class="muted small mono duration">{{
-              running ? 'in progress' : formatDuration(pipeline.duration_ms)
-            }}</span>
-            <span v-if="pipeline.triggered_by" class="muted small">
-              triggered by {{ pipeline.triggered_by.name || pipeline.triggered_by.username }}
-            </span>
-          </p>
-        </div>
-        <button class="btn" type="button" :disabled="starting" @click="rerun">
-          {{ starting ? 'Starting…' : 'Run again' }}
-        </button>
+      <div class="p2-breadcrumbs pipeline-run-breadcrumbs">
+        <NuxtLink :to="\`/p/\${projectPath}/-/pipelines\`">Pipelines</NuxtLink>
+        <b>/</b>
+        <strong>#{{ pipeline.iid }}</strong>
       </div>
 
-      <div v-if="error" class="alert alert-error">{{ error }}</div>
+      <section class="p2-run-summary">
+        <button class="p2-delete" type="button" :disabled="starting" @click="rerun">
+          {{ starting ? 'Starting…' : 'Run again' }}
+        </button>
+        <h1>#{{ pipeline.iid }}</h1>
+        <div class="p2-summary-status">
+          <span class="p2-passed" :class="'is-' + pipeline.status">
+            {{ statusText[pipeline.status] }}
+          </span>
+          <span>
+            Created {{ timeAgo(pipeline.created_at) }}
+            <template v-if="submittedBy">by <strong>{{ submittedBy }}</strong></template>
+            <template v-if="pipeline.finished_at">, finished {{ timeAgo(pipeline.finished_at) }}</template>
+          </span>
+        </div>
 
-      <div v-if="pending && !running" class="alert alert-info">
+        <div class="p2-commit-line">
+          <span>For commit</span>
+          <code>{{ pipeline.sha.slice(0, 8) }}</code>
+          <span class="p2-commit-title">{{ pipeline.title || 'Commit message unavailable' }}</span>
+        </div>
+
+        <div class="p2-pipeline-meta">
+          <span class="p2-tag p2-tag-green">{{ sourceLabel }}</span>
+          <span class="p2-tag p2-tag-blue">{{ pipeline.ref }}</span>
+          <span class="p2-meta-item">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="5" cy="8" r="3"/><circle cx="11" cy="8" r="3"/>
+            </svg>
+            {{ jobCount }} {{ jobCount === 1 ? 'job' : 'jobs' }}
+          </span>
+          <span class="p2-meta-item">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/>
+            </svg>
+            {{ running ? 'In progress' : formatDuration(pipeline.duration_ms) }}
+            <template v-if="queueDuration">, queued for {{ queueDuration }}</template>
+          </span>
+        </div>
+      </section>
+
+      <div v-if="error" class="alert alert-error pipeline-run-error">{{ error }}</div>
+      <div v-if="pending && !running" class="alert alert-info pipeline-run-notice">
         Waiting for a runner to take this pipeline.
       </div>
 
-      <!-- Two columns, the way a pipeline is actually read: the shape of the run on
-           the left, the output of one job on the right. They are side by side so
-           that moving from "which job" to "what did it say" is a glance rather
-           than a page load, and so the place it got to is never off-screen while
-           its output is on it. -->
-      <div class="run-layout">
-        <nav class="outline" aria-label="Pipeline stages and jobs">
-          <section v-for="stage in stages" :key="stage.name" class="outline-stage">
-            <button
-              type="button"
-              class="outline-stage-head"
-              :aria-expanded="!foldedStages[stage.name]"
-              @click="toggleStage(stage.name)"
-            >
-              <span class="pipeline-chevron" :class="{ open: !foldedStages[stage.name] }">▸</span>
-              <span class="dot" :class="statusClass[stage.status] ?? 'badge-neutral'" />
-              <span class="outline-stage-name">{{ stage.name }}</span>
-              <span class="muted small">{{ stage.job_count }}</span>
-            </button>
+      <nav class="p2-content-tabs" aria-label="Pipeline tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'pipeline'"
+          :class="{ active: activeTab === 'pipeline' }"
+          @click="activeTab = 'pipeline'"
+        >Pipeline</button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'jobs'"
+          :class="{ active: activeTab === 'jobs' }"
+          @click="activeTab = 'jobs'"
+        >Jobs <b>{{ jobCount }}</b></button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'tests'"
+          :class="{ active: activeTab === 'tests' }"
+          @click="activeTab = 'tests'"
+        >Tests <b>0</b></button>
+      </nav>
 
-            <template v-if="!foldedStages[stage.name]">
+      <section
+        v-if="activeTab === 'pipeline'"
+        class="p2-pipeline-canvas p2-live-canvas"
+        aria-label="Pipeline jobs graph"
+        role="tabpanel"
+      >
+        <div v-if="!stages.length" class="p2-live-empty">This pipeline has no stages to show.</div>
+
+        <section
+          v-for="stage in stages"
+          :key="stage.name"
+          class="p2-stage p2-live-stage"
+          :class="'is-' + stage.status"
+        >
+          <div class="p2-stage-title">
+            <span>{{ stage.name }}</span>
+            <span class="p2-stage-count">{{ stage.job_count }}</span>
+          </div>
+          <div class="p2-jobs">
             <button
               v-for="entry in stage.jobs"
               :key="entry.iid"
               type="button"
-              class="outline-job"
-              :class="{ active: selectedIID === entry.iid }"
+              class="p2-job p2-live-job"
+              :class="{
+                'is-selected': selectedIID === entry.iid,
+                'is-success': entry.status === 'success',
+                'is-failed': entry.status === 'failed',
+                'is-running': entry.status === 'running',
+                'is-pending': entry.status === 'pending'
+              }"
+              :aria-pressed="selectedIID === entry.iid"
               @click="select(jobByIID.get(entry.iid)!)"
             >
-              <span class="dot" :class="statusClass[entry.status] ?? 'badge-neutral'" />
-              <span class="outline-job-name">{{ entry.name }}</span>
-              <span v-if="entry.duration_ms" class="muted small mono">
+              <span class="p2-live-state" :class="'is-' + entry.status" aria-hidden="true">
+                {{ statusGlyph(entry.status) }}
+              </span>
+              <span class="p2-live-job-name">{{ entry.name }}</span>
+              <span v-if="entry.duration_ms" class="p2-live-job-duration">
                 {{ formatDuration(entry.duration_ms) }}
               </span>
+              <span class="p2-job-open" aria-hidden="true">›</span>
             </button>
-            </template>
-          </section>
-        </nav>
-
-        <div class="detail">
-          <div v-if="!selectedJob" class="card empty">
-            This pipeline has no jobs to show.
           </div>
+        </section>
+      </section>
 
-          <template v-else>
-            <div class="card job-card">
-              <div class="card-header">
-                <span class="badge" :class="statusClass[selectedJob.status] ?? 'badge-neutral'">
-                  {{ statusText[selectedJob.status] }}
-                </span>
-                <strong>{{ selectedJob.name }}</strong>
-                <span class="muted small">{{ selectedJob.stage }}</span>
-                <div class="spacer" />
-                <span v-if="selectedJob.status === 'running'" class="spinner small" />
-                <span class="muted small mono">{{ selectedJob.image }}</span>
-                <span v-if="selectedJob.duration_ms" class="muted small mono">
-                  {{ formatDuration(selectedJob.duration_ms) }}
-                </span>
-              </div>
-
-              <div class="card-body">
-                <!-- Only while a deployment is actually under way: a progress bar that
-                     outlives the deployment is a stale claim that something is moving,
-                     which is worse than no bar at all. -->
-                <DeploySteps
-                  v-if="visibleProgress[selectedJob.id]"
-                  :progress="visibleProgress[selectedJob.id] ?? null"
-                  :seen="deploySeen[selectedJob.id]"
-                />
-                <details v-if="selectedJob.script?.length" class="script">
-                  <summary class="muted small">
-                    Script ({{ selectedJob.script.length }} lines)
-                  </summary>
-                  <pre class="plain">{{ selectedJob.script.join('\n') }}</pre>
-                </details>
-
-                <!-- Why, in the words of whatever ran it, above whatever it managed to
-                     print. A build's last line is a layer digest or an "already exists",
-                     and the one sentence that says what went wrong is somewhere under a
-                     hundred of those. -->
-                <p
-                  v-if="selectedJob.status === 'failed' && selectedJob.error"
-                  class="job-reason"
-                >
-                  {{ selectedJob.error }}
-                </p>
-
-                <div v-if="lines[selectedJob.iid]?.length" class="pipeline-log">
-                  <div
-                    v-for="(line, index) in lines[selectedJob.iid]"
-                    :key="index"
-                    class="log-line"
-                    :class="line.stream === 'err' ? 'stderr' : 'stdout'"
-                  >{{ line.text }}</div>
-                </div>
-
-                <p v-else-if="selectedJob.status === 'pending'" class="muted small">
-                  Waiting for a runner to take it.
-                </p>
-                <p v-else-if="selectedJob.status === 'running'" class="muted small">
-                  Running — nothing written yet.
-                </p>
-                <p v-else class="muted small">This job wrote nothing.</p>
-              </div>
-            </div>
-          </template>
+      <section
+        v-else-if="activeTab === 'jobs'"
+        class="p2-jobs-table-wrap pipeline-run-jobs"
+        aria-label="Pipeline jobs"
+        role="tabpanel"
+      >
+        <div v-if="!jobs.length" class="p2-live-empty">This pipeline has no jobs to show.</div>
+        <div v-else class="p2-jobs-table">
+          <div class="p2-jobs-table-head">
+            <span>Status</span>
+            <span>Job</span>
+            <span>Stage</span>
+            <span>Image</span>
+            <span aria-hidden="true"></span>
+          </div>
+          <button
+            v-for="job in jobs"
+            :key="job.id"
+            type="button"
+            class="p2-job-row"
+            :class="{ 'is-selected': selectedIID === job.iid }"
+            :aria-pressed="selectedIID === job.iid"
+            @click="select(job)"
+          >
+            <span class="p2-job-status">
+              <span class="p2-passed" :class="'is-' + job.status">{{ statusText[job.status] }}</span>
+              <span v-if="job.duration_ms !== undefined" class="p2-job-detail">
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="10" cy="10" r="7"/><path d="M10 5v5l3 2"/>
+                </svg>
+                {{ formatDuration(job.duration_ms) }}
+              </span>
+              <span class="p2-job-detail">{{ timeAgo(job.created_at) }}</span>
+            </span>
+            <span class="p2-job-name">
+              <span class="p2-job-link">#{{ job.iid }}: {{ job.name }}</span>
+              <span class="p2-job-tags">
+                <span>{{ job.stage }}</span>
+                <span>{{ pipeline.sha.slice(0, 8) }}</span>
+              </span>
+            </span>
+            <span class="p2-job-stage">{{ job.stage }}</span>
+            <span class="p2-job-coverage p2-live-job-image">{{ job.image || '—' }}</span>
+            <span class="p2-job-row-open" aria-hidden="true">›</span>
+          </button>
         </div>
-      </div>
+      </section>
+
+      <section v-else class="p2-tests-empty pipeline-run-tests" aria-label="Pipeline tests" role="tabpanel">
+        <div class="p2-tests-message">
+          Test reports are not available for this pipeline.
+        </div>
+      </section>
+
+      <section
+        v-if="selectedJob && activeTab !== 'tests'"
+        class="p2-log-panel"
+        aria-label="Selected job output"
+      >
+        <div class="p2-log-head">
+          <span class="p2-passed" :class="'is-' + selectedJob.status">
+            {{ statusText[selectedJob.status] }}
+          </span>
+          <strong>{{ selectedJob.name }}</strong>
+          <span class="p2-log-stage">{{ selectedJob.stage }}</span>
+          <span class="p2-log-spacer"></span>
+          <span v-if="selectedJob.status === 'running'" class="spinner small"></span>
+          <span v-if="selectedJob.image" class="p2-log-image">{{ selectedJob.image }}</span>
+          <span v-if="selectedJob.duration_ms !== undefined" class="p2-log-duration">
+            {{ formatDuration(selectedJob.duration_ms) }}
+          </span>
+        </div>
+        <div class="p2-log-body">
+          <DeploySteps
+            v-if="visibleProgress[selectedJob.id]"
+            :progress="visibleProgress[selectedJob.id] ?? null"
+            :seen="deploySeen[selectedJob.id]"
+          />
+          <details v-if="selectedJob.script?.length" class="script p2-script">
+            <summary class="muted small">Script ({{ selectedJob.script.length }} lines)</summary>
+            <pre class="plain">{{ selectedJob.script.join('\n') }}</pre>
+          </details>
+
+          <p v-if="selectedJob.status === 'failed' && selectedJob.error" class="job-reason">
+            {{ selectedJob.error }}
+          </p>
+
+          <div v-if="lines[selectedJob.iid]?.length" class="pipeline-log">
+            <div
+              v-for="(line, index) in lines[selectedJob.iid]"
+              :key="index"
+              class="log-line"
+              :class="line.stream === 'err' ? 'stderr' : 'stdout'"
+            >{{ line.text }}</div>
+          </div>
+          <p v-else-if="selectedJob.status === 'pending'" class="p2-log-empty">
+            Waiting for a runner to take it.
+          </p>
+          <p v-else-if="selectedJob.status === 'running'" class="p2-log-empty">
+            Running — nothing written yet.
+          </p>
+          <p v-else class="p2-log-empty">This job wrote nothing.</p>
+        </div>
+      </section>
     </template>
   </div>
 </template>
-
