@@ -262,6 +262,7 @@ const tabs = computed(() => {
     // Images live outside the repository: a branch has nothing to do with an image,
     // and a tag that was never built has no page to show. So this one carries no ref.
     { label: 'Pipelines', to: `${base}/-/pipelines`, match: 'pipelines' },
+    { label: 'Artifacts', to: `${base}/-/artifacts`, match: 'artifacts' },
     { label: 'pipeline2', to: `${base}/-/pipeline2`, match: 'pipeline2' },
     { label: 'Images', to: `${base}/-/packages`, match: 'packages' },
     // Deployments sit outside the repository for the same reason images do: a commit
@@ -470,6 +471,11 @@ async function copyCloneUrl() {
         />
         <ProjectPackages
           v-else-if="view.name === 'packages'"
+          :project-id="projectId"
+          :project-path="project.path"
+        />
+        <ProjectArtifacts
+          v-else-if="view.name === 'artifacts'"
           :project-id="projectId"
           :project-path="project.path"
         />
