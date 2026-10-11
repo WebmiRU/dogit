@@ -218,6 +218,11 @@ func Parse(data []byte) (*Config, error) {
 	}
 
 	for name, job := range config.Jobs {
+		// An image-producing job belongs to build even when its author omitted an
+		// explicit stage. Other jobs keep the project's default stage, then test.
+		if job.Stage == "" && len(job.Build) > 0 {
+			job.Stage = "build"
+		}
 		if job.Stage == "" {
 			job.Stage = config.Default.Stage
 		}
@@ -233,7 +238,7 @@ func Parse(data []byte) (*Config, error) {
 		config.Jobs[name] = job
 	}
 
-	stages, err := canonicalStages(config.Stages)
+	stages, err := canonicalStages(config.Stages, len(config.Deploys) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -253,40 +258,48 @@ func Parse(data []byte) (*Config, error) {
 			}
 		case "deploy":
 			return nil, fmt.Errorf("job %q uses reserved stage deploy; configure deployment with the top-level deploy: or deploys: block", name)
+		default:
+			if len(job.Build) > 0 {
+				return nil, fmt.Errorf("job %q defines build: but uses stage %q; image-producing jobs must use stage build", name, job.Stage)
+			}
 		}
 	}
 	return config, nil
 }
 
-// canonicalStages makes build and deploy fixed parts of every pipeline.
-//
-// Their names are contracts, not labels a project may move or redefine: build always comes
-// first, deploy always comes last, and the project controls only the order of stages between
-// them. Omitting either from the YAML does not remove it from the execution model.
-func canonicalStages(declared []string) ([]string, error) {
+// canonicalStages preserves the order declared by the project. Build and deploy have fixed
+// meanings, but ordinary stages may appear before, between, or after them. When a deployment
+// is configured without an explicit deploy stage, append that stage for backward compatibility.
+func canonicalStages(declared []string, includeDeploy bool) ([]string, error) {
 	if len(declared) == 0 {
 		return []string{"build", "test", "deploy"}, nil
 	}
-	custom := make([]string, 0, len(declared))
-	seen := map[string]bool{"build": true, "deploy": true}
+	stages := make([]string, 0, len(declared)+1)
+	seen := make(map[string]bool, len(declared)+1)
+	buildAt, deployAt := -1, -1
 	for _, raw := range declared {
 		stage := strings.TrimSpace(raw)
 		if stage == "" {
 			return nil, fmt.Errorf("stages cannot contain an empty name")
 		}
-		if stage == "build" || stage == "deploy" {
-			continue
-		}
 		if seen[stage] {
 			return nil, fmt.Errorf("stage %q is listed more than once", stage)
 		}
 		seen[stage] = true
-		custom = append(custom, stage)
+		if stage == "build" {
+			buildAt = len(stages)
+		}
+		if stage == "deploy" {
+			deployAt = len(stages)
+		}
+		stages = append(stages, stage)
 	}
-	stages := make([]string, 0, len(custom)+2)
-	stages = append(stages, "build")
-	stages = append(stages, custom...)
-	stages = append(stages, "deploy")
+	if buildAt >= 0 && deployAt >= 0 && deployAt < buildAt {
+		return nil, fmt.Errorf("stage deploy cannot appear before stage build")
+	}
+	if includeDeploy && !seen["deploy"] {
+		stages = append(stages, "deploy")
+	}
 	return stages, nil
 }
 }

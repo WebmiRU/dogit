@@ -1,8 +1,10 @@
 package pipeline
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -86,8 +88,8 @@ build:
 		t.Fatalf("parse: %v", err)
 	}
 
-	if len(config.Stages) != 3 || config.Stages[0] != "build" || config.Stages[2] != "deploy" {
-		t.Errorf("stages = %v", config.Stages)
+	if len(config.Stages) != 2 || config.Stages[0] != "build" || config.Stages[1] != "test" {
+		t.Errorf("stages = %v, want the declared order [build test]", config.Stages)
 	}
 	if len(config.Jobs) != 2 {
 		t.Fatalf("%d jobs, want 2: %v", len(config.Jobs), config.Jobs)
@@ -113,6 +115,75 @@ build:
 	}
 }
 
+
+func TestCustomStagesMaySurroundBuildAndDeploy(t *testing.T) {
+	config, err := Parse([]byte(`
+stages: [prepare, build, verify, deploy, cleanup]
+compile:
+  stage: build
+  script: [true]
+  build:
+    tag: demo
+before:
+  stage: prepare
+  script: [echo before]
+scan:
+  stage: verify
+  script: [echo scan]
+after:
+  stage: cleanup
+  script: [echo after]
+deploy:
+  target: test
+  module: deploy:kubernetes
+`))
+	if err != nil {
+		t.Fatalf("parse stages around build/deploy: %v", err)
+	}
+	want := []string{"prepare", "build", "verify", "deploy", "cleanup"}
+	if fmt.Sprint(config.Stages) != fmt.Sprint(want) {
+		t.Errorf("stages = %v, want %v", config.Stages, want)
+	}
+}
+
+func TestDeployCannotPrecedeBuildStage(t *testing.T) {
+	_, err := Parse([]byte(`
+stages: [prepare, deploy, verify, build, cleanup]
+compile:
+  stage: build
+  script: [true]
+  build:
+    tag: demo
+deploy:
+  target: test
+  module: deploy:kubernetes
+`))
+	if err == nil || !strings.Contains(err.Error(), "deploy cannot appear before stage build") {
+		t.Fatalf("error = %v, want build/deploy ordering error", err)
+	}
+}
+
+func TestDeployCanExistWithoutBuildStage(t *testing.T) {
+	config, err := Parse([]byte(`
+stages: [prepare, deploy, cleanup]
+before:
+  stage: prepare
+  script: [echo before]
+after:
+  stage: cleanup
+  script: [echo after]
+deploy:
+  target: test
+  module: deploy:kubernetes
+`))
+	if err != nil {
+		t.Fatalf("parse deploy-only pipeline: %v", err)
+	}
+	want := []string{"prepare", "deploy", "cleanup"}
+	if fmt.Sprint(config.Stages) != fmt.Sprint(want) {
+		t.Errorf("stages = %v, want %v", config.Stages, want)
+	}
+}
 // A job without a stage or an image still has to run somewhere.
 func TestAJobWithNothingSaidAboutItStillRuns(t *testing.T) {
 	config, err := Parse([]byte("noop:\n  script:\n    - true\n"))
