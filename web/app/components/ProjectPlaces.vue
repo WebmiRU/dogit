@@ -820,7 +820,7 @@ watchEvents({
   // `pipeline.updated` as well: a run beginning is the moment every row stops being
   // current, and a page that only re-read on a deployment's own lines says nothing for
   // the whole build — which on a slow build is most of a run.
-  kinds: ['deploy.history', 'deploy.operation', 'pipeline.updated'],
+  kinds: ['deploy.history', 'deploy.operation', 'pipeline.created', 'pipeline.updated'],
   project: () => props.projectPath,
   // What is running is NOT asked again here, and that is the point of the rule this
   // project works by: a request is for a one-off read — the list of images, the list of
@@ -830,6 +830,12 @@ watchEvents({
   // thing it is drawing: it is how "running 3/3" showed up once the rollout had already
   // finished, on a card that had been saying nothing for forty seconds.
   onEvent: (event) => {
+    // A newly created pipeline already has its deploy jobs in the durable list. Read them
+    // now so its place gets a Preparing state before any build or module phase is emitted.
+    if (event.kind === 'pipeline.created') {
+      void loadQueued()
+      return
+    }
     // What the module just said, taken as it said it. The row is about one place, and
     // the line says which place and what is on its pods: applied here, the row's line
     // moves with the rollout and keeps the answer the module gave when it ends. Asked
