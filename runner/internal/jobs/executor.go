@@ -53,9 +53,11 @@ type Job struct {
 	Stage       string
 	Name        string
 	ProjectPath string
-	Script      []string
-	Variables   map[string]string
-	Registry    *Registry
+	Script          []string
+	Variables       map[string]string
+	BreakOnError    *bool
+	CheckExitStatus []bool
+	Registry        *Registry
 }
 
 // Registry is the credential the core minted for this build.
@@ -76,8 +78,9 @@ type Registry struct {
 type Result struct {
 	Status string
 	Reason string
-	Steps  int
-	Took   time.Duration
+	Steps             int
+	Took              time.Duration
+	BuildAfterFailure bool
 }
 
 // Statuses, which are the core's own words rather than ours.

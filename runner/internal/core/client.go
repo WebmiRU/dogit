@@ -82,8 +82,10 @@ type Job struct {
 	Name        string         `json:"name"`
 	Stage       string         `json:"stage"`
 	ProjectPath string         `json:"project_path"`
-	Script      []string       `json:"script"`
-	Build       map[string]any `json:"build"`
+	Script          []string       `json:"script"`
+	Build           map[string]any `json:"build"`
+	BreakOnError    bool           `json:"break_on_error"`
+	CheckExitStatus []bool         `json:"check_exit_status"`
 	// Where the image goes is deliberately NOT here.
 	CloneURL      string            `json:"clone_url"`
 	Variables     map[string]string `json:"variables"`
