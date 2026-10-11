@@ -142,6 +142,7 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 	// both routes — published live, then read again as the tail catches up — is
 	// only sent once.
 	lastSent := after
+	transientAccess := map[uuid.UUID]transientProjectAccess{}
 
 	// A cursor of zero says "I am joining", not "send me all of it".
 	//
@@ -264,6 +265,9 @@ func (s *Server) handleEventLive(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if ev.ID == 0 {
+				if !s.canSeeTransientEvent(r.Context(), user, ev, transientAccess) {
+					continue
+				}
 				message, err := transientEventMessage(ev)
 				if err != nil {
 					continue
@@ -354,6 +358,7 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 	}()
 
 	lastSent := after
+	transientAccess := map[uuid.UUID]transientProjectAccess{}
 
 	// A cursor of zero says "I am joining", not "send me all of it".
 	//
@@ -495,6 +500,9 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 				continue
 			}
 			if ev.ID == 0 {
+				if !s.canSeeTransientEvent(r.Context(), user, ev, transientAccess) {
+					continue
+				}
 				message, err := transientEventMessage(ev)
 				if err != nil {
 					continue
@@ -521,6 +529,49 @@ conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 	}
 }
 
+
+type transientProjectAccess struct {
+	checkedAt time.Time
+	allowed   bool
+}
+
+const transientProjectAccessTTL = 15 * time.Second
+
+// canSeeTransientEvent gates non-durable high-frequency signals such as log growth.
+// Cache per connection for a short window: permissions are still rechecked periodically,
+// without turning every compiler output chunk into a database query per browser tab.
+func (s *Server) canSeeTransientEvent(ctx context.Context, user *models.User, ev models.Event,
+	cache map[uuid.UUID]transientProjectAccess) bool {
+	if user == nil || ev.ProjectID == nil || ev.Kind != models.EventJobLog {
+		return false
+	}
+	now := time.Now()
+	id := *ev.ProjectID
+	if cached, ok := cache[id]; ok && now.Sub(cached.checkedAt) < transientProjectAccessTTL {
+		return cached.allowed
+	}
+	allowed := false
+	project, err := s.store.Projects().ByID(ctx, id)
+	if err == nil {
+		allowed, err = s.store.Permissions().Can(ctx, user, project, store.ActionReadCI)
+	}
+	if err != nil {
+		s.log.Debug("could not check access for a transient project event", "project_id", id, "error", err)
+		allowed = false
+	}
+	if cache == nil {
+		cache = map[uuid.UUID]transientProjectAccess{}
+	}
+	if len(cache) > 512 {
+		for projectID, old := range cache {
+			if now.Sub(old.checkedAt) >= transientProjectAccessTTL {
+				delete(cache, projectID)
+			}
+		}
+	}
+	cache[id] = transientProjectAccess{checkedAt: now, allowed: allowed}
+	return allowed
+}
 
 func transientEventMessage(ev models.Event) ([]byte, error) {
 	var payload any
