@@ -23,8 +23,9 @@ import (
 // The core's half of a deployment.
 //
 // What the core does is: notice that a run has something to deploy, read the
-// repository's manifests at the commit being deployed, work out which image that
-// run produced, and hand all of it to the module that was named. What it does not
+// repository's manifests at the commit being deployed, resolve every required image
+// to its recorded digest, and hand the complete prepared manifest set to the module.
+// What it does not
 // do is apply anything, decide that a rollout succeeded, or know what a namespace
 // is — all of that is the module's, because the day somebody deploys to Nomad this
 // file changes in one place: the target's kind.
@@ -52,9 +53,9 @@ type deployRequest struct {
 	Cluster   string `json:"cluster"`
 	Namespace string `json:"namespace"`
 
-	// Image is what to substitute, and what the rollback would return to. Empty means
-	// the manifests are applied exactly as written, which is only right for a
-	// deployment that changes nothing about what runs.
+	// Image is the primary image for a legacy single-image substitution and the primary
+	// history reference. Named-output deployments have already expanded every image
+	// variable in their manifests before this request is sent.
 	Image       string `json:"image"`
 	Placeholder string `json:"placeholder"`
 
@@ -96,9 +97,8 @@ type deployRequest struct {
 	// list that is neither.
 	Commit string `json:"commit,omitempty"`
 
-	// Preface is what this run did to the image before the deployment began, under the
-	// phases the plan already promises: the build and the push, which happened in another
-	// job and finished before this one started.
+	// Preface is what this run did to its image output or outputs before deployment.
+	// Named-output deployments include separate build and push notes for every output.
 	//
 	// For the record rather than for the watchers. The build said what it was doing
 	// while it did it, in its own words, to whoever was watching then — and a page that
@@ -199,6 +199,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// formats retain their single-image behaviour below.
 	outputs := config.NamedBuildOutputs()
 	imageVariables := map[string]string{}
+	resolvedOutputs := map[string]string{}
 	var image string
 	var err error
 	if len(outputs) > 0 {
@@ -206,6 +207,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		if imageErr != nil {
 			return imageErr
 		}
+		resolvedOutputs = images
 		image = images[outputs[0].Name]
 		firstRegistry := registryHostFrom(image)
 		for _, output := range outputs {
@@ -252,6 +254,10 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// The names the image went out under, asked for once: the deployment is about this
 	// image under these names, and its record says what became of them.
 	tags := s.deployedImageTags(ctx, repoDir, pipelineRun)
+	preface := prefaceFor(ctx, s, pipelineRun, job.ID, image, tags)
+	if len(outputs) > 0 {
+		preface = prefaceForNamedOutputs(ctx, s, pipelineRun, job.ID, outputs, resolvedOutputs, tags)
+	}
 
 	request := deployRequest{
 		Project: project.Path,
@@ -270,7 +276,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 		Sha:            pipelineRun.SHA,
 		Tags:           tags,
 		Commit:         shortRunSHA(pipelineRun),
-		Preface:        prefaceFor(ctx, s, pipelineRun, job.ID, image, tags),
+		Preface:        preface,
 	}
 
 	request.Expect.Secrets = spec.Expect.Secrets
@@ -721,6 +727,54 @@ type prefaceLine struct {
 // Nothing when the run built nothing — a deployment of an image from somewhere else has
 // no build to account for, and a step with a line that invents one is worse than a step
 // the plan left out.
+// prefaceForNamedOutputs preserves a build and push note for every named image in the
+// deployment history. Each line is attached to its own output so the history does not
+// imply that a multi-image release was built and published as one image.
+func prefaceForNamedOutputs(ctx context.Context, s *Server, run *store.Pipeline, skipJobID int64,
+	outputs []pipeline.BuildOutputSpec, images map[string]string, fallbackTags []string) []prefaceLine {
+	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, run.ID)
+	if err != nil {
+		return nil
+	}
+	lines := make([]prefaceLine, 0, len(outputs)*2)
+	for _, output := range outputs {
+		var producer *store.Job
+		for index := range jobs {
+			if jobs[index].ID == skipJobID || jobs[index].Name != output.Name || jobs[index].Stage != "build" {
+				continue
+			}
+			producer = &jobs[index]
+			break
+		}
+		if producer == nil {
+			continue
+		}
+		built := fmt.Sprintf("output %q built by the %q job", output.Name, producer.Name)
+		if producer.DurationMS > 0 {
+			built += fmt.Sprintf(" in %s", (time.Duration(producer.DurationMS)*time.Millisecond).Round(time.Second))
+		}
+		built += "."
+		lines = append(lines, prefaceLine{Phase: "build", Message: built})
+
+		reference := images[output.Name]
+		repository, digest, _ := strings.Cut(reference, "@")
+		tag := strings.TrimSpace(asString(producer.Build["tag"]))
+		if tag == "" && len(fallbackTags) > 0 {
+			tag = fallbackTags[0]
+		}
+		pushed := fmt.Sprintf("output %q published as %s", output.Name, repository)
+		if tag != "" {
+			pushed += ":" + tag
+		}
+		if digest != "" {
+			pushed += " (pinned to " + digest + ")"
+		}
+		pushed += "."
+		lines = append(lines, prefaceLine{Phase: "push", Message: pushed})
+	}
+	return lines
+}
+
 func prefaceFor(ctx context.Context, s *Server, run *store.Pipeline, jobID int64,
 	image string, tags []string) []prefaceLine {
 

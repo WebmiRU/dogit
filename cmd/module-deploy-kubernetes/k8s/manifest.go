@@ -161,14 +161,13 @@ func sortRevisions(revisions []Revision) {
 
 // Substituted is the result of replacing the image placeholder in a manifest.
 //
-// The substitution is the whole of what dogit changes in what a repository wrote, and
-// it is deliberately crude: find the token, put the image there, leave everything else
-// exactly as it was. A module that started rearranging a manifest would be a module
-// that can apply something nobody wrote.
+// Substitution is the compatibility path for legacy single-image deployments: it replaces
+// one literal token and leaves every other byte unchanged. New named-output pipelines have
+// their BUILD_*_IMAGE_URL variables expanded by the core before the module receives them.
 type Substitution struct {
-	// Placeholder is the token a manifest leaves where the image goes.
+	// Placeholder is the legacy token a manifest leaves where the image goes.
 	Placeholder string
-	// Image is what goes there, already carrying a digest.
+	// Image is the primary legacy replacement, already carrying a digest.
 	Image string
 }
 
