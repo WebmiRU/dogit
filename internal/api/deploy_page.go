@@ -87,6 +87,47 @@ func (s *Server) handleProjectDeployPlaces(w http.ResponseWriter, r *http.Reques
 
 
 // handleProjectDeployPlan returns the steps for one target at the artifact's source commit.
+// placesDueNow names the places the run under way has not reached yet.
+//
+// The newest run that has not ended, and the deployments in it that have neither begun
+// nor finished: those are the places whose turn is coming. A run with nothing left to do
+// says nothing about any place — a place it never deployed to was not waiting for
+// anything, and saying "queued" there would be a place that can never stop waiting.
+func (s *Server) placesDueNow(ctx context.Context, project *models.Project) map[string]bool {
+	due := map[string]bool{}
+
+	runs, _, err := s.store.Pipelines().ListPipelinesPage(ctx, project.ID,
+		store.PipelineQuery{Page: 1, PerPage: 1})
+	if err != nil || len(runs) == 0 {
+		return due
+	}
+	switch runs[0].Status {
+	case store.PipelinePending, store.PipelineRunning:
+	default:
+		return due
+	}
+
+	jobs, err := s.store.Pipelines().JobsOfPipeline(ctx, runs[0].ID)
+	if err != nil {
+		return due
+	}
+	for _, job := range jobs {
+		if job.Stage != "deploy" || job.Status != store.JobPending {
+			continue
+		}
+		// "Target" and not "target": the specification is written into the job as the
+		// Go value marshalled, and its fields carry no names of their own, so it is
+		// stored under the field's own. Read as the file spells it, this answers
+		// nothing and says every place is waiting for ever.
+		target, _ := job.Deploy["Target"].(string)
+		if target != "" {
+			due[target] = true
+		}
+	}
+	return due
+}
+
+
 func (s *Server) handleProjectDeployPlan(w http.ResponseWriter, r *http.Request) {
 	project, _, err := s.projectWithAccess(r, store.ActionReadCI)
 	if err != nil {

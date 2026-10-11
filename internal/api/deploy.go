@@ -182,6 +182,7 @@ func (s *Server) runDeployJob(ctx context.Context, job *store.Job, pipelineRun *
 	// manifests of the synthetic run must still be the source artifact's exact commit.
 	var artifactSourceRun *store.Pipeline
 	var artifactSourceJob *store.Job
+	var err error
 	if spec.ArtifactPipelineID != 0 || spec.ArtifactJobID != 0 {
 		if spec.ArtifactPipelineID <= 0 || spec.ArtifactJobID <= 0 || len(spec.ArtifactImages) == 0 {
 			return fmt.Errorf("the selected artifact's provenance or pinned image references are incomplete")
