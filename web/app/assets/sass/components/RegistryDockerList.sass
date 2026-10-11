@@ -3,18 +3,31 @@
 // The element attribute that made this scoped is gone with it: global styles are
 // selected by name, so a name used here has to mean one thing across the site.
 
+.repo-head
+  align-items: flex-start
+.repo-head > .title
+  flex: 1 1 560px
+  min-width: 0
+.repo-head .page-subtitle
+  max-width: 72ch
 .registry-new
-  display: inline-flex
-  align-items: center
-  gap: 7px
-  min-height: 38px
-  padding: 9px 14px
-  border-radius: 8px
+  flex: 0 0 auto
+  align-self: flex-start
+  margin: 0 0 0 auto
   white-space: nowrap
-  box-shadow: 0 2px 7px rgba(0, 0, 0, .12)
 .registry-new-plus
-  font-size: 17px
-  line-height: 12px
+  display: inline-grid
+  place-items: center
+  flex: 0 0 16px
+  width: 16px
+  height: 16px
+  font-size: 16px
+  line-height: 1
+@media (max-width: 700px)
+  .repo-head > .title
+    flex-basis: 100%
+  .registry-new
+    margin-left: auto
 
 .images-table .name
   font-weight: 600

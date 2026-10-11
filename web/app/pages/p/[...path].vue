@@ -505,33 +505,3 @@ async function copyCloneUrl() {
   </div>
 </template>
 
-<style>
-.empty-repo {
-  margin-top: 20px;
-  padding: 40px;
-  text-align: center;
-  max-width: 720px;
-}
-
-.empty-repo h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
-}
-
-.empty-repo p {
-  margin: 0 auto 16px;
-  max-width: 56ch;
-}
-
-.clone-command {
-  display: inline-block;
-  text-align: left;
-  padding: 12px 16px;
-  border-radius: 6px;
-  background: var(--bg-code, #0d1117);
-  font: 12px/1.7 var(--mono);
-  white-space: pre;
-  overflow-x: auto;
-  margin-bottom: 20px;
-}
-</style>

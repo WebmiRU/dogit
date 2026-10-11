@@ -1,0 +1,80 @@
+// Shared control geometry. Hover and focus may change appearance, never size.
+
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible),
+summary:focus:not(:focus-visible),
+[role='button']:focus:not(:focus-visible)
+  outline: none
+
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[role='button']:focus-visible
+  outline: 2px solid var(--button-primary-border)
+  outline-offset: 2px
+
+button,
+a.btn,
+a.mr-primary-button,
+a.pmr-primary-button,
+input[type='button'],
+input[type='submit'],
+summary
+  box-sizing: border-box
+  font-family: inherit
+
+// Standard actions: the same height and padding for native buttons and links.
+.btn,
+.mr-primary-button,
+.pmr-primary-button
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  gap: 6px
+  box-sizing: border-box
+  min-height: 36px
+  padding: 7px 12px
+  border-width: 1px
+  border-style: solid
+  border-radius: 5px
+  font-family: inherit
+  font-size: 13px
+  line-height: 20px
+  vertical-align: middle
+
+.btn.btn-small,
+a.btn-small
+  min-height: 28px
+  padding: 3px 9px
+  font-size: 12px
+  line-height: 20px
+
+.btn-primary,
+.mr-primary-button,
+.pmr-primary-button
+  background: var(--button-primary-bg)
+  border-color: var(--button-primary-border)
+  color: var(--button-primary-text)
+  font-weight: 600
+
+.btn-primary:hover:not(:disabled),
+.mr-primary-button:hover,
+.pmr-primary-button:hover
+  background: var(--button-primary-hover)
+  border-color: var(--button-primary-hover)
+  color: var(--button-primary-text)
+  text-decoration: none
+
+.btn-primary:disabled
+  background: var(--button-primary-disabled-bg)
+  border-color: var(--button-primary-disabled-border)
+  color: var(--button-primary-disabled-text)
+
+// More specific rules in the MR creation action rows previously changed control heights.
+.mr-compare-actions .btn,
+.mrc-action-buttons .btn
+  min-height: 36px
+  padding: 7px 12px
+  border-radius: 5px
+  font-size: 13px
+  line-height: 20px

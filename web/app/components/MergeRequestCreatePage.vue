@@ -359,7 +359,12 @@ async function submit() {
             <aside v-if="filesPaneOpen" class="mr-files-pane">
               <div class="mr-files-heading"><strong>Files</strong><span class="mr-tab-count">{{ visibleFiles.length }}</span><div class="mr-fill"></div><button type="button" class="mr-icon-button" title="Hide file list" @click="filesPaneOpen = false">◧</button></div>
               <label class="mr-file-search"><span aria-hidden="true">⌕</span><input v-model="fileSearch" type="search" placeholder="Search (e.g. *.vue)"></label>
-              <div class="mr-file-view-modes"><button type="button" :class="{ active: fileMode === 'list' }" title="List files" :aria-pressed="fileMode === 'list'" @click="fileMode = 'list'">☷</button><button type="button" :class="{ active: fileMode === 'tree' }" title="Tree view" :aria-pressed="fileMode === 'tree'" @click="fileMode = 'tree'">⑂</button></div>
+              <div class="mr-file-view-modes">
+                <button type="button" :class="{ active: fileMode === 'list' }" title="List files" :aria-pressed="fileMode === 'list'" @click="fileMode = 'list'">☷</button>
+                <button type="button" :class="{ active: fileMode === 'tree' }" title="Tree view" :aria-pressed="fileMode === 'tree'" @click="fileMode = 'tree'">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.5" /><circle cx="4" cy="13" r="1.5" /><circle cx="12" cy="5" r="1.5" /><path d="M4 4.5v7M4 8h3a5 5 0 0 0 5-5" /></svg>
+                </button>
+              </div>
               <div v-if="!visibleFiles.length" class="mr-no-files">No files match this search.</div>
               <button v-for="change in visibleFiles" :key="change.path" type="button" class="mr-file-row" :style="{ paddingLeft: fileMode === 'tree' ? (change.path.split('/').length - 1) * 12 + 9 + 'px' : '9px' }" @click="jumpToFile(files.indexOf(change))">
                 <span class="mr-file-status" :class="'status-' + change.status">{{ change.status === 'added' ? '+' : change.status === 'deleted' ? '−' : change.status === 'renamed' ? '↪' : '•' }}</span>
