@@ -32,9 +32,44 @@ interface ArtifactPage {
   per_page: number
 }
 
+interface ArtifactDeployImage {
+  name: string
+  reference: string
+}
+
+interface ArtifactDeployOption {
+  index: number
+  name: string
+  module: string
+  target: string
+  manifests: string[]
+  pre_count: number
+  post_count: number
+  rollout: boolean
+  timeout: string
+  images: ArtifactDeployImage[]
+  available: boolean
+  reason?: string
+}
+
+interface ArtifactDeployOptions {
+  artifact: {
+    job_id: number
+    job_name: string
+    pipeline_iid: number
+    ref: string
+    sha: string
+    reference: string
+    digest: string
+  }
+  deployments: ArtifactDeployOption[]
+}
+
 const props = defineProps<{
   projectId?: string
   projectPath: string
+  /** Only users allowed to trigger pipelines are offered the manual deploy action. */
+  canTrigger?: boolean
 }>()
 
 const apiRef = computed(() => props.projectId || encodeURIComponent(props.projectPath))
@@ -49,7 +84,15 @@ const selectedJobId = ref<number | null>(null)
 const logText = ref('')
 const consumedLogLength = ref(0)
 const logLoading = ref(false)
+const deployPanelOpen = ref(false)
+const deployOptionsLoading = ref(false)
+const deployOptions = ref<ArtifactDeployOptions | null>(null)
+const deployOptionsError = ref('')
+const selectedDeploymentIndex = ref<number | null>(null)
+const deployingArtifact = ref(false)
+const deployActionError = ref('')
 let selectedLogRequest = 0
+let deployOptionsRequest = 0
 
 const selected = computed(() =>
   artifacts.value.find(one => one.job_id === selectedJobId.value) ?? null,
@@ -66,6 +109,14 @@ function imageReference(one: BuildArtifact): string {
   const image = buildString(one, 'image')
   const tag = buildString(one, 'tag')
   return tag ? `${image}:${tag}` : (image || 'Image build')
+}
+
+/** A manual deployment must use an already-pushed, digest-addressed image. */
+function isDeployable(one: BuildArtifact | null): boolean {
+  return !!one &&
+    one.status === 'success' &&
+    buildString(one, 'reference') !== '' &&
+    buildString(one, 'digest').startsWith('sha256:')
 }
 
 function displayStatus(status: string): string {
@@ -146,8 +197,73 @@ async function loadSelectedLog() {
 watch(selectedJobId, async () => {
   logText.value = ''
   consumedLogLength.value = 0
+  deployPanelOpen.value = false
+  deployOptions.value = null
+  deployOptionsError.value = ''
+  deployActionError.value = ''
+  selectedDeploymentIndex.value = null
   await loadSelectedLog()
 })
+
+async function openDeployPanel() {
+  const artifact = selected.value
+  if (!props.canTrigger || !isDeployable(artifact) || !artifact) return
+  const request = ++deployOptionsRequest
+  deployPanelOpen.value = true
+  deployOptions.value = null
+  deployOptionsError.value = ''
+  deployActionError.value = ''
+  selectedDeploymentIndex.value = null
+  deployOptionsLoading.value = true
+  try {
+    const answer = await api.get<ArtifactDeployOptions>(
+      '/projects/' + apiRef.value + '/artifacts/' + artifact.job_id + '/deploy-options',
+    )
+    if (request !== deployOptionsRequest || selectedJobId.value !== artifact.job_id) return
+    deployOptions.value = answer
+    selectedDeploymentIndex.value = answer.deployments.find(option => option.available)?.index ?? null
+    if (answer.deployments.length === 0) {
+      deployOptionsError.value = 'This commit has no deployment target permitted by .dogit-ci.yml.'
+    }
+  } catch (caught) {
+    if (request !== deployOptionsRequest) return
+    deployOptionsError.value = caught instanceof ApiError
+      ? caught.message
+      : 'Could not load deployment options.'
+  } finally {
+    if (request === deployOptionsRequest) deployOptionsLoading.value = false
+  }
+}
+
+function closeDeployPanel() {
+  deployPanelOpen.value = false
+  deployOptionsError.value = ''
+  deployActionError.value = ''
+}
+
+async function confirmArtifactDeploy() {
+  const artifact = selected.value
+  const options = deployOptions.value
+  if (!artifact || !options || selectedDeploymentIndex.value == null || deployingArtifact.value) return
+  const option = options.deployments.find(one => one.index === selectedDeploymentIndex.value)
+  if (!option?.available) return
+
+  deployingArtifact.value = true
+  deployActionError.value = ''
+  try {
+    const answer = await api.post<{ pipeline: { iid: number } }>(
+      '/projects/' + apiRef.value + '/artifacts/' + artifact.job_id + '/deploy',
+      { deployment_index: option.index },
+    )
+    await navigateTo('/p/' + props.projectPath + '/-/pipelines/' + answer.pipeline.iid)
+  } catch (caught) {
+    deployActionError.value = caught instanceof ApiError
+      ? caught.message
+      : 'Could not start the deployment.'
+  } finally {
+    deployingArtifact.value = false
+  }
+}
 
 const stopStateEvents = watchEvents({
   project: () => props.projectPath,
@@ -274,7 +390,15 @@ function nextPage() {
               <h3 class="mono">{{ imageReference(selected) }}</h3>
               <p class="muted small">Pipeline #{{ selected.pipeline_iid }} · job #{{ selected.job_iid }} · {{ selected.stage }}</p>
             </div>
-            <span v-if="logLoading" class="muted small">Updating log…</span>
+            <div class="artifact-detail-head-actions">
+              <span v-if="logLoading" class="muted small">Updating log…</span>
+              <button
+                v-if="canTrigger && isDeployable(selected)"
+                class="btn btn-small"
+                type="button"
+                @click="openDeployPanel"
+              >Deploy</button>
+            </div>
           </div>
           <div class="artifact-detail-meta">
             <div>
@@ -294,6 +418,64 @@ function nextPage() {
               <strong>{{ formatDuration(selected.duration_ms) }}</strong>
             </div>
           </div>
+          <section v-if="deployPanelOpen" class="artifact-deploy-panel">
+            <div class="artifact-deploy-panel-head">
+              <div>
+                <h4>Deploy artifact</h4>
+                <p class="muted small">Source commit and image digests are fixed to this artifact. Nothing is rebuilt.</p>
+              </div>
+              <button class="btn btn-small" type="button" @click="closeDeployPanel">Cancel</button>
+            </div>
+
+            <p v-if="deployOptionsLoading" class="muted small">Reading .dogit-ci.yml from {{ selected.sha.slice(0, 8) }}…</p>
+            <div v-else-if="deployOptionsError" class="alert alert-error artifact-deploy-error">{{ deployOptionsError }}</div>
+            <template v-else-if="deployOptions">
+              <div class="artifact-deploy-source">
+                <span class="muted small">Source</span>
+                <strong class="mono">{{ deployOptions.artifact.ref }} · {{ deployOptions.artifact.sha.slice(0, 8) }}</strong>
+              </div>
+
+              <div v-if="deployOptions.deployments.length" class="artifact-deploy-targets">
+                <label class="muted small">Deployment target</label>
+                <button
+                  v-for="option in deployOptions.deployments"
+                  :key="option.index"
+                  type="button"
+                  class="artifact-deploy-choice"
+                  :class="{ selected: selectedDeploymentIndex === option.index }"
+                  :disabled="!option.available || deployingArtifact"
+                  @click="selectedDeploymentIndex = option.index"
+                >
+                  <span class="artifact-deploy-choice-head">
+                    <strong>{{ option.name }}</strong>
+                    <span class="mono small">{{ option.module }} → {{ option.target }}</span>
+                  </span>
+                  <span v-if="!option.available" class="artifact-deploy-reason">{{ option.reason }}</span>
+                  <span v-else class="muted small">
+                    {{ option.manifests.length }} manifest{{ option.manifests.length === 1 ? '' : 's' }}
+                    · rollout {{ option.rollout ? 'on' : 'off' }}
+                    <template v-if="option.timeout"> · timeout {{ option.timeout }}</template>
+                  </span>
+                  <span class="artifact-deploy-manifests mono">{{ option.manifests.join(' · ') }}</span>
+                  <span v-for="image in option.images" :key="image.name" class="artifact-deploy-image">
+                    <span class="muted">{{ image.name }}</span>
+                    <strong class="mono">{{ image.reference }}</strong>
+                  </span>
+                </button>
+              </div>
+
+              <div v-if="deployActionError" class="alert alert-error artifact-deploy-error">{{ deployActionError }}</div>
+              <div class="artifact-deploy-actions">
+                <span class="muted small">Manifest and target settings come from this commit.</span>
+                <button
+                  class="btn btn-small"
+                  type="button"
+                  :disabled="deployingArtifact || selectedDeploymentIndex == null"
+                  @click="confirmArtifactDeploy"
+                >{{ deployingArtifact ? 'Starting…' : 'Confirm deploy' }}</button>
+              </div>
+            </template>
+          </section>
           <div class="artifact-log-head">
             <h4>Build log</h4>
             <button class="btn btn-small" type="button" @click="loadSelectedLog">Refresh</button>
