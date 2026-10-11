@@ -174,7 +174,6 @@ const { add: notify } = useNotifyPool()
 
 const deployments = ref<Deployment[]>([])
 const loading = ref(true)
-const busy = ref(false)
 const error = ref('')
 const reason = ref('')
 const page = ref(1)
@@ -220,7 +219,6 @@ function finishOperation() {
   runningSince.value = 0
   running.value = null
   operationJobs.value = []
-  startedHere.value = false
   refusalNoted = false
   // The rows are read once the operation is over and they have settled — see the note at
   // the read. While it was running they were left alone on purpose, and nothing else in
@@ -250,8 +248,7 @@ const activePhases = ref<string[]>([])
  * click it accepted then had to be refused, having already been answered "yes, putting
  * it back".
  */
-const underWay = computed(() => busy.value || startedHere.value ||
-  running.value !== null || active.value !== null)
+const underWay = computed(() => running.value !== null || active.value !== null)
 
 /**
  * The jobs this card has been spoken to by, which is how it tells one run from another.
@@ -273,8 +270,6 @@ const planIsRevert = ref(false)
 const planKind = ref('')
 /** Whether a refusal has already been said, so the same failure is not announced twice. */
 let refusalNoted = false
-/** That this page started an operation, which has not been heard to finish yet. */
-const startedHere = ref(false)
 const activeSeen = ref<DeployProgress[]>([])
 /** Keep the last terminal failure visible after the live operation state is cleared. */
 const lastAttemptFailed = ref(false)
@@ -840,20 +835,6 @@ function availabilityOf(image: string): 'present' | 'missing' | 'unknown' | '' {
   return availability.value[image] ?? ''
 }
 
-/**
- * Whether a version can be put back, and why not when it cannot.
- *
- * Only a registry that has said the image is not there. Every other state — including a
- * registry that said nothing — leaves the button as it was, because the module refuses the
- * rollback anyway if the image turns out to be gone, and a button greyed out on a network
- * hiccup teaches people that the button is broken.
- */
-function revertBlocked(image: string): string {
-  return availabilityOf(image) === 'missing'
-    ? 'the registry this place pulls from has answered that it does not have this image'
-    : ''
-}
-
 /** How close together two loads may be and still both be worth making. */
 const LOAD_SETTLE_MS = 250
 
@@ -1160,84 +1141,6 @@ function noteOperation(payload: Record<string, unknown>) {
   // way through a rollout is watching the rest of it, and counting from its own load
   // would claim the rollout has been going longer than it has.
   if (!runningSince.value) runningSince.value = Date.now()
-}
-
-/**
- * Puts one version back.
- *
- * Named after what it does and not after "rollback": this puts back a particular image
- * — the row somebody clicked, by the digest that row recorded — rather than stepping
- * back through whatever the cluster still remembers. That history is bounded, prunable,
- * and gone entirely if the Deployment is recreated.
- */
-async function revertTo(deployment: PlacedImage) {
-  // The row came from the catalogue, which knows the image and names it in the
-  // deployment it remembers — and if that ever stops being so, the button says which
-  // image it cannot put back instead of failing on the first line of the question.
-  const image = deployment.image ?? ''
-  if (!image) {
-    const message = 'This row does not say which image it is, so there is nothing to put back.'
-    error.value = message
-    notify(message, { type: 'error', timer: 0 })
-    return
-  }
-
-  // Asked here as well as on the button, because a button that is greyed out is not the only
-  // way something gets here: an answer that arrived while this page sat open is the usual
-  // way, and a refusal that arrives after the question was asked is a question somebody
-  // watched fail for an answer they had.
-  const blocked = revertBlocked(image)
-  if (blocked) {
-    const message = `This version cannot be put back: ${blocked}.`
-    error.value = message
-    notify(message, { type: 'error', timer: 0 })
-    return
-  }
-
-  const where = `${deployment.cluster}/${deployment.namespace || 'its default namespace'}`
-  const question =
-    `Put ${shortImage(image)} back on ${where}?\n\n` +
-    `What ${deployment.workload || 'the workload'} runs will be this image again.\n` +
-    'A database migration, a ConfigMap and anything else applied alongside are left as ' +
-    'they are — only the image goes back.'
-  if (!globalThis.confirm(question)) return
-
-  busy.value = true
-  error.value = ''
-  try {
-    // Which module, in the query, as every other request to this module's endpoints does.
-    // Left off, the core looks for a module of kind "deploy:" — the empty name — finds
-    // nothing, and answers with an internal error about a server that is working: the
-    // one thing wrong was that nobody said which module to ask.
-    await api.post(
-      `/projects/${props.projectId}/deployments/revert?target=${encodeURIComponent(target.value)}`,
-      {
-        cluster: deployment.cluster,
-        namespace: deployment.namespace,
-        workload: deployment.workload,
-        deployment_id: deployment.id,
-      },
-    )
-    // Said as a beginning and not as an outcome, because that is all this answer is: the
-    // request was accepted, and nothing has been put back yet. Told as a success it is a
-    // green toast on an operation that is about to be refused — the place is busy — and
-    // the refusal arrives afterwards as an event that no longer has a toast to change.
-    notify(`${shortImage(image)} is being put back`, { type: 'info' })
-    // The place is taken from the moment this is accepted, and the clearing that used to
-    // follow it is what let a second click through while the first was still running.
-    // What ends it now is the operation's own ending, from the module's own last word.
-    startedHere.value = true
-    await load()
-  } catch (caught) {
-    startedHere.value = false
-    const message = caught instanceof ApiError ? caught.message : 'the request failed'
-    error.value = message
-    // Said where it is being looked for: a refusal that only appears somewhere else on
-    // the page is a refusal nobody reads, and the button looks broken rather than busy.
-    notify(message, { type: 'error', timer: 0 })
-  } finally {
-    busy.value = false
-  }
 }
 
 /** Two subscriptions, because two things change at different rates. */
