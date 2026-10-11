@@ -274,6 +274,8 @@ let refusalNoted = false
 /** That this page started an operation, which has not been heard to finish yet. */
 const startedHere = ref(false)
 const activeSeen = ref<DeployProgress[]>([])
+/** Keep the last terminal failure visible after the live operation state is cleared. */
+const lastAttemptFailed = ref(false)
 
 /**
  * Read the step list for the kind of operation this page is showing.
@@ -509,7 +511,7 @@ const verdict = computed<{ tone: 'working' | 'ok' | 'bad' | 'waiting'; word: str
   // A closed failed phase must outrank the last event's stale running timestamp.
   // When parallel images are still working, their active phases above take priority;
   // once none remain, the place is red rather than yellow forever.
-  if (activeSeen.value.some((one) => one.failed)) {
+  if (activeSeen.value.some((one) => one.failed) || lastAttemptFailed.value) {
     return { tone: 'bad', word: 'failed', cls: 'badge-red' }
   }
   if (running.value || (active.value && !active.value.finished)) {
@@ -1076,6 +1078,9 @@ function noteOperation(payload: Record<string, unknown>) {
 
   const jobID = Number(payload.job_id ?? 0)
   if (jobID && !operationJobs.value.includes(jobID)) {
+    // A new operation gets its own verdict. Do not carry yesterday's failure into the
+    // new attempt, but keep today's one once the live phases are cleared.
+    if (operationJobs.value.length === 0) lastAttemptFailed.value = false
     operationJobs.value = [...operationJobs.value, jobID]
   }
 
@@ -1157,6 +1162,7 @@ function noteOperation(payload: Record<string, unknown>) {
     activeSeen.value = [...activeSeen.value, said]
   }
   active.value = said
+  if (said.failed) lastAttemptFailed.value = true
   // The clock starts with the first thing said, not with the page: a page opened half
   // way through a rollout is watching the rest of it, and counting from its own load
   // would claim the rollout has been going longer than it has.
