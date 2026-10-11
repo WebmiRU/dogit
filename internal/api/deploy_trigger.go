@@ -468,6 +468,7 @@ func (s *Server) releaseDeployPlace(ctx context.Context, place deployPlace, jobI
 func (s *Server) supersedeReplacedDeployCandidates(ctx context.Context,
 	changes []store.DeployCandidateChange) {
 	seen := map[int64]struct{}{}
+	affectedPipelines := map[int64]struct{}{}
 	for _, change := range changes {
 		for _, jobID := range change.PreviousJobIDs {
 			if _, exists := seen[jobID]; exists {
@@ -513,6 +514,29 @@ func (s *Server) supersedeReplacedDeployCandidates(ctx context.Context,
 					"job_id", jobID, "target_key", change.TargetKey, "error", placeErr)
 			}
 			s.supersedeDeploy(ctx, queuedDeploy{jobID: job.ID, pipelineID: run.ID}, place)
+			affectedPipelines[run.ID] = struct{}{}
+		}
+	}
+
+	// The deploy candidate is replaced immediately, but an old build is still useful:
+	// keep it queued at low priority instead of dropping it. A build already in progress
+	// is never changed by the store operation.
+	for pipelineID := range affectedPipelines {
+		ids, err := s.store.Pipelines().DeprioritizeObsoleteBuilds(ctx, pipelineID)
+		if err != nil {
+			s.log.Error("deprioritize artifact builds for a superseded deployment",
+				"pipeline_id", pipelineID, "error", err)
+			continue
+		}
+		for _, id := range ids {
+			job, err := s.store.Pipelines().JobByID(ctx, id)
+			if err != nil {
+				s.log.Warn("read a deprioritized artifact build", "job_id", id, "error", err)
+				continue
+			}
+			s.publishPipeline(ctx, job.ProjectID, nil, models.EventJobUpdated, map[string]any{
+				"job_id": id, "queue_priority": store.QueuePriorityLow,
+			})
 		}
 	}
 }
